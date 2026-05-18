@@ -45,22 +45,35 @@ use tracing_subscriber::EnvFilter;
 /// - `"pretty"` → human-friendly text
 /// - anything else (or unset) → JSON lines
 pub fn init() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("warn,skill_pool=info"));
 
-    let format = std::env::var("RUST_LOG_FORMAT")
+    let pretty = std::env::var("RUST_LOG_FORMAT")
         .unwrap_or_default()
-        .to_lowercase();
+        .to_lowercase()
+        == "pretty";
 
-    if format == "pretty" {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .init();
+    // Build one `Registry` so the OTel layer (feature-gated) can join the same
+    // subscriber as the fmt layer. `Box<dyn Layer<_> + Send + Sync>` keeps the
+    // type uniform across the pretty/json branches.
+    let fmt_layer: Box<dyn tracing_subscriber::Layer<_> + Send + Sync> = if pretty {
+        Box::new(tracing_subscriber::fmt::layer())
     } else {
-        tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(filter)
-            .init();
+        Box::new(tracing_subscriber::fmt::layer().json())
+    };
+
+    let registry = tracing_subscriber::registry().with(filter).with(fmt_layer);
+
+    #[cfg(feature = "otlp")]
+    {
+        registry.with(crate::telemetry::otel_layer()).init();
+    }
+    #[cfg(not(feature = "otlp"))]
+    {
+        registry.init();
     }
 }
 

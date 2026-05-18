@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use skill_pool_server::{admin, config, routes, state, tracing_setup};
+use skill_pool_server::{admin, config, routes, state, telemetry, tracing_setup};
 
 #[derive(Parser)]
 #[command(
@@ -144,6 +144,9 @@ enum AdminAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // OTel SDK first (so the tracer provider exists), then subscriber.
+    // `telemetry::init` is a no-op without the `otlp` feature.
+    telemetry::init()?;
     tracing_setup::init();
 
     let cli = Cli::parse();
@@ -280,6 +283,7 @@ async fn serve(cfg: config::Config) -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
+    telemetry::shutdown();
     Ok(())
 }
 
