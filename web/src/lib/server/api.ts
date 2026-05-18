@@ -46,9 +46,20 @@ async function call(
   return fetch(`${base()}${path}`, { method, headers, body });
 }
 
-export async function listSkills(auth: Auth, query?: string): Promise<Skill[]> {
+export async function listSkills(
+  auth: Auth,
+  options: { query?: string; semantic?: string; minSimilarity?: number; limit?: number } = {},
+): Promise<Skill[]> {
   const params = new URLSearchParams();
-  if (query) params.set('query', query);
+  if (options.semantic) {
+    params.set('semantic', options.semantic);
+    if (options.minSimilarity !== undefined) {
+      params.set('min_similarity', String(options.minSimilarity));
+    }
+  } else if (options.query) {
+    params.set('query', options.query);
+  }
+  if (options.limit !== undefined) params.set('limit', String(options.limit));
   const url = `/v1/skills${params.size ? '?' + params : ''}`;
   const resp = await call('GET', url, auth);
   if (!resp.ok) throw new ApiError(resp.status, await resp.text());

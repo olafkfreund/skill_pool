@@ -12,4 +12,6 @@ export interface Skill {
   tags: string[];
   status: string;
   created_at: string;
+  /** Cosine similarity to the semantic query, when one was supplied. */
+  similarity?: number | null;
 }
