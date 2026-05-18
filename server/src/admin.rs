@@ -93,6 +93,63 @@ fn generate_token() -> String {
     format!("spk_{}", hex::encode(bytes))
 }
 
+pub async fn set_saml(
+    db: &PgPool,
+    tenant_slug: &str,
+    idp_entity_id: &str,
+    idp_sso_url: &str,
+    idp_x509_cert: &str,
+    sp_entity_id: Option<&str>,
+    default_role: &str,
+) -> Result<()> {
+    if !matches!(default_role, "viewer" | "publisher" | "curator" | "admin") {
+        return Err(anyhow!(
+            "default_role must be viewer / publisher / curator / admin"
+        ));
+    }
+    if !idp_x509_cert.contains("-----BEGIN CERTIFICATE-----") {
+        return Err(anyhow!(
+            "idp_x509_cert must be PEM-encoded (include the BEGIN CERTIFICATE marker)"
+        ));
+    }
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    sqlx::query(
+        "INSERT INTO tenant_saml \
+           (tenant_id, idp_entity_id, idp_sso_url, idp_x509_cert, sp_entity_id, default_role) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (tenant_id) DO UPDATE SET \
+           idp_entity_id = EXCLUDED.idp_entity_id, \
+           idp_sso_url = EXCLUDED.idp_sso_url, \
+           idp_x509_cert = EXCLUDED.idp_x509_cert, \
+           sp_entity_id = EXCLUDED.sp_entity_id, \
+           default_role = EXCLUDED.default_role",
+    )
+    .bind(tenant_id)
+    .bind(idp_entity_id)
+    .bind(idp_sso_url)
+    .bind(idp_x509_cert)
+    .bind(sp_entity_id)
+    .bind(default_role)
+    .execute(db)
+    .await
+    .context("upsert tenant_saml")?;
+
+    println!("saml configured for tenant `{tenant_slug}`");
+    println!("  IdP entity: {idp_entity_id}");
+    println!("  IdP SSO:    {idp_sso_url}");
+    println!("  default:    {default_role}");
+    println!();
+    println!("Hand the IdP admin this metadata URL:");
+    println!("  https://<public-origin>/v1/auth/saml/{tenant_slug}/metadata");
+    Ok(())
+}
+
 pub async fn set_sso(
     db: &PgPool,
     tenant_slug: &str,

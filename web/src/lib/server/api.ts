@@ -197,11 +197,33 @@ export async function discoverOidc(auth: Auth): Promise<{ enabled: boolean }> {
   return resp.json();
 }
 
+export async function discoverSaml(auth: Auth): Promise<{ enabled: boolean }> {
+  const resp = await call('GET', '/v1/auth/saml/discover', auth);
+  if (!resp.ok) return { enabled: false };
+  return resp.json();
+}
+
 /** Build the `?return_to=` URL the server redirects back to once OIDC completes. */
 export function oidcStartUrl(tenant: string, returnTo: string): string {
   const url = `${base()}/v1/auth/oidc/${encodeURIComponent(tenant)}/start`;
   const params = new URLSearchParams({ return_to: returnTo });
   return `${url}?${params}`;
+}
+
+/**
+ * SAML is IdP-initiated for v1 — there's no SP-initiated AuthnRequest yet.
+ * The user goes to the IdP's SSO URL directly; the IdP POSTs an assertion to
+ * our ACS endpoint. Resolves to `null` until SAML config exposes the URL.
+ */
+export async function samlIdpUrl(auth: Auth): Promise<string | null> {
+  // We deliberately don't expose the IdP URL via API — admins paste it into
+  // the portal's hosted help text. For now return null and rely on doc.
+  return Promise.resolve(null);
+}
+
+/** URL of our SP metadata, useful to surface in admin UI for IdP imports. */
+export function samlMetadataUrl(tenant: string): string {
+  return `${base()}/v1/auth/saml/${encodeURIComponent(tenant)}/metadata`;
 }
 
 /** Lightweight check: the token authenticates against /v1/skills for this tenant. */

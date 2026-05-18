@@ -12,17 +12,32 @@
       Sign in to <span style="color: var(--sp-primary)">{data.tenant.slug}</span>
     </h1>
     <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-      {data.sso?.enabled ? 'SSO is enabled for this tenant.' : 'API token sign-in.'}
+      {data.sso?.anyEnabled ? 'SSO is enabled for this tenant.' : 'API token sign-in.'}
     </p>
   </header>
 
   {#if data.oidcStart}
     <a
       href={data.oidcStart}
-      class="mb-4 inline-flex w-full items-center justify-center gap-2 rounded-[var(--sp-radius)] border border-[var(--sp-border)] px-4 py-2 text-sm font-medium hover:border-[var(--sp-primary)]"
+      class="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-[var(--sp-radius)] border border-[var(--sp-border)] px-4 py-2 text-sm font-medium hover:border-[var(--sp-primary)]"
     >
-      <ShieldCheck size="16" /> Sign in with SSO
+      <ShieldCheck size="16" /> Sign in with SSO (OIDC)
     </a>
+  {/if}
+
+  {#if data.samlMetadataUrl}
+    <div
+      class="mb-3 rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 text-xs text-[var(--sp-muted-fg)]"
+    >
+      <p class="mb-1 font-medium text-[var(--sp-fg)]">SAML SSO</p>
+      <p>
+        Start at your IdP portal. IdP admins import the SP metadata from
+        <a class="underline" href={data.samlMetadataUrl}>{data.samlMetadataUrl}</a>.
+      </p>
+    </div>
+  {/if}
+
+  {#if data.sso?.anyEnabled}
     <div class="my-4 flex items-center gap-2 text-xs text-[var(--sp-muted-fg)]">
       <span class="h-px flex-1 bg-[var(--sp-border)]"></span>
       or paste an API token

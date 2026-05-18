@@ -479,6 +479,66 @@ async fn full_publish_install_and_isolation() -> Result<()> {
         .await?;
     assert_eq!(resp.status().as_u16(), 400, "start without SSO should 400");
 
+    // -------- SAML discover / config / metadata / ACS-stub --------
+    let resp: Value = c
+        .get(format!("{}/v1/auth/saml/discover", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(resp["enabled"], false);
+
+    admin::set_saml(
+        &h.db,
+        "acme",
+        "https://acme.okta.example.test",
+        "https://acme.okta.example.test/sso/saml",
+        "-----BEGIN CERTIFICATE-----\nMIID\n-----END CERTIFICATE-----",
+        None,
+        "publisher",
+    )
+    .await?;
+
+    let resp: Value = c
+        .get(format!("{}/v1/auth/saml/discover", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(resp["enabled"], true);
+
+    let metadata = c
+        .get(format!("{}/v1/auth/saml/acme/metadata", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .send()
+        .await?
+        .text()
+        .await?;
+    assert!(
+        metadata.contains("<EntityDescriptor"),
+        "metadata: {metadata}"
+    );
+    assert!(metadata.contains("urn:skill-pool:tenant:acme"));
+    assert!(metadata.contains("/v1/auth/saml/acme/acs"));
+    assert!(metadata.contains("urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"));
+
+    let resp = c
+        .post(format!("{}/v1/auth/saml/acme/acs", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 501);
+    assert!(resp.headers().contains_key("x-skill-pool-saml-status"));
+
+    let resp = c
+        .post(format!("{}/v1/auth/saml/globex/acs", h.base))
+        .header("x-skill-pool-tenant", "globex")
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 400);
+
     // -------- skill-md endpoint returns the SKILL.md body --------
     let md = authed(
         c.get(format!("{}/v1/skills/hello/skill-md", h.base))

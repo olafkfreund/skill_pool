@@ -48,6 +48,25 @@ enum AdminAction {
         #[arg(long, default_value = "skills:read skills:publish")]
         scope: String,
     },
+    /// Configure (or update) SAML 2.0 SSO for a tenant.
+    SamlSet {
+        #[arg(long)]
+        tenant: String,
+        /// IdP entity ID (usually a URI).
+        #[arg(long)]
+        idp_entity_id: String,
+        /// IdP SSO URL — where we send the user for sign-in.
+        #[arg(long)]
+        idp_sso_url: String,
+        /// Path to a PEM file containing the IdP signing certificate.
+        #[arg(long)]
+        idp_cert_path: std::path::PathBuf,
+        /// Optional SP entity ID override (defaults to `urn:skill-pool:tenant:<slug>`).
+        #[arg(long)]
+        sp_entity_id: Option<String>,
+        #[arg(long, default_value = "viewer")]
+        default_role: String,
+    },
     /// Configure (or update) OIDC SSO for a tenant.
     SsoSet {
         #[arg(long)]
@@ -117,6 +136,28 @@ async fn main() -> Result<()> {
                         &issuer,
                         &client_id,
                         &client_secret,
+                        &default_role,
+                    )
+                    .await
+                }
+                AdminAction::SamlSet {
+                    tenant,
+                    idp_entity_id,
+                    idp_sso_url,
+                    idp_cert_path,
+                    sp_entity_id,
+                    default_role,
+                } => {
+                    let cert = std::fs::read_to_string(&idp_cert_path)
+                        .map_err(|e| anyhow::anyhow!("read {}: {e}", idp_cert_path.display()))?;
+                    let db = admin::connect(&cfg).await?;
+                    admin::set_saml(
+                        &db,
+                        &tenant,
+                        &idp_entity_id,
+                        &idp_sso_url,
+                        &cert,
+                        sp_entity_id.as_deref(),
                         &default_role,
                     )
                     .await

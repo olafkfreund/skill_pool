@@ -1,5 +1,11 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { discoverOidc, oidcStartUrl, validateAuth } from '$lib/server/api';
+import {
+  discoverOidc,
+  discoverSaml,
+  oidcStartUrl,
+  samlMetadataUrl,
+  validateAuth,
+} from '$lib/server/api';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -7,11 +13,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     throw redirect(303, url.searchParams.get('next') ?? '/');
   }
 
-  const sso = await discoverOidc({ tenant: locals.tenant.slug });
+  const auth = { tenant: locals.tenant.slug };
+  const [oidc, saml] = await Promise.all([discoverOidc(auth), discoverSaml(auth)]);
   const returnTo = `${url.origin}/oidc-return`;
+
   return {
-    sso,
-    oidcStart: sso.enabled ? oidcStartUrl(locals.tenant.slug, returnTo) : null,
+    sso: {
+      oidc,
+      saml,
+      anyEnabled: oidc.enabled || saml.enabled,
+    },
+    oidcStart: oidc.enabled ? oidcStartUrl(locals.tenant.slug, returnTo) : null,
+    samlMetadataUrl: saml.enabled ? samlMetadataUrl(locals.tenant.slug) : null,
   };
 };
 

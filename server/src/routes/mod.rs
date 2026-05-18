@@ -7,6 +7,7 @@ use crate::state::AppState;
 
 mod health;
 mod oidc;
+mod saml;
 mod skills;
 mod theme;
 
@@ -27,6 +28,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/oidc/{slug}/callback", get(oidc::callback))
         .route("/v1/auth/whoami", get(oidc::whoami))
         .route("/v1/auth/logout", post(oidc::logout))
+        // SAML
+        .route("/v1/auth/saml/discover", get(saml::discover))
+        .route("/v1/auth/saml/{slug}/metadata", get(saml::metadata))
+        .route("/v1/auth/saml/{slug}/acs", post(saml::acs))
         .layer(RequestBodyLimitLayer::new(MAX_BUNDLE_BYTES + 64 * 1024))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
