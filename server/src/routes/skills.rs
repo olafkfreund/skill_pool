@@ -492,6 +492,144 @@ pub struct DepEntry {
     pub depth: i32,
 }
 
+/// Reverse-edge entry: a skill that requires *us*.
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct DependentEntry {
+    pub slug: String,
+    pub version: String,
+    pub version_range: String,
+}
+
+/// Pending-draft entry that flagged this skill as its merge target.
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct PendingMergeProposal {
+    pub draft_id: uuid::Uuid,
+    pub draft_slug: String,
+    pub similarity: f32,
+}
+
+/// Detail view for the portal's per-skill page. Bundles base metadata +
+/// usage counters + forward deps + reverse deps + pending merge proposals
+/// in one round-trip so the SvelteKit loader stays a single `await`.
+#[derive(serde::Serialize)]
+pub struct SkillDetail {
+    pub slug: String,
+    pub version: String,
+    pub description: String,
+    pub when_to_use: Option<String>,
+    pub tags: Vec<String>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub use_count: i32,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub requires: Vec<DependentEntry>,
+    pub required_by: Vec<DependentEntry>,
+    pub merge_proposals: Vec<PendingMergeProposal>,
+}
+
+#[derive(sqlx::FromRow)]
+struct SkillDetailRow {
+    id: uuid::Uuid,
+    slug: String,
+    version: String,
+    description: String,
+    when_to_use: Option<String>,
+    tags: Vec<String>,
+    status: String,
+    created_at: DateTime<Utc>,
+    use_count: i32,
+    last_used_at: Option<DateTime<Utc>>,
+}
+
+pub async fn get_detail(
+    State(state): State<AppState>,
+    tenant: TenantCtx,
+    Path(slug): Path<String>,
+) -> AppResult<Json<SkillDetail>> {
+    let parent: Option<SkillDetailRow> = sqlx::query_as(
+        "SELECT id, slug, version, description, when_to_use, tags, status, created_at, \
+                use_count, last_used_at \
+         FROM skills \
+         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(tenant.tenant_id)
+    .bind(&slug)
+    .fetch_optional(state.db())
+    .await?;
+    let parent = parent.ok_or(AppError::NotFound)?;
+
+    // Forward edges: rows in skill_dependencies whose parent is this
+    // skill, joined to skills to surface the target's current version
+    // (if published). Unpublished target → version is empty string.
+    let requires: Vec<DependentEntry> = sqlx::query_as(
+        "SELECT d.requires_slug AS slug, \
+                COALESCE(s.version, '') AS version, \
+                d.version_range \
+         FROM skill_dependencies d \
+         LEFT JOIN LATERAL ( \
+            SELECT version FROM skills \
+            WHERE tenant_id = $1 AND slug = d.requires_slug AND status = 'published' \
+            ORDER BY created_at DESC LIMIT 1 \
+         ) s ON true \
+         WHERE d.tenant_id = $1 AND d.parent_skill_id = $2 \
+         ORDER BY d.requires_slug ASC",
+    )
+    .bind(tenant.tenant_id)
+    .bind(parent.id)
+    .fetch_all(state.db())
+    .await?;
+
+    // Reverse edges: who declares a dependency on this slug?
+    let required_by: Vec<DependentEntry> = sqlx::query_as(
+        "SELECT s.slug AS slug, s.version AS version, d.version_range \
+         FROM skill_dependencies d \
+         JOIN skills s ON s.id = d.parent_skill_id AND s.status = 'published' \
+         WHERE d.tenant_id = $1 AND d.requires_slug = $2 \
+         ORDER BY s.slug ASC",
+    )
+    .bind(tenant.tenant_id)
+    .bind(&parent.slug)
+    .fetch_all(state.db())
+    .await?;
+
+    // Pending drafts that flagged this slug as a merge target (Phase 5
+    // embedding dedup). Joining through skills.slug rather than the row
+    // id surfaces proposals against any version of this skill — the
+    // semantic intent is "are curators proposing a merge here?", not
+    // "which row id was the embedding closest to?".
+    let merge_proposals: Vec<PendingMergeProposal> = sqlx::query_as(
+        "SELECT d.id AS draft_id, d.slug AS draft_slug, \
+                d.merge_proposal_similarity AS similarity \
+         FROM skill_drafts d \
+         JOIN skills s ON s.id = d.merge_proposal_skill_id AND s.tenant_id = $1 \
+         WHERE d.tenant_id = $1 \
+           AND d.status = 'pending' \
+           AND s.slug = $2 \
+         ORDER BY d.merge_proposal_similarity DESC NULLS LAST \
+         LIMIT 10",
+    )
+    .bind(tenant.tenant_id)
+    .bind(&parent.slug)
+    .fetch_all(state.db())
+    .await?;
+
+    Ok(Json(SkillDetail {
+        slug: parent.slug,
+        version: parent.version,
+        description: parent.description,
+        when_to_use: parent.when_to_use,
+        tags: parent.tags,
+        status: parent.status,
+        created_at: parent.created_at,
+        use_count: parent.use_count,
+        last_used_at: parent.last_used_at,
+        requires,
+        required_by,
+        merge_proposals,
+    }))
+}
+
 /// `GET /v1/skills/{slug}/deps` — return the transitive dependency
 /// closure of a published skill. Cycle-safe (UNION dedups; depth cap
 /// is belt-and-braces). Tenant-scoped.

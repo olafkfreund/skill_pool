@@ -78,6 +78,39 @@ export async function getSkillMd(auth: Auth, slug: string): Promise<string> {
   return resp.text();
 }
 
+export interface DependentEntry {
+  slug: string;
+  version: string;
+  version_range: string;
+}
+
+export interface PendingMergeProposal {
+  draft_id: string;
+  draft_slug: string;
+  similarity: number | null;
+}
+
+export interface SkillDetail {
+  slug: string;
+  version: string;
+  description: string;
+  when_to_use: string | null;
+  tags: string[];
+  status: string;
+  created_at: string;
+  use_count: number;
+  last_used_at: string | null;
+  requires: DependentEntry[];
+  required_by: DependentEntry[];
+  merge_proposals: PendingMergeProposal[];
+}
+
+export async function getSkillDetail(auth: Auth, slug: string): Promise<SkillDetail> {
+  const resp = await call('GET', `/v1/skills/${encodeURIComponent(slug)}/detail`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
 export interface Member {
   id: string;
   email: string;

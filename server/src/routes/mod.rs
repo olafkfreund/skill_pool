@@ -28,6 +28,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills", get(skills::list).post(skills::publish))
         .route("/v1/skills/validate", post(skills::validate))
         .route("/v1/skills/{slug}", get(skills::get_one))
+        .route("/v1/skills/{slug}/detail", get(skills::get_detail))
         .route("/v1/skills/{slug}/bundle.tar.gz", get(skills::get_bundle))
         .route("/v1/skills/{slug}/skill-md", get(skills::get_skill_md))
         .route("/v1/skills/{slug}/deps", get(skills::get_deps))
