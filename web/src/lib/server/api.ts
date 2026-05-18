@@ -195,6 +195,8 @@ export interface ServerTheme {
   border: string;
   radius: string;
   logo_uri?: string | null;
+  /** Whether the "Powered by skill-pool" footer credit is shown. Defaults to true. */
+  footer_branding: boolean;
 }
 
 export async function getTheme(auth: Auth): Promise<ServerTheme | null> {
@@ -227,6 +229,7 @@ export function toClientTheme(s: ServerTheme): Theme {
     border: s.border,
     radius: s.radius,
     logoUrl: s.logo_uri ?? undefined,
+    footerBranding: s.footer_branding ?? true,
   };
 }
 
@@ -244,6 +247,7 @@ export function fromClientTheme(t: Theme): ServerTheme {
     border: t.border,
     radius: t.radius,
     logo_uri: t.logoUrl,
+    footer_branding: t.footerBranding,
   };
 }
 

@@ -10,6 +10,8 @@ export interface Theme {
   radius: string;
   logoUrl?: string;
   brandName: string;
+  /** When true the "Powered by skill-pool" footer credit is shown. Default true. */
+  footerBranding: boolean;
 }
 
 export const DEFAULT_THEME: Theme = {
@@ -23,6 +25,7 @@ export const DEFAULT_THEME: Theme = {
   border: '#e2e8f0',
   radius: '0.5rem',
   brandName: 'skill-pool',
+  footerBranding: true,
 };
 
 /** Serialise a Theme to a CSS variables block suitable for inline injection. */
