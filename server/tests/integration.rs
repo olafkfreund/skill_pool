@@ -551,6 +551,114 @@ async fn full_publish_install_and_isolation() -> Result<()> {
     .await?;
     assert!(md.contains("Greet the user."), "skill-md body: {md:?}");
 
+    // -------- SCIM 2.0 — discovery + provision + filter + patch deactivate --------
+    let scim_token = admin::create_token(&h.db, "acme", "okta", "scim:provision")
+        .await?
+        .raw_token;
+    let scim_get = |path: &str| {
+        c.get(format!("{}{}", h.base, path))
+            .header("x-skill-pool-tenant", "acme")
+            .bearer_auth(scim_token.clone())
+    };
+    let scim_post = |path: &str| {
+        c.post(format!("{}{}", h.base, path))
+            .header("x-skill-pool-tenant", "acme")
+            .bearer_auth(scim_token.clone())
+    };
+
+    // SCIM endpoints reject tokens without the `scim:provision` scope.
+    let unscoped = c
+        .get(format!("{}/scim/v2/Users", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&h.acme_token)
+        .send()
+        .await?;
+    assert_eq!(unscoped.status().as_u16(), 403);
+
+    // ServiceProviderConfig advertises filter + patch.
+    let spc: Value = scim_get("/scim/v2/ServiceProviderConfig")
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(spc["filter"]["supported"], true);
+    assert_eq!(spc["patch"]["supported"], true);
+
+    // POST a user.
+    let resp = scim_post("/scim/v2/Users")
+        .json(&serde_json::json!({
+            "userName": "ada@example.test",
+            "active": true,
+            "name": { "givenName": "Ada", "familyName": "Lovelace" }
+        }))
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 201);
+    let provisioned: Value = resp.json().await?;
+    let scim_id = provisioned["id"].as_str().unwrap().to_string();
+    assert_eq!(provisioned["userName"], "ada@example.test");
+    assert_eq!(provisioned["active"], true);
+
+    // List filtered by userName.
+    let listed: Value = scim_get(r#"/scim/v2/Users?filter=userName+eq+%22ada%40example.test%22"#)
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(listed["totalResults"], 1);
+    assert_eq!(listed["Resources"][0]["id"].as_str().unwrap(), scim_id);
+
+    // PATCH replace active=false → deprovisions membership.
+    let resp = c
+        .patch(format!("{}/scim/v2/Users/{}", h.base, scim_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&scim_token)
+        .json(&serde_json::json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{ "op": "replace", "path": "active", "value": false }]
+        }))
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 200);
+    let patched: Value = resp.json().await?;
+    assert_eq!(patched["active"], false);
+
+    // After deprovisioning, the user no longer matches the filter (membership gone).
+    let listed: Value = scim_get(r#"/scim/v2/Users?filter=userName+eq+%22ada%40example.test%22"#)
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(listed["totalResults"], 0);
+
+    // PATCH with an unsupported op on a FRESH user → 400 (not 404 / 200).
+    let resp2: Value = scim_post("/scim/v2/Users")
+        .json(&serde_json::json!({ "userName": "grace@example.test", "active": true }))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let grace_id = resp2["id"].as_str().unwrap().to_string();
+    let resp = c
+        .patch(format!("{}/scim/v2/Users/{}", h.base, grace_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&scim_token)
+        .json(&serde_json::json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{ "op": "add", "path": "displayName", "value": "Grace" }]
+        }))
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 400);
+
+    // Unknown filter → 400.
+    let resp = scim_get(r#"/scim/v2/Users?filter=displayName+eq+%22x%22"#)
+        .send()
+        .await?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    assert_eq!(status, 400, "body: {body}");
+
     // -------- audit row written for the publish --------
     let audit: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM audit_events \

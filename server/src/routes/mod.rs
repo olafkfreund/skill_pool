@@ -8,6 +8,7 @@ use crate::state::AppState;
 mod health;
 mod oidc;
 mod saml;
+mod scim;
 mod skills;
 mod theme;
 
@@ -32,6 +33,23 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/saml/discover", get(saml::discover))
         .route("/v1/auth/saml/{slug}/metadata", get(saml::metadata))
         .route("/v1/auth/saml/{slug}/acs", post(saml::acs))
+        // SCIM 2.0
+        .route(
+            "/scim/v2/ServiceProviderConfig",
+            get(scim::service_provider_config),
+        )
+        .route("/scim/v2/ResourceTypes", get(scim::resource_types))
+        .route("/scim/v2/Schemas", get(scim::schemas))
+        .route(
+            "/scim/v2/Users",
+            get(scim::list_users).post(scim::create_user),
+        )
+        .route(
+            "/scim/v2/Users/{id}",
+            get(scim::get_user)
+                .patch(scim::patch_user)
+                .delete(scim::delete_user),
+        )
         .layer(RequestBodyLimitLayer::new(MAX_BUNDLE_BYTES + 64 * 1024))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
