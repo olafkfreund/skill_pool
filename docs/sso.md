@@ -7,7 +7,7 @@ managing them is part of #8 and lands later.
 | Mechanism | Status | Use it for |
 |---|---|---|
 | **OIDC** | end-to-end working | Okta, Azure AD, Google Workspace, Authentik, Keycloak, Auth0, Ping — anything that speaks OpenID Connect Authorization Code + PKCE |
-| **SAML 2.0** | config + SP metadata ready; assertion validation in a follow-up | ADFS, on-prem Shibboleth, older Okta/Azure SAML apps |
+| **SAML 2.0** | end-to-end working — XML signature validation via xmlsec1 | ADFS, on-prem Shibboleth, older Okta/Azure SAML apps |
 
 Either way, the first user to sign in for a tenant is provisioned with
 `tenant_users.role = default_role` (configurable per IdP). Subsequent sign-ins
@@ -90,14 +90,30 @@ skill-pool-server admin saml-set \
 
 ### 4. Test
 
-Currently SAML is **IdP-initiated only** in this scaffold. Users go to their
-IdP portal, click the skill-pool application tile, and the IdP POSTs an
-assertion to our ACS. **Assertion validation is not yet implemented** — the
-ACS returns 501. That part lands in a follow-up that wires up XML signature
-verification against the stored IdP certificate.
+SAML is **IdP-initiated** in v1. Users go to their IdP portal, click the
+skill-pool application tile, and the IdP POSTs the signed assertion to our
+ACS endpoint. The server:
 
-In the meantime, OIDC is the path that actually delivers users to a
-signed-in session.
+1. Base64-decodes the `SAMLResponse` form field
+2. Validates the XML signature against the stored IdP certificate (via
+   `samael` → libxml2 + xmlsec1)
+3. Checks `Conditions/NotOnOrAfter`
+4. Pulls `email` from NameID or `email`/`mail`/`Email` attributes,
+   `displayName` from `displayName`/`name`/(`givenName` + `surname`)
+5. Upserts the user, ensures membership at `default_role`, mints a 14-day
+   session, redirects to the web's `/saml-return?token=…&tenant=…`
+
+SP-initiated SAML (generating `<AuthnRequest>`) is a follow-up — IdP-initiated
+is what every modern IdP supports natively and what enterprise integrations
+default to.
+
+### Runtime dependencies (server host)
+
+Signature validation needs xmlsec1 + libxml2. The server's Docker image
+installs them; for non-Docker deploys:
+
+- Debian/Ubuntu: `apt install libxml2 libxmlsec1 libxmlsec1-openssl`
+- Nix: bundled in `flake.nix`'s dev shell and `nixosModules.skill-pool` (when wired)
 
 ### IdP-specific notes
 

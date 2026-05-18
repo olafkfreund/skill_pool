@@ -24,6 +24,13 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
 
+      - name: Install SAML C deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxml2-dev libxmlsec1-dev libxmlsec1-openssl \
+            libtool-bin libltdl-dev clang libclang-dev pkg-config
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: lint
@@ -59,6 +66,19 @@ jobs:
 
       - name: Install Rust toolchain
         run: rustup show
+
+      - name: Install SAML C deps (xmlsec1 + libxml2 + libtool + clang)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxml2-dev \
+            libxmlsec1-dev \
+            libxmlsec1-openssl \
+            libtool-bin \
+            libltdl-dev \
+            clang \
+            libclang-dev \
+            pkg-config
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -122,6 +142,13 @@ jobs:
 
       - name: Install Rust toolchain
         run: rustup show
+
+      - name: Install SAML C deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxml2-dev libxmlsec1-dev libxmlsec1-openssl \
+            libtool-bin libltdl-dev clang libclang-dev pkg-config
 
       - uses: Swatinem/rust-cache@v2
         with:

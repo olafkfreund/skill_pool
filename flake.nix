@@ -58,11 +58,21 @@
             # Web (Phase 2)
             nodejs_22
 
+            # SAML XML signature validation (samael -> xmlsec1 + libxml2 + bindgen)
+            xmlsec libxml2 libxml2.dev
+            clang
+            llvmPackages.libclang
+            openssl.dev
+
             # General tooling
             git direnv just
           ];
 
           shellHook = ''
+            # samael's libxml binding uses bindgen → needs LIBCLANG_PATH.
+            export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
+            # Make sure pkg-config finds Nix-provided headers, not /usr/.
+            unset OPENSSL_DIR
             echo "skill-pool dev shell"
             echo "  cargo check --workspace"
             echo "  docker compose -f server/compose.yaml up    # local stack"

@@ -524,17 +524,41 @@ async fn full_publish_install_and_isolation() -> Result<()> {
     assert!(metadata.contains("/v1/auth/saml/acme/acs"));
     assert!(metadata.contains("urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"));
 
+    // ACS for a configured tenant now hits the real validator. POST without
+    // a form body returns 415 (axum's Form extractor refuses missing
+    // Content-Type) — was 501 in the previous "stubbed" iteration.
     let resp = c
         .post(format!("{}/v1/auth/saml/acme/acs", h.base))
         .header("x-skill-pool-tenant", "acme")
         .send()
         .await?;
-    assert_eq!(resp.status().as_u16(), 501);
-    assert!(resp.headers().contains_key("x-skill-pool-saml-status"));
+    assert_eq!(
+        resp.status().as_u16(),
+        415,
+        "empty ACS POST should be 415: {}",
+        resp.text().await.unwrap_or_default()
+    );
 
+    // Malformed base64 still gets a tenant-aware error, not a generic crash.
+    let resp = c
+        .post(format!("{}/v1/auth/saml/acme/acs", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .form(&[("SAMLResponse", "not-base64-!!!")])
+        .send()
+        .await?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    assert_eq!(status, 400, "bad-base64 ACS: {body}");
+    assert!(
+        body.contains("base64") || body.contains("SAMLResponse"),
+        "expected base64-related error, got: {body}"
+    );
+
+    // ACS for an unconfigured tenant still 400s before parsing.
     let resp = c
         .post(format!("{}/v1/auth/saml/globex/acs", h.base))
         .header("x-skill-pool-tenant", "globex")
+        .form(&[("SAMLResponse", "anything")])
         .send()
         .await?;
     assert_eq!(resp.status().as_u16(), 400);
