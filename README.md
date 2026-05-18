@@ -1,5 +1,7 @@
 # skill-pool
 
+[![CI](https://github.com/olafkfreund/skill_pool/actions/workflows/ci.yml/badge.svg)](https://github.com/olafkfreund/skill_pool/actions/workflows/ci.yml)
+
 Self-hosted registry, CLI, and web UI for sharing Claude Code skills, subagents, and slash commands across a developer team.
 
 **Status:** Phase 0 — spike. See [plan](https://_local_/plan).
