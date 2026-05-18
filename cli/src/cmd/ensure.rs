@@ -26,43 +26,117 @@ pub async fn run_with_quiet(cfg: &Config, quiet: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Expand the manifest with the transitive dependency closure of each
+    // top-level skill. Manifest-declared scope is preserved; transitively-
+    // pulled skills inherit their parent's scope. Duplicates collapse —
+    // we only install each (slug, version) once.
+    let mut work: Vec<InstallTarget> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for skill in &mf.skills {
-        let resolved_version = if skill.version == "*" {
-            let meta = client.get_skill(&skill.slug).await?;
-            meta.version
+        if !seen.insert(skill.slug.clone()) {
+            continue;
+        }
+        work.push(InstallTarget {
+            slug: skill.slug.clone(),
+            version: skill.version.clone(),
+            scope: skill.scope.clone(),
+            depth: 0,
+        });
+        // Pull the closure. A non-2xx (e.g. 404 on a forward reference)
+        // is reported but doesn't block the rest of the install.
+        match client.get_deps(&skill.slug).await {
+            Ok(deps) => {
+                for d in deps {
+                    if !seen.insert(d.slug.clone()) {
+                        continue;
+                    }
+                    work.push(InstallTarget {
+                        slug: d.slug,
+                        version: if d.version_range.is_empty() {
+                            "*".into()
+                        } else {
+                            d.version_range
+                        },
+                        scope: skill.scope.clone(),
+                        depth: d.depth.max(1) as u32,
+                    });
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    println!(
+                        "  warn:     could not resolve deps of {}: {e}",
+                        skill.slug
+                    );
+                }
+            }
+        }
+    }
+
+    for target in &work {
+        let resolved_version = if target.version == "*" {
+            match client.get_skill(&target.slug).await {
+                Ok(meta) => meta.version,
+                Err(e) => {
+                    if !quiet {
+                        println!(
+                            "  warn:     skipping {} (transitive dep, slug not published yet: {e})",
+                            target.slug
+                        );
+                    }
+                    continue;
+                }
+            }
         } else {
-            skill.version.clone()
+            target.version.clone()
         };
 
-        let library_entry = install::library_entry(tenant_dir, &skill.slug, &resolved_version)?;
-        let target_parent = install::target_for_scope(&project_root, &skill.scope)?;
+        let library_entry = install::library_entry(tenant_dir, &target.slug, &resolved_version)?;
+        let target_parent = install::target_for_scope(&project_root, &target.scope)?;
+        let indent = if target.depth == 0 { "" } else { "  " };
 
         if !library_entry.exists() {
             if !quiet {
                 println!(
-                    "  fetching: {}@{} → {}",
-                    skill.slug,
+                    "  {indent}fetching: {}@{} → {}",
+                    target.slug,
                     resolved_version,
                     library_entry.display()
                 );
             }
-            let bytes = client.download_bundle(&skill.slug).await?;
+            let bytes = client.download_bundle(&target.slug).await?;
             install::extract_bundle(&bytes, &library_entry)?;
         } else if !quiet {
-            println!("  cached:   {}@{}", skill.slug, resolved_version);
+            println!("  {indent}cached:   {}@{}", target.slug, resolved_version);
         }
 
-        match install::symlink_into(&library_entry, &target_parent, &skill.slug)? {
-            SymlinkResult::Created if !quiet => {
-                println!("  link:     {} ({})", skill.slug, target_parent.display())
+        match install::symlink_into(&library_entry, &target_parent, &target.slug)? {
+            SymlinkResult::Created if !quiet => println!(
+                "  {indent}link:     {} ({})",
+                target.slug,
+                target_parent.display()
+            ),
+            SymlinkResult::Relinked if !quiet => println!(
+                "  {indent}relink:   {} ({})",
+                target.slug,
+                target_parent.display()
+            ),
+            SymlinkResult::AlreadyOk if !quiet => {
+                println!("  {indent}ok:       {}", target.slug)
             }
-            SymlinkResult::Relinked if !quiet => {
-                println!("  relink:   {} ({})", skill.slug, target_parent.display())
-            }
-            SymlinkResult::AlreadyOk if !quiet => println!("  ok:       {}", skill.slug),
             _ => {}
         }
     }
 
     Ok(())
+}
+
+/// One concrete skill to install: a manifest entry OR a transitively-
+/// pulled dependency. `depth=0` is a top-level manifest entry.
+struct InstallTarget {
+    slug: String,
+    version: String,
+    scope: String,
+    depth: u32,
 }

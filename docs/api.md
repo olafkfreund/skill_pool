@@ -89,6 +89,46 @@ Response: `[ { slug, version, description, use_count, last_used_at, created_at }
 
 Skill usage tracking: `GET /v1/skills/{slug}/bundle.tar.gz` (both the redirect path and the streamed-bytes path) bumps `use_count` and refreshes `last_used_at` server-side. Failure here is logged but never fails the response.
 
+## `GET /v1/skills/{slug}/deps` — dependency closure (Phase 5)
+
+Returns the transitive dependency closure of a published skill.
+
+```json
+[
+  { "slug": "axum-extractor",  "version_range": "*",     "depth": 1 },
+  { "slug": "sqlx-migrations", "version_range": "1.0.0", "depth": 2 }
+]
+```
+
+- Tenant-scoped via the standard extractor.
+- Cycle-safe (UNION dedups; depth cap of 10 is belt-and-braces).
+- Forward references are kept: a `requires_slug` that doesn't yet have a
+  published row still appears in the closure so the CLI can warn-and-skip.
+- 404 when the parent slug has no published version.
+
+### Declaring dependencies
+
+Add a `requires:` block to your SKILL.md frontmatter at publish time:
+
+```yaml
+---
+name: my-skill
+description: …
+requires:
+  - axum-extractor             # latest version
+  - sqlx-migrations@1.0.0      # exact version
+---
+```
+
+Entry syntax: `slug` (defaults to `*`) or `slug@<version-range>`. Server v1
+understands `*` and exact versions; anything else is stored verbatim and
+the client picks "latest" if it doesn't recognize the syntax. Self-require
+is a 400.
+
+`skill-pool ensure` calls `/deps` for every manifest entry and installs
+the closure plus the manifest entries themselves. Duplicates collapse on
+slug.
+
 ## `POST /v1/mcp` — MCP transport (Phase 5)
 
 JSON-RPC 2.0 adapter so a developer's Claude session can search the team catalog without leaving the conversation. Single POST endpoint; same `Authorization: Bearer …` + `X-Skill-Pool-Tenant: …` headers as the REST surface.

@@ -68,6 +68,15 @@ pub struct CapturedDraft {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct DepEntry {
+    pub slug: String,
+    #[serde(default)]
+    pub version_range: String,
+    #[serde(default)]
+    pub depth: i32,
+}
+
 impl Client {
     pub fn new(reg: &RegistryConfig) -> Result<Self> {
         let mut headers = HeaderMap::new();
@@ -139,6 +148,22 @@ impl Client {
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("list_skills: {status} — {body}"));
+        }
+        Ok(resp.json().await?)
+    }
+
+    pub async fn get_deps(&self, slug: &str) -> Result<Vec<DepEntry>> {
+        let url = self.base.join(&format!("/v1/skills/{slug}/deps"))?;
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            // No published parent skill → no closure to walk. Treat the
+            // same as "no deps" so the caller can skip without branching.
+            return Ok(vec![]);
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("get_deps: {status} — {body}"));
         }
         Ok(resp.json().await?)
     }

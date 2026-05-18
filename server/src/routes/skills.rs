@@ -360,11 +360,11 @@ pub async fn publish(
         .map_err(AppError::Anyhow)?
         .map(|v| crate::embedding::vector_to_pg_literal(&v));
 
-    let row: Result<SkillRow, sqlx::Error> = sqlx::query_as(
+    let row: Result<SkillRowWithId, sqlx::Error> = sqlx::query_as(
         "INSERT INTO skills \
            (tenant_id, slug, version, description, when_to_use, tags, bundle_uri, bundle_sha256, created_by, description_embedding) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9::text::vector) \
-         RETURNING slug, version, description, when_to_use, tags, status, created_at",
+         RETURNING id, slug, version, description, when_to_use, tags, status, created_at",
     )
     .bind(caller.tenant.tenant_id)
     .bind(&meta.slug)
@@ -391,6 +391,36 @@ pub async fn publish(
         Err(e) => return Err(e.into()),
     };
 
+    // Phase 5 — dependency declarations. Each `requires` entry in the
+    // SKILL.md frontmatter becomes one row in skill_dependencies.
+    // Forward references are fine: the target slug doesn't need to exist
+    // yet; the closure endpoint resolves at read time.
+    for req in &validated.frontmatter.requires {
+        let (req_slug, version_range) = parse_requires_entry(req);
+        if req_slug.is_empty() {
+            return Err(AppError::BadRequest(format!(
+                "invalid requires entry `{req}` (expected `slug` or `slug@version`)"
+            )));
+        }
+        if req_slug == meta.slug {
+            return Err(AppError::BadRequest(format!(
+                "skill `{req_slug}` cannot require itself"
+            )));
+        }
+        sqlx::query(
+            "INSERT INTO skill_dependencies \
+               (tenant_id, parent_skill_id, requires_slug, version_range) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (parent_skill_id, requires_slug) DO UPDATE SET version_range = EXCLUDED.version_range",
+        )
+        .bind(caller.tenant.tenant_id)
+        .bind(row.id)
+        .bind(&req_slug)
+        .bind(&version_range)
+        .execute(state.db())
+        .await?;
+    }
+
     audit::record_best_effort(
         state.db(),
         audit::Event {
@@ -404,6 +434,7 @@ pub async fn publish(
                 "version": meta.version,
                 "size_bytes": validated.size_bytes,
                 "sha256": validated.sha256_hex,
+                "requires": validated.frontmatter.requires.len(),
             }),
             ip_addr: None,
             user_agent: None,
@@ -412,6 +443,62 @@ pub async fn publish(
     .await;
 
     Ok((StatusCode::CREATED, Json(row.into())))
+}
+
+/// One entry in a skill's dependency closure.
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct DepEntry {
+    pub slug: String,
+    pub version_range: String,
+    pub depth: i32,
+}
+
+/// `GET /v1/skills/{slug}/deps` — return the transitive dependency
+/// closure of a published skill. Cycle-safe (UNION dedups; depth cap
+/// is belt-and-braces). Tenant-scoped.
+pub async fn get_deps(
+    State(state): State<AppState>,
+    tenant: TenantCtx,
+    Path(slug): Path<String>,
+) -> AppResult<Json<Vec<DepEntry>>> {
+    // Resolve the latest published version of `slug` for this tenant.
+    let parent: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT id FROM skills \
+         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(tenant.tenant_id)
+    .bind(&slug)
+    .fetch_optional(state.db())
+    .await?;
+    let Some((parent_id,)) = parent else {
+        return Err(AppError::NotFound);
+    };
+
+    let rows: Vec<DepEntry> = sqlx::query_as(
+        "WITH RECURSIVE closure AS ( \
+            SELECT d.requires_slug, d.version_range, 1 AS depth \
+            FROM skill_dependencies d \
+            WHERE d.tenant_id = $1 AND d.parent_skill_id = $2 \
+            \
+            UNION \
+            \
+            SELECT d.requires_slug, d.version_range, c.depth + 1 \
+            FROM skill_dependencies d \
+            JOIN skills s ON s.id = d.parent_skill_id AND s.tenant_id = $1 \
+            JOIN closure c ON s.slug = c.requires_slug \
+            WHERE c.depth < 10 \
+         ) \
+         SELECT requires_slug AS slug, version_range, depth \
+         FROM closure \
+         ORDER BY depth ASC, slug ASC",
+    )
+    .bind(tenant.tenant_id)
+    .bind(parent_id)
+    .fetch_all(state.db())
+    .await?;
+
+    Ok(Json(rows))
 }
 
 pub async fn validate(
@@ -482,6 +569,50 @@ impl From<SkillRow> for Skill {
             created_at: r.created_at,
             similarity: None,
         }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SkillRowWithId {
+    id: uuid::Uuid,
+    slug: String,
+    version: String,
+    description: String,
+    when_to_use: Option<String>,
+    tags: Vec<String>,
+    status: String,
+    created_at: DateTime<Utc>,
+}
+
+impl From<SkillRowWithId> for Skill {
+    fn from(r: SkillRowWithId) -> Self {
+        Self {
+            slug: r.slug,
+            version: r.version,
+            description: r.description,
+            when_to_use: r.when_to_use,
+            tags: r.tags,
+            status: r.status,
+            created_at: r.created_at,
+            similarity: None,
+        }
+    }
+}
+
+/// Parse a `requires` entry. Accepts either `slug` or `slug@version`.
+/// Empty slug is returned when the input is malformed; caller surfaces
+/// that as a 400.
+fn parse_requires_entry(raw: &str) -> (String, String) {
+    let trimmed = raw.trim();
+    match trimmed.split_once('@') {
+        Some((slug, version)) => {
+            let v = version.trim();
+            (
+                slug.trim().to_string(),
+                if v.is_empty() { "*".into() } else { v.to_string() },
+            )
+        }
+        None => (trimmed.to_string(), "*".into()),
     }
 }
 

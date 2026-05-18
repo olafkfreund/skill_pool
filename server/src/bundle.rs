@@ -22,6 +22,17 @@ pub struct Frontmatter {
     pub when_to_use: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Phase 5: declared dependencies. Each entry is a slug optionally
+    /// followed by `@<version-range>`. Forward references are allowed —
+    /// the closure endpoint resolves at read time.
+    ///
+    /// Examples:
+    ///   requires:
+    ///     - axum-handler
+    ///     - sqlx-migrations@1.0.0
+    ///     - tokio-runtime@*
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
