@@ -6,6 +6,7 @@ use tower_http::trace::TraceLayer;
 use crate::state::AppState;
 
 mod health;
+mod members;
 mod oidc;
 mod saml;
 mod scim;
@@ -23,6 +24,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills/{slug}/bundle.tar.gz", get(skills::get_bundle))
         .route("/v1/skills/{slug}/skill-md", get(skills::get_skill_md))
         .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
+        // Members admin
+        .route("/v1/tenant/members", get(members::list))
+        .route(
+            "/v1/tenant/members/{id}",
+            axum::routing::patch(members::patch_role).delete(members::remove),
+        )
         // OIDC
         .route("/v1/auth/oidc/discover", get(oidc::discover))
         .route("/v1/auth/oidc/{slug}/start", get(oidc::start))

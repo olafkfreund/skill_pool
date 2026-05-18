@@ -67,6 +67,42 @@ export async function getSkillMd(auth: Auth, slug: string): Promise<string> {
   return resp.text();
 }
 
+export interface Member {
+  id: string;
+  email: string;
+  display_name?: string | null;
+  role: 'viewer' | 'publisher' | 'curator' | 'admin';
+  joined_at: string;
+  active: boolean;
+}
+
+export async function listMembers(auth: Auth): Promise<Member[]> {
+  const resp = await call('GET', '/v1/tenant/members', auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function patchMemberRole(
+  auth: Auth,
+  id: string,
+  role: Member['role'],
+): Promise<{ ok: true; member: Member } | { ok: false; status: number; error: string }> {
+  const resp = await call('PATCH', `/v1/tenant/members/${encodeURIComponent(id)}`, auth, {
+    jsonBody: { role },
+  });
+  if (resp.ok) return { ok: true, member: (await resp.json()) as Member };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function removeMember(
+  auth: Auth,
+  id: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', `/v1/tenant/members/${encodeURIComponent(id)}`, auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
 export interface ServerTheme {
   brand_name: string;
   primary: string;

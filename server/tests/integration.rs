@@ -659,6 +659,145 @@ async fn full_publish_install_and_isolation() -> Result<()> {
     let body = resp.text().await.unwrap_or_default();
     assert_eq!(status, 400, "body: {body}");
 
+    // -------- Members admin endpoint --------
+    // Grace + an explicit admin from earlier SCIM steps + earlier OIDC + lots
+    // of bookkeeping. Mint an admin token to drive the members API.
+    let admin_for_members = admin::create_token(&h.db, "acme", "ops-admin", "tenant:admin")
+        .await?
+        .raw_token;
+    let members_get = || {
+        c.get(format!("{}/v1/tenant/members", h.base))
+            .header("x-skill-pool-tenant", "acme")
+            .bearer_auth(&admin_for_members)
+    };
+
+    // Default-scope token can READ.
+    let resp = c
+        .get(format!("{}/v1/tenant/members", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&h.acme_token)
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // GET returns at least one member (grace from SCIM).
+    let members: Vec<Value> = members_get().send().await?.json().await?;
+    let grace = members
+        .iter()
+        .find(|m| m["email"] == "grace@example.test")
+        .ok_or_else(|| anyhow::anyhow!("grace not in members list: {members:?}"))?
+        .clone();
+    let grace_member_id = grace["id"].as_str().unwrap().to_string();
+    assert_eq!(grace["role"], "viewer");
+
+    // PATCH role to curator
+    let resp = c
+        .patch(format!("{}/v1/tenant/members/{}", h.base, grace_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .json(&serde_json::json!({ "role": "curator" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 200);
+    let updated: Value = resp.json().await?;
+    assert_eq!(updated["role"], "curator");
+
+    // Default-scope token cannot mutate.
+    let resp = c
+        .patch(format!("{}/v1/tenant/members/{}", h.base, grace_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&h.acme_token)
+        .json(&serde_json::json!({ "role": "publisher" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 403);
+
+    // Invalid role → 400
+    let resp = c
+        .patch(format!("{}/v1/tenant/members/{}", h.base, grace_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .json(&serde_json::json!({ "role": "owner" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 400);
+
+    // Create a sole admin to test the last-admin guard.
+    let admin_email = "alice@example.test";
+    // Provision via SCIM (already authed against acme tenant).
+    let provisioned: Value = scim_post("/scim/v2/Users")
+        .json(&serde_json::json!({ "userName": admin_email, "active": true }))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let alice_member_id = provisioned["id"].as_str().unwrap().to_string();
+    // Promote alice to admin.
+    let resp = c
+        .patch(format!("{}/v1/tenant/members/{}", h.base, alice_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .json(&serde_json::json!({ "role": "admin" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // Now alice is the only admin (there are no other admin rows for acme).
+    // Demoting her must fail.
+    let resp = c
+        .patch(format!("{}/v1/tenant/members/{}", h.base, alice_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .json(&serde_json::json!({ "role": "viewer" }))
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 400, "last-admin demote must 400");
+
+    // Same for delete.
+    let resp = c
+        .delete(format!("{}/v1/tenant/members/{}", h.base, alice_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 400, "last-admin delete must 400");
+
+    // After adding a second admin, the demote works.
+    let second_admin: Value = scim_post("/scim/v2/Users")
+        .json(&serde_json::json!({ "userName": "bob@example.test", "active": true }))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let bob_member_id = second_admin["id"].as_str().unwrap().to_string();
+    c.patch(format!("{}/v1/tenant/members/{}", h.base, bob_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .json(&serde_json::json!({ "role": "admin" }))
+        .send()
+        .await?;
+    let resp = c
+        .patch(format!("{}/v1/tenant/members/{}", h.base, alice_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .json(&serde_json::json!({ "role": "viewer" }))
+        .send()
+        .await?;
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "demote works with another admin present"
+    );
+
+    // DELETE the now-demoted alice — should succeed.
+    let resp = c
+        .delete(format!("{}/v1/tenant/members/{}", h.base, alice_member_id))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 204);
+
     // -------- audit row written for the publish --------
     let audit: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM audit_events \
