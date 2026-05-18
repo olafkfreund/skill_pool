@@ -35,7 +35,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/bootstrap", get(bootstrap::bootstrap))
         // Drafts (Phase 4 — retrospective capture)
         .route("/v1/drafts", get(drafts::list).post(drafts::create))
-        .route("/v1/drafts/{id}", get(drafts::get_one))
+        .route(
+            "/v1/drafts/{id}",
+            get(drafts::get_one).patch(drafts::patch),
+        )
         .route("/v1/drafts/{id}/skill-md", get(drafts::get_skill_md))
         .route("/v1/drafts/{id}/publish", post(drafts::publish))
         .route("/v1/drafts/{id}/discard", post(drafts::discard))

@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { AlertTriangle, CheckCircle2, GitMerge, Inbox, Trash2, Send } from '@lucide/svelte';
+  import {
+    AlertTriangle,
+    CheckCircle2,
+    GitMerge,
+    Inbox,
+    Pencil,
+    Trash2,
+    Send,
+  } from '@lucide/svelte';
   import type { Draft } from '$lib/server/api';
 
   let { data, form } = $props();
@@ -173,6 +181,13 @@
 
           {#if d.status === 'pending'}
             <div class="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-end">
+              <a
+                href={`/drafts/${encodeURIComponent(d.id)}/edit`}
+                class="inline-flex h-7 items-center gap-1 self-end rounded-[var(--sp-radius)] border border-[var(--sp-border)] px-3 text-xs text-[var(--sp-fg)] hover:border-[var(--sp-primary)]"
+                title="Edit draft metadata"
+              >
+                <Pencil size="12" /> Edit
+              </a>
               <form
                 method="POST"
                 action="?/publish"

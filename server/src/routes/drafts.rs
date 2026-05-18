@@ -497,6 +497,141 @@ pub async fn publish(
     }))
 }
 
+#[derive(Deserialize)]
+pub struct PatchBody {
+    /// Replace the slug. Trimmed and validated as non-empty.
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Empty string clears the column.
+    #[serde(default)]
+    pub when_to_use: Option<String>,
+    /// Full replacement of the tag list. Pass `[]` to clear.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Empty string clears the reviewer note.
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// Edit a pending draft's frontmatter metadata. The bundle body stays
+/// read-only — if the curator needs to rewrite the body they should
+/// discard and re-capture. Already-reviewed (published / discarded)
+/// drafts are immutable.
+pub async fn patch(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PatchBody>,
+) -> AppResult<Json<Draft>> {
+    require_scope(&caller.scope, "skills:publish")?;
+
+    // Load + lock the row so we can validate state transitions before
+    // building the dynamic UPDATE.
+    let mut tx = state.db().begin().await?;
+    let current: Option<DraftRow> = sqlx::query_as(
+        "SELECT id, slug, description, when_to_use, tags, bundle_uri, bundle_sha256, status \
+         FROM skill_drafts \
+         WHERE tenant_id = $1 AND id = $2 \
+         FOR UPDATE",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let current = current.ok_or(AppError::NotFound)?;
+    if current.status != "pending" {
+        return Err(AppError::BadRequest(format!(
+            "draft is {} — only pending drafts are editable",
+            current.status
+        )));
+    }
+
+    // Apply each field. Slug + description are non-empty when present;
+    // empty strings on the nullable columns become NULL (clear).
+    let slug = match body.slug.as_deref().map(str::trim) {
+        Some("") => return Err(AppError::BadRequest("slug cannot be empty".into())),
+        Some(s) => Some(s.to_string()),
+        None => None,
+    };
+    let description = match body.description.as_deref().map(str::trim) {
+        Some("") => {
+            return Err(AppError::BadRequest("description cannot be empty".into()))
+        }
+        Some(s) => Some(s.to_string()),
+        None => None,
+    };
+    // Capture the change flags before we consume the option values.
+    let slug_changed = body.slug.is_some();
+    let desc_changed = body.description.is_some();
+    let when_changed = body.when_to_use.is_some();
+    let tags_changed = body.tags.is_some();
+    let notes_changed = body.notes.is_some();
+
+    let when_to_use: Option<Option<String>> = body
+        .when_to_use
+        .map(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
+    let notes: Option<Option<String>> = body
+        .notes
+        .map(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
+
+    // COALESCE-based UPDATE keeps the SQL static — every column gets
+    // bound, but a NULL bind means "leave alone" for non-nullable
+    // columns. For nullable columns we use a sentinel: a one-element
+    // array vs. NULL distinguishes "set to NULL" from "leave alone".
+    sqlx::query(
+        "UPDATE skill_drafts SET \
+            slug         = COALESCE($3, slug), \
+            description  = COALESCE($4, description), \
+            when_to_use  = CASE WHEN $5::int = 0 THEN when_to_use ELSE $6 END, \
+            tags         = COALESCE($7, tags), \
+            notes        = CASE WHEN $8::int = 0 THEN notes       ELSE $9 END \
+         WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(id)
+    .bind(slug.as_deref())
+    .bind(description.as_deref())
+    .bind(if when_to_use.is_some() { 1_i32 } else { 0_i32 })
+    .bind(when_to_use.unwrap_or(None))
+    .bind(body.tags.as_ref())
+    .bind(if notes.is_some() { 1_i32 } else { 0_i32 })
+    .bind(notes.unwrap_or(None))
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let fields_changed: Vec<&str> = [
+        ("slug", slug_changed),
+        ("description", desc_changed),
+        ("when_to_use", when_changed),
+        ("tags", tags_changed),
+        ("notes", notes_changed),
+    ]
+    .into_iter()
+    .filter_map(|(name, changed)| if changed { Some(name) } else { None })
+    .collect();
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: caller.user_id,
+            actor_token: Some(caller.token_id),
+            action: "draft.update",
+            target_kind: "skill_draft",
+            target_id: Some(&id.to_string()),
+            metadata: serde_json::json!({ "fields_changed": fields_changed }),
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    Ok(Json(load_draft(&state, caller.tenant.tenant_id, id).await?))
+}
+
 pub async fn discard(
     State(state): State<AppState>,
     caller: AuthedCaller,

@@ -306,6 +306,29 @@ export async function discardDraft(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+export interface PatchDraftBody {
+  slug?: string;
+  description?: string;
+  when_to_use?: string | null;
+  tags?: string[];
+  notes?: string | null;
+}
+
+export async function patchDraft(
+  auth: Auth,
+  id: string,
+  body: PatchDraftBody,
+): Promise<
+  | { ok: true; draft: Draft }
+  | { ok: false; status: number; error: string }
+> {
+  const resp = await call('PATCH', `/v1/drafts/${encodeURIComponent(id)}`, auth, {
+    jsonBody: body,
+  });
+  if (resp.ok) return { ok: true, draft: (await resp.json()) as Draft };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
 export interface NotificationsConfig {
   webhook_url?: string | null;
   signing_enabled: boolean;
