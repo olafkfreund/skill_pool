@@ -17,3 +17,4 @@ pub mod routes;
 pub mod state;
 pub mod storage;
 pub mod tenant;
+pub mod tracing_setup;

@@ -6,6 +6,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::metrics;
 use crate::state::AppState;
+use crate::tracing_setup;
 
 mod audit_siem;
 mod bootstrap;
@@ -120,6 +121,11 @@ pub fn router(state: AppState) -> Router {
                 .delete(scim::delete_user),
         )
         .layer(RequestBodyLimitLayer::new(MAX_BUNDLE_BYTES + 64 * 1024))
+        // Tenant span middleware: opens a tracing span with tenant.slug,
+        // http.method, and http.path before the request enters TraceLayer.
+        // This makes TraceLayer's HTTP events children of the tenant span,
+        // so log aggregators can filter/group by tenant without parsing paths.
+        .layer(middleware::from_fn(tracing_setup::tenant_span_layer))
         .layer(TraceLayer::new_for_http())
         // Prometheus instrumentation: records count, latency, and in-flight
         // for every request that enters the router. Applied after TraceLayer
