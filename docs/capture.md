@@ -172,22 +172,96 @@ Both are layered into `scorer.rs` next to the existing rules when their
 storage layer lands; the score record's `version` field is bumped on
 schema changes.
 
-## What's NOT yet wired (Phase 4.6+)
+## Capturer pipeline (Phase 4.6 — wired today)
 
-- **`skill-pool-capturer` daemon** — systemd user unit that pulls
-  high-score sessions, runs a two-stage LLM pipeline (Haiku extractor →
-  Sonnet drafter), and POSTs to `/v1/drafts` with origin
-  `capture-scorer`.
+The capturer is the LLM layer above the scorer. It turns "this session
+was worth saving" into "a draft is in the inbox" without anyone typing
+`skill-pool capture` by hand. Cron-driven, idempotent, two-stage so
+that ~70% of sessions cost only the cheap extractor pass.
+
+### Run
+
+```bash
+skill-pool capture-run                # process up to 5 sessions
+skill-pool capture-run --limit 20     # cost cap per pass
+skill-pool capture-run --dry-run      # show what would happen
+skill-pool capture-run --stage1-model claude-haiku-4-5-20251001 \
+                      --stage2-model claude-sonnet-4-6
+```
+
+### Pipeline
+
+```
+  for each session in ~/.skill-pool/sessions/ where
+        score >= 100 AND capture_state is None:
+    1. read transcript from ~/.claude/projects/.../session.jsonl
+    2. Stage 1 — Haiku — returns JSON:
+         { problem, solution_steps, generalizable, scope, preconditions }
+    3. if generalizable == false → state.stage = Stage1Rejected, STOP
+    4. Stage 2 — Sonnet — returns SKILL.md
+    5. client-side validate (frontmatter, secret scan, /home/ paths)
+    6. tar.gz + POST /v1/drafts with origin=capture-scorer
+    7. persist updated capture_state
+```
+
+State transitions land in the score record so the next pass skips
+already-processed sessions:
+
+| `capture_state.stage`   | What it means                                          |
+|-------------------------|--------------------------------------------------------|
+| `stage1_rejected`       | Stage 1 said `generalizable: false`. No draft.         |
+| `stage1_parse_failure`  | Stage 1 JSON didn't parse. Future run may retry.       |
+| `stage2_rejected`       | Stage 2's SKILL.md failed client-side validation.      |
+| `drafted`               | Successfully POSTed to `/v1/drafts`. Inbox now has it. |
+| `server_rejected`       | Server returned non-2xx (e.g. dedupe / network).       |
+
+### Scheduling
+
+Install the systemd user unit + timer (hourly with jitter):
+
+```bash
+cp packaging/systemd/skill-pool-capturer.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now skill-pool-capturer.timer
+```
+
+See `packaging/systemd/README.md` for full instructions.
+
+### Required environment
+
+- `ANTHROPIC_API_KEY` — for the Messages API. The capturer fails fast
+  and tells you to set it.
+- `SKILL_POOL_REGISTRY` (or a config file from `skill-pool login`) — for
+  the draft POST.
+
+### Cost shape
+
+Stage 1 is **Haiku** with `max_tokens=1024` and `temperature=0`. The
+prompt is ~500 tokens of system text + a trimmed transcript capped at
+12000 chars (~3000 input tokens). One pass per session is a few cents
+worst-case, fractions thereof typically.
+
+Stage 2 (**Sonnet**, `max_tokens=2048`, `temperature=0.2`) only runs on
+sessions Stage 1 approved. The master plan estimates ~30% pass-through
+rate — meaning the expensive call is paid only on the small fraction
+worth drafting.
+
+## What's NOT yet wired (Phase 5+)
+
 - **Embedding dedup** — before insert, check the new draft's
   description against existing skills. If `cosine > 0.85`, file as a
   "merge proposal" instead of a fresh draft.
 - **Curator notifications** — desktop / email "N drafts ready for
   review" pings when the inbox grows.
-- **Cross-session recurrence + novel-command signals** — see above.
+- **Cross-session recurrence + novel-command signals** — need
+  persisted historical state (across sessions and shell history).
+- **NixOS module** — declarative `services.skill-pool-capturer.enable`
+  instead of the manual unit-copy step.
 
-The signal scorer ships today as the cheap gate; the LLM drafter only
-runs on the small fraction of sessions whose score clears the threshold
-— exactly the "precision over recall" policy in the master plan.
+The signal scorer plus the two-stage drafter together give the policy
+the master plan called for: precision over recall, deterministic gate
+first, LLM only on the fraction that clears it, human-in-the-loop on
+every published draft.
 
 ## Audit trail
 

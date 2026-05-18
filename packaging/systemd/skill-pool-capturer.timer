@@ -1,0 +1,21 @@
+# skill-pool capturer timer — Phase 4.6
+#
+# Fires the capturer service every hour with a jittered start to avoid
+# thundering-herd if many machines share an Anthropic org. The interval
+# is conservative: the scorer already filters cheap, and the cost gate is
+# the Stage 1 Haiku call.
+#
+# OnBootSec gives a 5-minute grace after login so a fresh boot doesn't
+# immediately spend on stale sessions.
+
+[Unit]
+Description=skill-pool capturer schedule
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+mod anthropic;
+mod capturer;
 mod client;
 mod cmd;
 mod config;
@@ -105,6 +107,24 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Run the Phase 4.6 LLM capturer over draft-worthy sessions. Two-stage
+    /// pipeline: Haiku extractor → Sonnet drafter → POST /v1/drafts.
+    /// Idempotent: a session whose `capture_state` is set is skipped.
+    /// Designed to be invoked by a systemd user timer (or cron).
+    CaptureRun {
+        /// Maximum sessions to process this pass (cost cap).
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        /// Show which sessions would be processed without calling the LLM.
+        #[arg(long)]
+        dry_run: bool,
+        /// Override the Stage 1 (extractor) model.
+        #[arg(long)]
+        stage1_model: Option<String>,
+        /// Override the Stage 2 (drafter) model.
+        #[arg(long)]
+        stage2_model: Option<String>,
+    },
     /// Diagnose: list loaded skills, dangling symlinks, drift.
     Doctor,
     /// Detect the current project's stack from filesystem fingerprints.
@@ -188,6 +208,21 @@ async fn main() -> Result<()> {
             None => cmd::capture_score::run(),
         },
         Cmd::CaptureStatus { json } => cmd::capture_status::run(json),
+        Cmd::CaptureRun {
+            limit,
+            dry_run,
+            stage1_model,
+            stage2_model,
+        } => {
+            cmd::capture_run::run(
+                &cfg,
+                limit,
+                dry_run,
+                stage1_model.as_deref(),
+                stage2_model.as_deref(),
+            )
+            .await
+        }
         Cmd::Doctor => cmd::doctor::run(&cfg),
         Cmd::Detect { json } => cmd::detect::run(json),
         Cmd::Bootstrap {

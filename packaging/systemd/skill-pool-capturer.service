@@ -1,0 +1,43 @@
+# skill-pool capturer — Phase 4.6
+#
+# Oneshot user unit: runs the LLM pipeline over draft-worthy sessions.
+# Invoked by `skill-pool-capturer.timer`. Safe to run by hand too.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user/
+#   cp skill-pool-capturer.* ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now skill-pool-capturer.timer
+#
+# Required env: ANTHROPIC_API_KEY (and SKILL_POOL_REGISTRY / token via
+# `skill-pool login` once on this machine).
+#
+# Hardening: this is a user unit so most of NoNewPrivileges/RestrictRealtime
+# etc. is unnecessary; we keep MemoryMax as a soft cost-safety bound.
+
+[Unit]
+Description=skill-pool capturer (Phase 4.6 LLM draft generator)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Path to the binary — leave as `skill-pool` if it's on PATH for the user.
+ExecStart=skill-pool capture-run --limit 5
+
+# Surface env vars set in ~/.config/environment.d/*.conf (e.g.
+# ANTHROPIC_API_KEY) without requiring the user to inline them here.
+PassEnvironment=ANTHROPIC_API_KEY SKILL_POOL_REGISTRY SKILL_POOL_CONFIG
+
+# Soft memory cap — LLM responses + a few hundred KB of transcript per
+# session shouldn't approach this, but it bounds runaway cases.
+MemoryMax=512M
+
+# The capturer makes outbound HTTP to api.anthropic.com and the registry;
+# everything else is local file I/O.
+TimeoutStartSec=300
+
+[Install]
+# A user unit that's invoked by a timer doesn't need WantedBy, but having
+# it here lets `systemctl --user enable skill-pool-capturer.service`
+# work for one-off scheduling outside the timer.
+WantedBy=default.target

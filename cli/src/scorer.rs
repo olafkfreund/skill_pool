@@ -53,6 +53,10 @@ const EXPLICIT_MARKERS: &[&str] = &[
 ];
 
 /// The output schema; persisted per session.
+///
+/// `capture_state` is optional so v1 records (which lack the field) still
+/// deserialize. New writes always carry it; the `version` field is the
+/// canonical signal that this record was written by a Phase 4.6+ scorer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionScore {
     pub session_id: String,
@@ -64,6 +68,47 @@ pub struct SessionScore {
     pub last_scored_at: DateTime<Utc>,
     /// Schema version — bumped if the on-disk shape changes.
     pub version: u32,
+    /// Records the capturer's outcome for this session, if it has run.
+    /// Used for idempotency: a session with `capture_state.is_some()` is
+    /// never re-processed by the capturer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_state: Option<CaptureState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureState {
+    /// What the capturer decided on this session.
+    pub stage: CaptureStage,
+    /// When the capturer finished processing.
+    pub completed_at: DateTime<Utc>,
+    /// Set when `stage == Drafted`. The draft UUID returned by the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_id: Option<String>,
+    /// Slug of the produced draft, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// Why we ended in this stage (e.g. Stage 1 said "too project-specific").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureStage {
+    /// Stage 1 returned `generalizable: false`. No draft created.
+    Stage1Rejected,
+    /// Stage 1 output failed to parse as JSON twice in a row. Future
+    /// improvements may re-attempt with a stricter prompt.
+    Stage1ParseFailure,
+    /// Stage 2 produced a SKILL.md but client-side validation rejected it
+    /// (secret scan, frontmatter shape, etc.). No draft created.
+    Stage2Rejected,
+    /// Stage 2 produced a draft and the server accepted it.
+    Drafted,
+    /// Server rejected the POST (e.g. dedupe collision, network error
+    /// retries exhausted). The score record stays so a later, fixed run
+    /// can retry — but the capturer treats it as processed for this pass.
+    ServerRejected,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -276,7 +321,8 @@ pub fn score(events: &[Event], session_id: &str, cwd: Option<&str>) -> SessionSc
         signals,
         turn_count,
         last_scored_at: Utc::now(),
-        version: 1,
+        version: 2,
+        capture_state: None,
     }
 }
 
@@ -489,6 +535,13 @@ fn sanitize(id: &str) -> String {
 /// score descending. Single corrupt files are logged and skipped.
 pub fn load_all_scores() -> Result<Vec<SessionScore>> {
     load_all_scores_in(&sessions_dir()?)
+}
+
+/// True for a session that meets the draft threshold AND has not yet been
+/// processed by the capturer. The orchestrator uses this to pick work each
+/// pass.
+pub fn needs_capturing(s: &SessionScore) -> bool {
+    s.score >= DRAFT_THRESHOLD && s.capture_state.is_none()
 }
 
 pub fn load_all_scores_in(dir: &Path) -> Result<Vec<SessionScore>> {
@@ -778,6 +831,49 @@ mod tests {
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
         assert!(!name.contains('/'));
         assert!(!name.contains(".."));
+    }
+
+    #[test]
+    fn v1_records_still_deserialize() {
+        // Pre-Phase-4.6 records lack `capture_state`. They must still load.
+        let raw = r#"{
+            "session_id": "old",
+            "cwd": "/x",
+            "score": 1050,
+            "breakdown": {
+                "explicit_markers": 1000, "test_recovery": 50,
+                "edit_retries": 0, "long_session": 0
+            },
+            "signals": [],
+            "turn_count": 5,
+            "last_scored_at": "2026-05-01T00:00:00Z",
+            "version": 1
+        }"#;
+        let s: SessionScore = serde_json::from_str(raw).expect("v1 should load");
+        assert_eq!(s.version, 1);
+        assert!(s.capture_state.is_none());
+        assert!(needs_capturing(&s), "draft-worthy and unprocessed");
+    }
+
+    #[test]
+    fn needs_capturing_skips_below_threshold() {
+        let s = score(&[], "low", None);
+        assert_eq!(s.score, 0);
+        assert!(!needs_capturing(&s));
+    }
+
+    #[test]
+    fn needs_capturing_skips_already_processed() {
+        let mut s = score(&[user("remember this")], "p1", None);
+        assert!(needs_capturing(&s));
+        s.capture_state = Some(CaptureState {
+            stage: CaptureStage::Drafted,
+            completed_at: Utc::now(),
+            draft_id: Some("xx".into()),
+            slug: Some("yy".into()),
+            reason: None,
+        });
+        assert!(!needs_capturing(&s));
     }
 
     #[test]
