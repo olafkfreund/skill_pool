@@ -1,6 +1,7 @@
 pub mod add;
 pub mod bootstrap;
 pub mod detect;
+pub mod direnv_install;
 pub mod doctor;
 pub mod ensure;
 pub mod init;

@@ -40,7 +40,12 @@ enum Cmd {
         tenant: String,
     },
     /// Install everything in the project manifest into .claude/skills/.
-    Ensure,
+    Ensure {
+        /// Suppress per-skill progress lines. Errors still surface.
+        /// Used by the direnv hook to stay silent on the happy path.
+        #[arg(long)]
+        quiet: bool,
+    },
     /// Add a skill to the manifest and install it.
     Add { slug: String },
     /// Search the registry. With no query, lists all skills.
@@ -76,6 +81,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Install the direnv helper into ~/.config/direnv/lib so .envrc files
+    /// can use `use skill_pool`. Embedded at compile time — no network.
+    DirenvInstall {
+        /// Overwrite if a different version is already present.
+        #[arg(long)]
+        force: bool,
+    },
     /// Detect the stack, ask the registry which skills it recommends, then
     /// (with confirmation) add them to the manifest and install. The
     /// canonical "onboard a new project" command.
@@ -107,7 +119,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Cmd::Init => cmd::init::run(&cfg),
         Cmd::Login { registry, tenant } => cmd::login::run(&cfg, &registry, &tenant).await,
-        Cmd::Ensure => cmd::ensure::run(&cfg).await,
+        Cmd::Ensure { quiet } => cmd::ensure::run_with_quiet(&cfg, quiet).await,
         Cmd::Add { slug } => cmd::add::run(&cfg, &slug).await,
         Cmd::Search {
             query,
@@ -125,5 +137,6 @@ async fn main() -> Result<()> {
             detect,
             dry_run,
         } => cmd::bootstrap::run(&cfg, detect, yes, dry_run).await,
+        Cmd::DirenvInstall { force } => cmd::direnv_install::run(force),
     }
 }
