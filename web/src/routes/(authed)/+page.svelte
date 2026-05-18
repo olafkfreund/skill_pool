@@ -1,14 +1,23 @@
 <script lang="ts">
-  import { Search } from '@lucide/svelte';
+  import { Plus, Search } from '@lucide/svelte';
 
   let { data } = $props();
 </script>
 
-<header class="mb-8">
-  <h1 class="text-2xl font-semibold">Catalog</h1>
-  <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-    Skills published to <code class="rounded bg-[var(--sp-muted)] px-1">{data.tenant.slug}</code>.
-  </p>
+<header class="mb-8 flex flex-wrap items-start justify-between gap-4">
+  <div>
+    <h1 class="text-2xl font-semibold">Catalog</h1>
+    <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
+      Skills published to <code class="rounded bg-[var(--sp-muted)] px-1">{data.tenant.slug}</code>.
+    </p>
+  </div>
+  <a
+    href="/skills/new"
+    class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] px-4 py-2 text-sm font-medium"
+    style="background: var(--sp-primary); color: var(--sp-primary-fg);"
+  >
+    <Plus size="14" /> New skill
+  </a>
 </header>
 
 <form class="mb-6 flex max-w-md items-center gap-2" data-sveltekit-reload>

@@ -128,6 +128,66 @@ export function fromClientTheme(t: Theme): ServerTheme {
   };
 }
 
+export interface PublishMetadata {
+  slug: string;
+  version: string;
+  when_to_use?: string;
+  tags?: string[];
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  /** Server-reported error on failure (frontmatter, secret scan, etc.). */
+  error?: string;
+  /** Echoed metadata on success. */
+  name?: string;
+  description?: string;
+  tags?: string[];
+}
+
+async function multipartCall(
+  method: string,
+  path: string,
+  auth: Auth,
+  metadata: PublishMetadata | undefined,
+  bundle: Uint8Array,
+): Promise<Response> {
+  const form = new FormData();
+  if (metadata !== undefined) {
+    form.append('metadata', JSON.stringify(metadata));
+  }
+  // Blob copy is unavoidable for the FormData type; bundles are small (<5 MB).
+  form.append('bundle', new Blob([bundle.slice()], { type: 'application/gzip' }), 'skill.tar.gz');
+
+  const headers = new Headers();
+  headers.set('X-Skill-Pool-Tenant', auth.tenant);
+  if (auth.token) headers.set('Authorization', `Bearer ${auth.token}`);
+
+  return fetch(`${base()}${path}`, { method, headers, body: form });
+}
+
+export async function validateSkill(auth: Auth, bundle: Uint8Array): Promise<ValidationResult> {
+  const resp = await multipartCall('POST', '/v1/skills/validate', auth, undefined, bundle);
+  if (resp.ok) {
+    const j = (await resp.json()) as ValidationResult;
+    return { ...j, ok: true };
+  }
+  const error = await resp.text();
+  return { ok: false, error };
+}
+
+export async function publishSkill(
+  auth: Auth,
+  metadata: PublishMetadata,
+  bundle: Uint8Array,
+): Promise<{ ok: true; skill: Skill } | { ok: false; status: number; error: string }> {
+  const resp = await multipartCall('POST', '/v1/skills', auth, metadata, bundle);
+  if (resp.ok) {
+    return { ok: true, skill: (await resp.json()) as Skill };
+  }
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
 /** Lightweight check: the token authenticates against /v1/skills for this tenant. */
 export async function validateAuth(auth: Auth): Promise<boolean> {
   try {
