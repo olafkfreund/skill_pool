@@ -1,4 +1,14 @@
-/** Client-side WCAG contrast helpers — mirrors what the server enforces on save. */
+/**
+ * Client-side WCAG contrast helpers — mirrors what the server enforces on save.
+ *
+ * Contrast pairs checked (WCAG AA):
+ *   - fg / bg          : body text, requires ≥ 4.5:1
+ *   - primaryFg / primary : CTA button text, requires ≥ 3.0:1 (large text / UI component)
+ *   - mutedFg / muted  : secondary body text, requires ≥ 4.5:1
+ *   - mutedFg / bg     : muted text on page bg, requires ≥ 4.5:1
+ */
+
+import type { Theme } from '$lib/theme';
 
 function parseHex(hex: string): [number, number, number] | null {
   const s = hex.startsWith('#') ? hex.slice(1) : hex;
@@ -45,4 +55,56 @@ export function wcagBadge(ratio: number | null): {
   if (ratio >= 4.5) return { level: 'AA', label: `${ratio.toFixed(2)}:1 — AA` };
   if (ratio >= 3) return { level: 'AA-large', label: `${ratio.toFixed(2)}:1 — large text only` };
   return { level: 'fail', label: `${ratio.toFixed(2)}:1 — fails WCAG` };
+}
+
+export interface ContrastFailure {
+  pair: string;
+  ratio: string;
+  required: string;
+}
+
+/**
+ * Validate all WCAG AA contrast pairs for a theme.
+ * Returns an empty array when all pairs pass.
+ */
+export function checkThemeContrast(theme: Theme): ContrastFailure[] {
+  const failures: ContrastFailure[] = [];
+
+  const bodyRatio = contrastRatio(theme.fg, theme.bg);
+  if (bodyRatio === null || bodyRatio < 4.5) {
+    failures.push({
+      pair: 'Foreground / Background',
+      ratio: bodyRatio !== null ? `${bodyRatio.toFixed(2)}:1` : 'invalid color',
+      required: '4.5:1',
+    });
+  }
+
+  const primaryRatio = contrastRatio(theme.primaryFg, theme.primary);
+  if (primaryRatio === null || primaryRatio < 3.0) {
+    failures.push({
+      pair: 'Primary fg / Primary (button text)',
+      ratio: primaryRatio !== null ? `${primaryRatio.toFixed(2)}:1` : 'invalid color',
+      required: '3.0:1',
+    });
+  }
+
+  const mutedOnMutedRatio = contrastRatio(theme.mutedFg, theme.muted);
+  if (mutedOnMutedRatio === null || mutedOnMutedRatio < 4.5) {
+    failures.push({
+      pair: 'Muted fg / Muted (secondary text on card bg)',
+      ratio: mutedOnMutedRatio !== null ? `${mutedOnMutedRatio.toFixed(2)}:1` : 'invalid color',
+      required: '4.5:1',
+    });
+  }
+
+  const mutedOnBgRatio = contrastRatio(theme.mutedFg, theme.bg);
+  if (mutedOnBgRatio === null || mutedOnBgRatio < 4.5) {
+    failures.push({
+      pair: 'Muted fg / Background (secondary text on page)',
+      ratio: mutedOnBgRatio !== null ? `${mutedOnBgRatio.toFixed(2)}:1` : 'invalid color',
+      required: '4.5:1',
+    });
+  }
+
+  return failures;
 }
