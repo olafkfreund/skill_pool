@@ -49,10 +49,10 @@ target/release/skill-pool-server admin tenant-create --slug globex --name 'Globe
 
 ACME_TOKEN=$(target/release/skill-pool-server admin token-create --tenant acme --name smoke | awk '/^  spk_/ {print $1}')
 GLOBEX_TOKEN=$(target/release/skill-pool-server admin token-create --tenant globex --name smoke | awk '/^  spk_/ {print $1}')
-[ -n "$ACME_TOKEN" ] && [ -n "$GLOBEX_TOKEN" ] || {
+if [ -z "$ACME_TOKEN" ] || [ -z "$GLOBEX_TOKEN" ]; then
   echo "failed to mint tokens"
   exit 1
-}
+fi
 
 LOG "5. starting server"
 target/release/skill-pool-server &
