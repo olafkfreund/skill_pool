@@ -103,6 +103,7 @@ fn generate_idp_credentials() -> Result<IdpCreds> {
     })
 }
 
+#[allow(clippy::too_many_arguments)] // test fixture builder; each arg maps to a SAML field
 fn build_response_template(
     response_id: &str,
     assertion_id: &str,
