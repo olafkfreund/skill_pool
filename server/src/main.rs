@@ -126,6 +126,21 @@ enum AdminAction {
         #[arg(long)]
         skill: String,
     },
+    /// Backfill description_embedding for skills that pre-date Phase 5.
+    /// Walks `skills` rows with NULL embedding, computes one via the
+    /// configured Embedder, and updates the column. Skipped silently on
+    /// rows the embedder declines (None return).
+    BackfillEmbeddings {
+        /// Restrict to one tenant. Default: all tenants.
+        #[arg(long)]
+        tenant: Option<String>,
+        /// Stop after processing this many rows (cost cap).
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+        /// Show what would happen without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -241,6 +256,16 @@ async fn main() -> Result<()> {
                 } => {
                     let db = admin::connect(&cfg).await?;
                     admin::remove_stack_mapping(&db, &tenant, &stack, &skill).await
+                }
+                AdminAction::BackfillEmbeddings {
+                    tenant,
+                    limit,
+                    dry_run,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    let embedder = skill_pool_server::embedding::from_config(&cfg.embedding)?;
+                    admin::backfill_embeddings(&db, embedder.as_ref(), tenant.as_deref(), limit, dry_run)
+                        .await
                 }
             }
         }

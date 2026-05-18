@@ -369,3 +369,113 @@ pub async fn set_sso(
     println!("  role:   {default_role}");
     Ok(())
 }
+
+/// Phase 5+ operational task: compute and store description_embedding
+/// for skills that pre-date the embedding column (or were published
+/// before the operator turned the feature on). Idempotent — only rows
+/// with NULL embedding are touched.
+///
+/// Streams rows in pages so a large catalog can be processed without
+/// holding the whole result set in memory.
+pub async fn backfill_embeddings(
+    db: &PgPool,
+    embedder: &dyn crate::embedding::Embedder,
+    tenant_slug: Option<&str>,
+    limit: usize,
+    dry_run: bool,
+) -> Result<()> {
+    if embedder.dimension().is_none() {
+        return Err(anyhow!(
+            "no embedder configured (NullEmbedder); rebuild with `--features fastembed` \
+             and set embedding.enabled=true"
+        ));
+    }
+    println!(
+        "backfilling embeddings (limit={limit}, tenant={}, dry_run={dry_run})",
+        tenant_slug.unwrap_or("ALL"),
+    );
+
+    let tenant_id: Option<Uuid> = match tenant_slug {
+        Some(slug) => {
+            let row: Option<(Uuid,)> =
+                sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
+                    .bind(slug)
+                    .fetch_optional(db)
+                    .await?;
+            Some(row.ok_or_else(|| anyhow!("tenant `{slug}` not found"))?.0)
+        }
+        None => None,
+    };
+
+    let page_size: i64 = 50;
+    let mut processed: usize = 0;
+    let mut updated: usize = 0;
+
+    while processed < limit {
+        let remaining = (limit - processed).min(page_size as usize) as i64;
+        let rows: Vec<(Uuid, String, String)> = match tenant_id {
+            Some(t) => sqlx::query_as(
+                "SELECT id, slug, description \
+                 FROM skills \
+                 WHERE tenant_id = $1 AND description_embedding IS NULL \
+                 ORDER BY created_at ASC \
+                 LIMIT $2",
+            )
+            .bind(t)
+            .bind(remaining)
+            .fetch_all(db)
+            .await?,
+            None => sqlx::query_as(
+                "SELECT id, slug, description \
+                 FROM skills \
+                 WHERE description_embedding IS NULL \
+                 ORDER BY created_at ASC \
+                 LIMIT $1",
+            )
+            .bind(remaining)
+            .fetch_all(db)
+            .await?,
+        };
+
+        if rows.is_empty() {
+            break;
+        }
+
+        for (id, slug, description) in rows {
+            processed += 1;
+            let embedding = match embedder.embed(&description) {
+                Ok(Some(v)) => v,
+                Ok(None) => {
+                    println!("  skip:    {slug} (embedder returned None)");
+                    continue;
+                }
+                Err(e) => {
+                    println!("  error:   {slug}: {e}");
+                    continue;
+                }
+            };
+            if dry_run {
+                println!("  would:   {slug} ({} dim)", embedding.len());
+                continue;
+            }
+            let lit = crate::embedding::vector_to_pg_literal(&embedding);
+            sqlx::query(
+                "UPDATE skills SET description_embedding = $1::text::vector \
+                 WHERE id = $2",
+            )
+            .bind(&lit)
+            .bind(id)
+            .execute(db)
+            .await?;
+            updated += 1;
+            println!("  done:    {slug}");
+        }
+    }
+
+    println!();
+    println!(
+        "summary: {processed} processed, {updated} updated{}",
+        if dry_run { " (dry-run, no writes)" } else { "" }
+    );
+    Ok(())
+}

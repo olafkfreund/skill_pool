@@ -309,6 +309,24 @@ another provider (Voyage AI, OpenAI text-embedding-3, a fine-tuned
 in-house model) is a new impl + a config switch; the schema stays put
 because everything goes through `vector_to_pg_literal`.
 
+### Backfill for pre-Phase-5 skills
+
+Skills published before the embedding column existed have
+`description_embedding IS NULL`. Operators backfill via the server CLI:
+
+```bash
+# Dry-run a single tenant first.
+skill-pool-server admin backfill-embeddings --tenant acme --limit 50 --dry-run
+
+# Real run, all tenants.
+skill-pool-server admin backfill-embeddings --limit 5000
+```
+
+Idempotent: only NULL rows are touched. Streams in 50-row pages so a
+large catalog can be processed without holding the whole result set in
+memory. The command fails fast if the server was built without
+`--features fastembed` (or another Embedder is wired).
+
 ### Curator notifications (Phase 5 — wired today)
 
 Per-tenant webhook fires fire-and-forget on every `draft.create`. Compatible
