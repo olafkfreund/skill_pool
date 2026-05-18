@@ -1,0 +1,26 @@
+@import 'tailwindcss';
+
+/* Per-tenant theme defaults. Overridden at runtime by an inline <style>
+   block injected from the layout's load function (see src/lib/theme.ts).
+   Edit these to change the *fallback* look; the live theme is data-driven. */
+:root {
+  --sp-primary: #2563eb;
+  --sp-primary-fg: #ffffff;
+  --sp-accent: #0ea5e9;
+  --sp-bg: #ffffff;
+  --sp-fg: #0f172a;
+  --sp-muted: #f1f5f9;
+  --sp-muted-fg: #64748b;
+  --sp-border: #e2e8f0;
+  --sp-radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sp-bg: #0b0f19;
+    --sp-fg: #e2e8f0;
+    --sp-muted: #1e293b;
+    --sp-muted-fg: #94a3b8;
+    --sp-border: #334155;
+  }
+}

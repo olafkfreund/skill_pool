@@ -6,6 +6,12 @@
 *.log
 .DS_Store
 
+# Web (SvelteKit)
+/web/.svelte-kit/
+/web/build/
+/web/node_modules/
+/web/package-lock.json.bak
+
 # Phase 0 — local library cache; tracked separately by user installs
 /.local-library/
 

@@ -55,6 +55,9 @@
             postgresql_17 sqlx-cli minio
             caddy
 
+            # Web (Phase 2)
+            nodejs_22
+
             # General tooling
             git direnv just
           ];
