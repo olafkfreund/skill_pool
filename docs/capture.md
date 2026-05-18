@@ -305,10 +305,44 @@ another provider (Voyage AI, OpenAI text-embedding-3, a fine-tuned
 in-house model) is a new impl + a config switch; the schema stays put
 because everything goes through `vector_to_pg_literal`.
 
+### Curator notifications (Phase 5 — wired today)
+
+Per-tenant webhook fires fire-and-forget on every `draft.create`. Compatible
+with Slack/Discord incoming webhooks out of the box — the payload has a
+top-level `text` field plus structured `event`/`tenant`/`draft` fields
+for custom receivers.
+
+Configure once via the admin portal at `/admin/notifications` (or via
+`PUT /v1/tenant/notifications`):
+
+```http
+PUT /v1/tenant/notifications
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{ "webhook_url": "https://hooks.slack.com/...", "webhook_secret": "optional" }
+```
+
+When a secret is configured the server signs each delivery with
+HMAC-SHA256 and ships the digest in `X-Skill-Pool-Signature: sha256=<hex>`
+— same convention as GitHub/Stripe webhooks.
+
+Delivery semantics:
+- Runs on a detached `tokio::spawn` so the original `POST /v1/drafts`
+  returns immediately.
+- 5s timeout per attempt, one retry on transient failure (network/5xx).
+  4xx responses are treated as permanent (likely misconfiguration).
+- Every attempt — success or failure — writes to `audit_events` with
+  action `notification.deliver`.
+
+Sidebar badge: the web layout polls `GET /v1/tenant/notifications/pending-count`
+on every page load and renders a primary-colored pill next to "Drafts"
+showing the count of pending drafts.
+
 ### What's still NOT wired (Phase 5+)
 
-- **Curator notifications** — desktop / email "N drafts ready for
-  review" pings when the inbox grows.
+- **Email notifications** — needs SMTP config + templates + deliverability.
+  Webhook + Slack/Discord covers most teams; email is the next layer.
 - **Cross-session recurrence + novel-command signals** — need
   persisted historical state (across sessions and shell history).
 - **NixOS module** — declarative `services.skill-pool-capturer.enable`

@@ -67,6 +67,11 @@ quick-xml = "0.36"
 config = { version = "0.15", default-features = false, features = ["toml", "json"] }
 figment = { version = "0.10", features = ["env", "toml"] }
 
+# Outbound HTTP for curator webhook delivery (Phase 5 notifications).
+# Already used as a dev-dep for integration tests; promoted to a runtime
+# dep so the `notify` module can ship POSTs.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 # Phase 5 — embedding-based dedup. Off by default so default builds and CI
 # don't pull in ONNX Runtime or HuggingFace network access. Operators that
 # want dedup build with `--features fastembed`.

@@ -1,6 +1,15 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { Library, ShieldCheck, Palette, Users, Globe2, Inbox, LogOut } from '@lucide/svelte';
+  import {
+    Library,
+    ShieldCheck,
+    Palette,
+    Users,
+    Globe2,
+    Inbox,
+    Bell,
+    LogOut,
+  } from '@lucide/svelte';
 
   let { data, children } = $props();
 
@@ -10,6 +19,7 @@
     { href: '/admin/theme', icon: Palette, label: 'Theme' },
     { href: '/admin/members', icon: Users, label: 'Members' },
     { href: '/admin/sso', icon: ShieldCheck, label: 'SSO' },
+    { href: '/admin/notifications', icon: Bell, label: 'Notifications' },
     { href: '/admin/domain', icon: Globe2, label: 'Domain' },
   ];
 
@@ -37,6 +47,7 @@
       {#each nav as item (item.href)}
         {@const Icon = item.icon}
         {@const active = current === item.href}
+        {@const badge = item.href === '/drafts' && data.pendingDrafts > 0 ? data.pendingDrafts : 0}
         <a
           href={item.href}
           class="flex items-center gap-3 rounded-md px-3 py-2 transition-colors {active
@@ -44,7 +55,16 @@
             : 'text-[var(--sp-muted-fg)] hover:bg-[var(--sp-bg)] hover:text-[var(--sp-fg)]'}"
         >
           <Icon size="16" />
-          {item.label}
+          <span class="flex-1">{item.label}</span>
+          {#if badge > 0}
+            <span
+              class="rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none"
+              style="background: var(--sp-primary); color: var(--sp-primary-fg);"
+              title={`${badge} pending draft${badge === 1 ? '' : 's'}`}
+            >
+              {badge > 99 ? '99+' : badge}
+            </span>
+          {/if}
         </a>
       {/each}
     </nav>

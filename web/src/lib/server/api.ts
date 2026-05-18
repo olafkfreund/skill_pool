@@ -306,6 +306,36 @@ export async function discardDraft(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+export interface NotificationsConfig {
+  webhook_url?: string | null;
+  signing_enabled: boolean;
+}
+
+export async function getNotifications(auth: Auth): Promise<NotificationsConfig | null> {
+  const resp = await call('GET', '/v1/tenant/notifications', auth);
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function putNotifications(
+  auth: Auth,
+  body: { webhook_url?: string | null; webhook_secret?: string | null },
+): Promise<
+  | { ok: true; config: NotificationsConfig }
+  | { ok: false; status: number; error: string }
+> {
+  const resp = await call('PUT', '/v1/tenant/notifications', auth, { jsonBody: body });
+  if (resp.ok) return { ok: true, config: (await resp.json()) as NotificationsConfig };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function pendingDraftsCount(auth: Auth): Promise<number> {
+  const resp = await call('GET', '/v1/tenant/notifications/pending-count', auth);
+  if (!resp.ok) return 0;
+  const body = (await resp.json()) as { pending?: number };
+  return typeof body.pending === 'number' ? body.pending : 0;
+}
+
 export async function discoverOidc(auth: Auth): Promise<{ enabled: boolean }> {
   const resp = await call('GET', '/v1/auth/oidc/discover', auth);
   if (!resp.ok) return { enabled: false };

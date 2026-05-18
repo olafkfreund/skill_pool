@@ -330,6 +330,22 @@ pub async fn create(
     )
     .await;
 
+    // Curator webhook — fire-and-forget. Returns immediately; outcome is
+    // audit-logged from the spawned task. Skipped silently if the tenant
+    // has no webhook configured.
+    crate::notify::draft_created(
+        state.db().clone(),
+        crate::notify::DraftCreatedEvent {
+            tenant_id: caller.tenant.tenant_id,
+            tenant_slug: caller.tenant.tenant_slug.clone(),
+            draft_id,
+            draft_slug: row.slug.clone(),
+            description: row.description.clone(),
+            origin: row.origin.clone(),
+            merge_proposal_slug: row.merge_proposal_slug.clone(),
+        },
+    );
+
     Ok((StatusCode::CREATED, Json(row)))
 }
 

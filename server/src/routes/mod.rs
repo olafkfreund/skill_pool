@@ -10,6 +10,7 @@ mod drafts;
 mod enterprise;
 mod health;
 mod members;
+mod notifications;
 mod oidc;
 mod saml;
 mod scim;
@@ -45,6 +46,15 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/tenant/members/{id}",
             axum::routing::patch(members::patch_role).delete(members::remove),
+        )
+        // Curator notifications (Phase 5)
+        .route(
+            "/v1/tenant/notifications",
+            get(notifications::get_config).put(notifications::put_config),
+        )
+        .route(
+            "/v1/tenant/notifications/pending-count",
+            get(notifications::pending_count),
         )
         // OIDC
         .route("/v1/auth/oidc/discover", get(oidc::discover))
