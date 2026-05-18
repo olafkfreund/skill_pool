@@ -2,11 +2,11 @@
 //! against a local filesystem, S3, GCS, Azure Blob, or MinIO. Phase 1 wires FS
 //! and documents the URI scheme for swapping in S3 without code changes.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use opendal::Operator;
+use opendal::{ErrorKind, Operator};
 use uuid::Uuid;
 
 const PRESIGN_TTL: Duration = Duration::from_secs(300);
@@ -87,5 +87,29 @@ impl Storage {
             Err(e) if e.kind() == opendal::ErrorKind::Unsupported => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Cheap liveness probe for the health endpoint.
+    ///
+    /// Issues `stat("")` — a directory/root entry check — which resolves to
+    /// an `lstat(2)` on fs backends and a `HeadObject` on S3. Both are
+    /// read-only and do not enumerate or modify any objects. Returns the
+    /// round-trip latency in milliseconds on success, or an `opendal::Error`
+    /// on failure (including `ErrorKind::Unsupported` which the health handler
+    /// folds into `"off"`).
+    pub async fn probe(&self) -> Result<u64, opendal::Error> {
+        let t = Instant::now();
+        // stat("") resolves to the root of the operator — always present on
+        // any writable backend. An Unsupported error means the backend has no
+        // stat capability (e.g. a hypothetical write-only adapter); the caller
+        // surfaces that as "off" rather than "down".
+        self.op.stat("").await?;
+        Ok(t.elapsed().as_millis() as u64)
+    }
+
+    /// Expose the backend's error kind so the health handler can distinguish
+    /// "truly broken" from "stat not supported on this adapter".
+    pub fn unsupported_kind() -> ErrorKind {
+        ErrorKind::Unsupported
     }
 }

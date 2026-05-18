@@ -30,10 +30,26 @@ Codes: `not_found`, `unauthorized`, `forbidden`, `bad_request`, `tenant_resoluti
 No auth. No tenant. Liveness + dependency status.
 
 ```json
-{ "status": "ok", "db": "up", "version": "0.1.0" }
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "deps": {
+    "db":       { "status": "up",  "latency_ms": 3  },
+    "storage":  { "status": "up",  "latency_ms": 12 },
+    "embedder": { "status": "off" }
+  }
+}
 ```
 
-`db` may be `"down"` during transient blips — the endpoint stays HTTP 200 so the LB doesn't pull the node out of rotation on a 200ms blip. Page on `down` from your monitoring system, not from `/healthz`.
+`deps.<name>.status` is one of `"up"`, `"down"`, or `"off"`.
+
+- `"up"` — probe succeeded; `latency_ms` (integer) is the round-trip time.
+- `"down"` — probe failed; `error` (string) contains the reason.
+- `"off"` — dependency not configured; `note` (string, optional) may explain why.
+
+Top-level `status` is `"ok"` when every dep is `"up"` or `"off"`, and `"degraded"` when any required dep (`db`) is `"down"`. The HTTP status code is always **200** so the load balancer does not pull the node on a transient blip — page on `deps.db.status == "down"` from your monitoring system instead.
+
+**Migration note:** the old top-level `db: "up"` field has been removed. Clients should read `deps.db.status`.
 
 ---
 
