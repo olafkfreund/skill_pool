@@ -81,6 +81,12 @@ lettre = { version = "0.11", default-features = false, features = [
     "hostname",
 ] }
 
+# Prometheus exposition format. The `process` feature adds OS-level metrics
+# (CPU, memory, FDs) which are useful but pull in extra deps; keep it optional
+# so the default build stays lean. `protobuf` is not needed — we serve the
+# text exposition format (0.0.4) only.
+prometheus = { version = "0.13", default-features = false }
+
 # Phase 5 — embedding-based dedup. Off by default so default builds and CI
 # don't pull in ONNX Runtime or HuggingFace network access. Operators that
 # want dedup build with `--features fastembed`.
