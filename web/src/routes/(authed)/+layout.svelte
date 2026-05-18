@@ -1,11 +1,12 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { Library, ShieldCheck, Palette, Users, Globe2, LogOut } from '@lucide/svelte';
+  import { Library, ShieldCheck, Palette, Users, Globe2, Inbox, LogOut } from '@lucide/svelte';
 
   let { data, children } = $props();
 
   const nav = [
     { href: '/', icon: Library, label: 'Catalog' },
+    { href: '/drafts', icon: Inbox, label: 'Drafts' },
     { href: '/admin/theme', icon: Palette, label: 'Theme' },
     { href: '/admin/members', icon: Users, label: 'Members' },
     { href: '/admin/sso', icon: ShieldCheck, label: 'SSO' },

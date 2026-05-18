@@ -53,6 +53,14 @@ impl Storage {
         format!("{tenant_id}/{slug}/{version}.tar.gz")
     }
 
+    /// Object key for a draft bundle. Drafts live under a separate prefix so
+    /// (a) they don't compete with published skill versioning and (b) the
+    /// promote-to-skill path copies into the canonical key without juggling
+    /// overwrites. `draft_id` is the row UUID from `skill_drafts`.
+    pub fn draft_bundle_key(tenant_id: Uuid, draft_id: Uuid) -> String {
+        format!("{tenant_id}/drafts/{draft_id}.tar.gz")
+    }
+
     pub async fn put_bundle(&self, key: &str, bytes: Bytes) -> Result<()> {
         self.op
             .write(key, bytes)

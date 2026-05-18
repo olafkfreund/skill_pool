@@ -1,0 +1,519 @@
+//! Skill drafts (Phase 4 — retrospective capture).
+//!
+//! Drafts are the inbox between "developer hit a wall and solved it" and
+//! "team-published skill". A draft is a tar.gz bundle + metadata stored in
+//! `skill_drafts`. A curator reviews via the web UI and either publishes
+//! (promotes to `skills`) or discards (soft-marks the row).
+//!
+//! - `POST   /v1/drafts`              upload (multipart: bundle + metadata)
+//! - `GET    /v1/drafts`              inbox list (?status=pending|all)
+//! - `GET    /v1/drafts/{id}`         metadata for one
+//! - `GET    /v1/drafts/{id}/skill-md`  rendered SKILL.md
+//! - `POST   /v1/drafts/{id}/publish` promote to skills (body: { version, slug? })
+//! - `POST   /v1/drafts/{id}/discard` mark discarded
+
+use std::io::Read;
+
+use axum::extract::{Multipart, Path, Query, State};
+use axum::http::StatusCode;
+use axum::Json;
+use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use flate2::read::GzDecoder;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::audit;
+use crate::auth::AuthedCaller;
+use crate::bundle::{self, BundleError};
+use crate::error::{AppError, AppResult};
+use crate::state::AppState;
+use crate::storage::Storage;
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Draft {
+    pub id: Uuid,
+    pub slug: String,
+    pub description: String,
+    pub when_to_use: Option<String>,
+    pub tags: Vec<String>,
+    pub origin: String,
+    pub notes: Option<String>,
+    pub status: String,
+    pub published_version: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize)]
+pub struct ListQuery {
+    /// `pending` (default), `published`, `discarded`, or `all`.
+    pub status: Option<String>,
+}
+
+pub async fn list(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    Query(q): Query<ListQuery>,
+) -> AppResult<Json<Vec<Draft>>> {
+    require_scope(&caller.scope, "skills:read")?;
+
+    let status_filter = q.status.as_deref().unwrap_or("pending");
+    let drafts: Vec<Draft> = if status_filter == "all" {
+        sqlx::query_as(
+            "SELECT id, slug, description, when_to_use, tags, origin, notes, status, \
+                    published_version, created_at, reviewed_at \
+             FROM skill_drafts \
+             WHERE tenant_id = $1 \
+             ORDER BY status = 'pending' DESC, created_at DESC \
+             LIMIT 200",
+        )
+        .bind(caller.tenant.tenant_id)
+        .fetch_all(state.db())
+        .await?
+    } else {
+        if !matches!(status_filter, "pending" | "published" | "discarded") {
+            return Err(AppError::BadRequest(format!(
+                "status must be one of: pending, published, discarded, all (got `{status_filter}`)"
+            )));
+        }
+        sqlx::query_as(
+            "SELECT id, slug, description, when_to_use, tags, origin, notes, status, \
+                    published_version, created_at, reviewed_at \
+             FROM skill_drafts \
+             WHERE tenant_id = $1 AND status = $2 \
+             ORDER BY created_at DESC \
+             LIMIT 200",
+        )
+        .bind(caller.tenant.tenant_id)
+        .bind(status_filter)
+        .fetch_all(state.db())
+        .await?
+    };
+
+    Ok(Json(drafts))
+}
+
+pub async fn get_one(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Draft>> {
+    require_scope(&caller.scope, "skills:read")?;
+    let draft = load_draft(&state, caller.tenant.tenant_id, id).await?;
+    Ok(Json(draft))
+}
+
+pub async fn get_skill_md(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    Path(id): Path<Uuid>,
+) -> AppResult<String> {
+    require_scope(&caller.scope, "skills:read")?;
+
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT bundle_uri FROM skill_drafts WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(id)
+    .fetch_optional(state.db())
+    .await?;
+    let (key,) = row.ok_or(AppError::NotFound)?;
+
+    let bytes = state
+        .storage()
+        .read_bundle(&key)
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    let gz = GzDecoder::new(bytes.as_ref());
+    let mut tar = tar::Archive::new(gz);
+    for entry in tar
+        .entries()
+        .map_err(|e| AppError::BadRequest(e.to_string()))?
+    {
+        let mut entry = entry.map_err(|e| AppError::BadRequest(e.to_string()))?;
+        let path = entry
+            .path()
+            .map_err(|e| AppError::BadRequest(e.to_string()))?
+            .to_path_buf();
+        if path.to_string_lossy().trim_start_matches("./") == "SKILL.md" {
+            let mut buf = String::new();
+            entry
+                .read_to_string(&mut buf)
+                .map_err(|e| AppError::BadRequest(e.to_string()))?;
+            return Ok(buf);
+        }
+    }
+    Err(AppError::NotFound)
+}
+
+#[derive(Deserialize)]
+struct CreateMetadata {
+    slug: String,
+    #[serde(default)]
+    origin: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    when_to_use: Option<String>,
+}
+
+pub async fn create(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    mut multipart: Multipart,
+) -> AppResult<(StatusCode, Json<Draft>)> {
+    require_scope(&caller.scope, "skills:publish")?;
+
+    let mut metadata_raw: Option<String> = None;
+    let mut bundle_bytes: Option<Bytes> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("multipart: {e}")))?
+    {
+        match field.name() {
+            Some("metadata") => {
+                metadata_raw = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(format!("metadata: {e}")))?,
+                );
+            }
+            Some("bundle") => {
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("bundle: {e}")))?;
+                bundle_bytes = Some(bytes);
+            }
+            _ => continue,
+        }
+    }
+
+    let metadata_raw =
+        metadata_raw.ok_or_else(|| AppError::BadRequest("missing `metadata` field".into()))?;
+    let bytes =
+        bundle_bytes.ok_or_else(|| AppError::BadRequest("missing `bundle` field".into()))?;
+
+    let meta: CreateMetadata = serde_json::from_str(&metadata_raw)
+        .map_err(|e| AppError::BadRequest(format!("metadata JSON: {e}")))?;
+
+    if meta.slug.trim().is_empty() {
+        return Err(AppError::BadRequest("slug is required".into()));
+    }
+
+    let validated = bundle::validate(&bytes).map_err(bundle_to_app_err)?;
+    let origin = meta.origin.as_deref().unwrap_or("cli");
+    if !matches!(origin, "cli" | "capture-scorer" | "claude-hook" | "web") {
+        return Err(AppError::BadRequest(format!(
+            "origin must be one of: cli, capture-scorer, claude-hook, web (got `{origin}`)"
+        )));
+    }
+
+    let merged_tags: Vec<String> = {
+        let mut t = validated.frontmatter.tags.clone();
+        for tag in &meta.tags {
+            if !t.contains(tag) {
+                t.push(tag.clone());
+            }
+        }
+        t
+    };
+
+    let draft_id = Uuid::new_v4();
+    let key = Storage::draft_bundle_key(caller.tenant.tenant_id, draft_id);
+
+    state
+        .storage()
+        .put_bundle(&key, bytes.clone())
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    let when_to_use = meta
+        .when_to_use
+        .as_deref()
+        .or(validated.frontmatter.when_to_use.as_deref());
+
+    let row: Draft = sqlx::query_as(
+        "INSERT INTO skill_drafts \
+           (id, tenant_id, slug, description, when_to_use, tags, origin, notes, \
+            bundle_uri, bundle_sha256, created_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+         RETURNING id, slug, description, when_to_use, tags, origin, notes, status, \
+                   published_version, created_at, reviewed_at",
+    )
+    .bind(draft_id)
+    .bind(caller.tenant.tenant_id)
+    .bind(meta.slug.trim())
+    .bind(&validated.frontmatter.description)
+    .bind(when_to_use)
+    .bind(&merged_tags)
+    .bind(origin)
+    .bind(meta.notes.as_deref())
+    .bind(&key)
+    .bind(&validated.sha256_hex)
+    .bind(caller.user_id)
+    .fetch_one(state.db())
+    .await?;
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: caller.user_id,
+            actor_token: Some(caller.token_id),
+            action: "draft.create",
+            target_kind: "skill_draft",
+            target_id: Some(&draft_id.to_string()),
+            metadata: serde_json::json!({
+                "slug": meta.slug,
+                "origin": origin,
+                "size_bytes": validated.size_bytes,
+                "sha256": validated.sha256_hex,
+            }),
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+#[derive(Deserialize)]
+pub struct PublishBody {
+    /// Required. Semver string assigned at publish time.
+    pub version: String,
+    /// Optional override; defaults to the draft's slug.
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PublishResponse {
+    pub draft_id: Uuid,
+    pub skill_id: Uuid,
+    pub slug: String,
+    pub version: String,
+}
+
+pub async fn publish(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PublishBody>,
+) -> AppResult<Json<PublishResponse>> {
+    require_scope(&caller.scope, "skills:publish")?;
+
+    if body.version.trim().is_empty() {
+        return Err(AppError::BadRequest("version is required".into()));
+    }
+
+    let mut tx = state.db().begin().await?;
+
+    // Lock the draft row so two concurrent publishers don't double-promote.
+    let draft: Option<DraftRow> = sqlx::query_as(
+        "SELECT id, slug, description, when_to_use, tags, bundle_uri, bundle_sha256, status \
+         FROM skill_drafts \
+         WHERE tenant_id = $1 AND id = $2 \
+         FOR UPDATE",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let draft = draft.ok_or(AppError::NotFound)?;
+    if draft.status != "pending" {
+        return Err(AppError::BadRequest(format!(
+            "draft is already {} — cannot publish",
+            draft.status
+        )));
+    }
+
+    let final_slug = body
+        .slug
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| draft.slug.clone());
+
+    // Copy bundle to the canonical skill key. The opendal Operator doesn't
+    // support cheap server-side copy on the FS backend, so read+write.
+    let bundle_bytes = state
+        .storage()
+        .read_bundle(&draft.bundle_uri)
+        .await
+        .map_err(AppError::Anyhow)?;
+    let skill_key = Storage::bundle_key(caller.tenant.tenant_id, &final_slug, body.version.trim());
+    state
+        .storage()
+        .put_bundle(&skill_key, bundle_bytes)
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    let inserted: Result<(Uuid,), sqlx::Error> = sqlx::query_as(
+        "INSERT INTO skills \
+           (tenant_id, slug, version, description, when_to_use, tags, bundle_uri, bundle_sha256, created_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+         RETURNING id",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(&final_slug)
+    .bind(body.version.trim())
+    .bind(&draft.description)
+    .bind(&draft.when_to_use)
+    .bind(&draft.tags)
+    .bind(&skill_key)
+    .bind(&draft.bundle_sha256)
+    .bind(caller.user_id)
+    .fetch_one(&mut *tx)
+    .await;
+
+    let skill_id = match inserted {
+        Ok((id,)) => id,
+        Err(sqlx::Error::Database(dbe))
+            if dbe.constraint() == Some("skills_tenant_id_slug_version_key") =>
+        {
+            return Err(AppError::BadRequest(format!(
+                "{}@{} already exists — pick a different version",
+                final_slug,
+                body.version.trim()
+            )));
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    sqlx::query(
+        "UPDATE skill_drafts \
+         SET status = 'published', published_skill_id = $1, published_version = $2, \
+             reviewed_by = $3, reviewed_at = now() \
+         WHERE tenant_id = $4 AND id = $5",
+    )
+    .bind(skill_id)
+    .bind(body.version.trim())
+    .bind(caller.user_id)
+    .bind(caller.tenant.tenant_id)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: caller.user_id,
+            actor_token: Some(caller.token_id),
+            action: "draft.publish",
+            target_kind: "skill_draft",
+            target_id: Some(&id.to_string()),
+            metadata: serde_json::json!({
+                "slug": final_slug,
+                "version": body.version,
+                "skill_id": skill_id,
+            }),
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    Ok(Json(PublishResponse {
+        draft_id: id,
+        skill_id,
+        slug: final_slug,
+        version: body.version,
+    }))
+}
+
+pub async fn discard(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    Path(id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    require_scope(&caller.scope, "skills:publish")?;
+
+    let result = sqlx::query(
+        "UPDATE skill_drafts \
+         SET status = 'discarded', reviewed_by = $1, reviewed_at = now() \
+         WHERE tenant_id = $2 AND id = $3 AND status = 'pending'",
+    )
+    .bind(caller.user_id)
+    .bind(caller.tenant.tenant_id)
+    .bind(id)
+    .execute(state.db())
+    .await?;
+
+    if result.rows_affected() == 0 {
+        // Either not found or not pending — either way, callers shouldn't
+        // see a 200 they didn't earn.
+        return Err(AppError::NotFound);
+    }
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: caller.user_id,
+            actor_token: Some(caller.token_id),
+            action: "draft.discard",
+            target_kind: "skill_draft",
+            target_id: Some(&id.to_string()),
+            metadata: serde_json::json!({}),
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- helpers --------------------------------------------------------------
+
+async fn load_draft(state: &AppState, tenant_id: Uuid, id: Uuid) -> AppResult<Draft> {
+    let draft: Option<Draft> = sqlx::query_as(
+        "SELECT id, slug, description, when_to_use, tags, origin, notes, status, \
+                published_version, created_at, reviewed_at \
+         FROM skill_drafts \
+         WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(id)
+    .fetch_optional(state.db())
+    .await?;
+    draft.ok_or(AppError::NotFound)
+}
+
+fn require_scope(scope: &str, needed: &str) -> AppResult<()> {
+    if scope.split_whitespace().any(|s| s == needed || s == "*") {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+fn bundle_to_app_err(e: BundleError) -> AppError {
+    AppError::BadRequest(e.to_string())
+}
+
+#[derive(sqlx::FromRow)]
+struct DraftRow {
+    #[allow(dead_code)]
+    id: Uuid,
+    slug: String,
+    description: String,
+    when_to_use: Option<String>,
+    tags: Vec<String>,
+    bundle_uri: String,
+    bundle_sha256: String,
+    status: String,
+}

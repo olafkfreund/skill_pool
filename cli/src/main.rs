@@ -73,6 +73,21 @@ enum Cmd {
         #[arg(long)]
         version: String,
     },
+    /// Capture a local skill directory as a draft (Phase 4). Drafts land in
+    /// the curator inbox; a reviewer assigns a version at publish time.
+    Capture {
+        #[arg(value_name = "DIR")]
+        dir: std::path::PathBuf,
+        /// Override the slug. Defaults to the frontmatter `name`, then the directory name.
+        #[arg(long)]
+        slug: Option<String>,
+        /// Free-form note for the reviewer (why this matters, session context).
+        #[arg(long)]
+        notes: Option<String>,
+        /// Extra tags to attach (comma-separated). Merged with frontmatter tags.
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+    },
     /// Diagnose: list loaded skills, dangling symlinks, drift.
     Doctor,
     /// Detect the current project's stack from filesystem fingerprints.
@@ -141,6 +156,12 @@ async fn main() -> Result<()> {
         Cmd::Publish { dir, slug, version } => {
             cmd::publish::run(&cfg, &dir, slug.as_deref(), &version).await
         }
+        Cmd::Capture {
+            dir,
+            slug,
+            notes,
+            tags,
+        } => cmd::capture::run(&cfg, &dir, slug.as_deref(), notes.as_deref(), &tags).await,
         Cmd::Doctor => cmd::doctor::run(&cfg),
         Cmd::Detect { json } => cmd::detect::run(json),
         Cmd::Bootstrap {

@@ -45,6 +45,25 @@ pub struct PublishMetadata<'a> {
     pub tags: &'a [String],
 }
 
+#[derive(Debug, Serialize)]
+pub struct CaptureMetadata<'a> {
+    pub slug: &'a str,
+    pub origin: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<&'a str>,
+    #[serde(default)]
+    pub tags: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when_to_use: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CapturedDraft {
+    pub id: String,
+    pub slug: String,
+    pub status: String,
+}
+
 impl Client {
     pub fn new(reg: &RegistryConfig) -> Result<Self> {
         let mut headers = HeaderMap::new();
@@ -155,6 +174,31 @@ impl Client {
             return Err(anyhow!("download_bundle: {status} — {body}"));
         }
         Ok(resp.bytes().await?)
+    }
+
+    pub async fn submit_draft(
+        &self,
+        metadata: CaptureMetadata<'_>,
+        bundle: Bytes,
+    ) -> Result<CapturedDraft> {
+        let url = self.base.join("/v1/drafts")?;
+        let metadata_json =
+            serde_json::to_string(&metadata).context("serialise draft metadata")?;
+
+        let form = Form::new().text("metadata", metadata_json).part(
+            "bundle",
+            Part::bytes(bundle.to_vec())
+                .file_name(format!("{}.tar.gz", metadata.slug))
+                .mime_str("application/gzip")?,
+        );
+
+        let resp = self.http.post(url).multipart(form).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("submit_draft: {status} — {body}"));
+        }
+        Ok(resp.json().await?)
     }
 
     pub async fn publish(&self, metadata: PublishMetadata<'_>, bundle: Bytes) -> Result<Skill> {

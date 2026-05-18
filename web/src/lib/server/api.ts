@@ -227,6 +227,71 @@ export async function publishSkill(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+export interface Draft {
+  id: string;
+  slug: string;
+  description: string;
+  when_to_use: string | null;
+  tags: string[];
+  origin: 'cli' | 'capture-scorer' | 'claude-hook' | 'web';
+  notes: string | null;
+  status: 'pending' | 'published' | 'discarded';
+  published_version: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export async function listDrafts(
+  auth: Auth,
+  status: 'pending' | 'published' | 'discarded' | 'all' = 'pending',
+): Promise<Draft[]> {
+  const resp = await call('GET', `/v1/drafts?status=${status}`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function getDraft(auth: Auth, id: string): Promise<Draft> {
+  const resp = await call('GET', `/v1/drafts/${encodeURIComponent(id)}`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function getDraftSkillMd(auth: Auth, id: string): Promise<string> {
+  const resp = await call('GET', `/v1/drafts/${encodeURIComponent(id)}/skill-md`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.text();
+}
+
+export async function publishDraft(
+  auth: Auth,
+  id: string,
+  version: string,
+  slug?: string,
+): Promise<
+  | { ok: true; skill_id: string; slug: string; version: string }
+  | { ok: false; status: number; error: string }
+> {
+  const body: { version: string; slug?: string } = { version };
+  if (slug) body.slug = slug;
+  const resp = await call('POST', `/v1/drafts/${encodeURIComponent(id)}/publish`, auth, {
+    jsonBody: body,
+  });
+  if (resp.ok) {
+    const j = (await resp.json()) as { skill_id: string; slug: string; version: string };
+    return { ok: true, ...j };
+  }
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function discardDraft(
+  auth: Auth,
+  id: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('POST', `/v1/drafts/${encodeURIComponent(id)}/discard`, auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
 export async function discoverOidc(auth: Auth): Promise<{ enabled: boolean }> {
   const resp = await call('GET', '/v1/auth/oidc/discover', auth);
   if (!resp.ok) return { enabled: false };

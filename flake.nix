@@ -58,8 +58,10 @@
             # Web (Phase 2)
             nodejs_22
 
-            # SAML XML signature validation (samael -> xmlsec1 + libxml2 + bindgen)
-            xmlsec libxml2 libxml2.dev
+            # SAML XML signature validation (samael -> xmlsec1 + libxml2 + bindgen).
+            # xmlsec1 dynamically loads modules via libltdl, so libtool is required
+            # at link time even though we don't call it directly.
+            xmlsec libxml2 libxml2.dev libxslt libtool
             clang
             llvmPackages.libclang
             openssl.dev
