@@ -36,6 +36,8 @@ const W_TEST_RECOVERY: u32 = 50;
 const W_EDIT_RETRY_PER_FILE: u32 = 30;
 const W_LONG_SESSION: u32 = 5;
 const W_CROSS_SESSION_RECURRENCE: u32 = 30;
+const W_NOVEL_COMMAND: u32 = 15;
+const NOVEL_HISTORY_BYTE_CAP: usize = 5 * 1024 * 1024;
 
 /// Min number of distinct sessions (including the current one) that must
 /// share a fingerprint before the recurrence signal fires. Master plan
@@ -128,6 +130,12 @@ pub struct ScoreBreakdown {
     /// deserialize with this defaulted to 0.
     #[serde(default)]
     pub cross_session_recurrence: u32,
+    /// Novel command — failed Bash command whose stem doesn't appear in
+    /// the user's shell history. Weight is per distinct novel stem,
+    /// capped at 3 so a noisy session doesn't blow past the threshold
+    /// on this signal alone.
+    #[serde(default)]
+    pub novel_command: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +155,7 @@ pub enum SignalKind {
     EditRetry,
     LongSession,
     CrossSessionRecurrence,
+    NovelCommand,
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +585,179 @@ fn rule_cross_session_recurrence(
     }
 }
 
+/// Set of normalized command stems present in the user's shell history.
+/// Used by the novel-command rule. Building this is O(history-size) and
+/// happens once per scorer invocation.
+#[derive(Debug, Clone, Default)]
+pub struct ShellHistoryStems {
+    stems: std::collections::HashSet<String>,
+}
+
+impl ShellHistoryStems {
+    pub fn is_empty(&self) -> bool {
+        self.stems.is_empty()
+    }
+
+    pub fn contains_stem(&self, stem: &str) -> bool {
+        self.stems.contains(stem)
+    }
+
+    /// Read `~/.bash_history` and the zsh history file (if present) and
+    /// project each line into its stem. Bounded by `NOVEL_HISTORY_BYTE_CAP`
+    /// per file so a runaway history doesn't blow up the hook.
+    pub fn load_for_user() -> Self {
+        let mut stems = std::collections::HashSet::new();
+        for path in candidate_history_paths() {
+            ingest_history_file(&path, &mut stems);
+        }
+        Self { stems }
+    }
+
+    /// Test seam — build directly from raw history lines without touching disk.
+    #[cfg(test)]
+    pub fn from_raw_lines<I, S>(lines: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut stems = std::collections::HashSet::new();
+        for line in lines {
+            if let Some(s) = stem_for_history_line(line.as_ref()) {
+                stems.insert(s);
+            }
+        }
+        Self { stems }
+    }
+}
+
+fn candidate_history_paths() -> Vec<std::path::PathBuf> {
+    let Ok(home) = std::env::var("HOME") else {
+        return vec![];
+    };
+    let h = std::path::PathBuf::from(home);
+    let mut paths = vec![h.join(".bash_history")];
+    // zsh: HISTFILE env wins, falls back to ~/.zsh_history.
+    let zsh = std::env::var("HISTFILE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| h.join(".zsh_history"));
+    if zsh != *paths.first().unwrap() {
+        paths.push(zsh);
+    }
+    paths
+}
+
+fn ingest_history_file(path: &Path, stems: &mut std::collections::HashSet<String>) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() as usize > NOVEL_HISTORY_BYTE_CAP {
+        // Read only the tail — recent commands are the most relevant.
+        // Fallback: skip if we can't seek.
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let start = content
+            .len()
+            .saturating_sub(NOVEL_HISTORY_BYTE_CAP);
+        // Snap to a UTF-8 boundary just in case.
+        let mut s = start;
+        while !content.is_char_boundary(s) && s < content.len() {
+            s += 1;
+        }
+        for line in content[s..].lines() {
+            if let Some(stem) = stem_for_history_line(line) {
+                stems.insert(stem);
+            }
+        }
+        return;
+    }
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for line in content.lines() {
+        if let Some(stem) = stem_for_history_line(line) {
+            stems.insert(stem);
+        }
+    }
+}
+
+/// Project one shell-history line into a stem comparable to those produced
+/// by `command_stem`. Handles zsh's `EXTENDED_HISTORY` format
+/// (`: 1700000000:0;cmd`) by stripping the metadata prefix.
+fn stem_for_history_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // zsh EXTENDED_HISTORY: `: <ts>:<elapsed>;<cmd>`
+    let cmd = if let Some(rest) = trimmed.strip_prefix(": ") {
+        rest.split_once(';').map(|(_, c)| c).unwrap_or(rest)
+    } else {
+        trimmed
+    };
+    let stem = command_stem(cmd);
+    if stem.is_empty() {
+        None
+    } else {
+        Some(stem)
+    }
+}
+
+/// Collect distinct command stems for every Bash tool_use whose result
+/// was an error. Used by both the novel-command rule and the test suite.
+fn failed_bash_stems(events: &[Event]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut iter = events.iter().peekable();
+    while let Some(ev) = iter.next() {
+        let Event::ToolUse { name, target } = ev else {
+            continue;
+        };
+        if name != "Bash" {
+            continue;
+        }
+        let Some(target) = target else { continue };
+        let is_error = match iter.peek() {
+            Some(Event::ToolResult { is_error, .. }) => *is_error,
+            _ => continue,
+        };
+        iter.next();
+        if !is_error {
+            continue;
+        }
+        let stem = command_stem(target);
+        if !stem.is_empty() && !out.iter().any(|s| s == &stem) {
+            out.push(stem);
+        }
+    }
+    out
+}
+
+fn rule_novel_command(events: &[Event], history: &ShellHistoryStems) -> Vec<Signal> {
+    if history.is_empty() {
+        // Without history we'd flag everything; better to stay silent.
+        return Vec::new();
+    }
+    let mut hits = Vec::new();
+    for stem in failed_bash_stems(events) {
+        if !history.contains_stem(&stem) {
+            hits.push(stem);
+        }
+        if hits.len() >= 3 {
+            // Cap at 3 — a noisy session shouldn't blow past the threshold
+            // on this signal alone.
+            break;
+        }
+    }
+    hits.into_iter()
+        .map(|stem| Signal {
+            kind: SignalKind::NovelCommand,
+            weight: W_NOVEL_COMMAND,
+            evidence: truncate(&format!("`{stem}` failed; not in shell history"), 240),
+        })
+        .collect()
+}
+
 fn count_assistant_turns(events: &[Event]) -> usize {
     // Count each contiguous run of assistant emissions (text or any number
     // of tool_uses) as one logical turn. A turn boundary is any UserText
@@ -774,6 +956,20 @@ pub fn score_with_recurrence(
     cwd: Option<&str>,
     index: &RecurrenceIndex,
 ) -> SessionScore {
+    let history = ShellHistoryStems::load_for_user();
+    score_full(events, session_id, cwd, index, &history)
+}
+
+/// Underlying scorer that takes ALL the contextual inputs explicitly.
+/// Used by `score_with_recurrence` (production) and by tests that want
+/// to inject a deterministic shell-history set.
+pub fn score_full(
+    events: &[Event],
+    session_id: &str,
+    cwd: Option<&str>,
+    index: &RecurrenceIndex,
+    history: &ShellHistoryStems,
+) -> SessionScore {
     let mut s = score(events, session_id, cwd);
     let fingerprint = fingerprint_from_events(events);
     if let Some(sig) = rule_cross_session_recurrence(fingerprint.as_deref(), index, session_id) {
@@ -781,6 +977,12 @@ pub fn score_with_recurrence(
         s.score = s.score.saturating_add(sig.weight);
         s.signals.push(sig);
     }
+    let novel = rule_novel_command(events, history);
+    for sig in &novel {
+        s.breakdown.novel_command = s.breakdown.novel_command.saturating_add(sig.weight);
+        s.score = s.score.saturating_add(sig.weight);
+    }
+    s.signals.extend(novel);
     s
 }
 
@@ -1238,6 +1440,109 @@ mod tests {
         let events = vec![user("hello"), ass()];
         let s = score_with_recurrence(&events, "quiet", None, &idx);
         assert_eq!(s.breakdown.cross_session_recurrence, 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Novel-command signal
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn novel_command_fires_when_failed_stem_not_in_history() {
+        let history = ShellHistoryStems::from_raw_lines(["ls -la", "cargo build"]);
+        let events = vec![
+            bash_cmd("cargo test --release"), // stem: cargo test
+            err_result(),
+        ];
+        let s = score_full(
+            &events,
+            "s1",
+            None,
+            &RecurrenceIndex::default(),
+            &history,
+        );
+        assert_eq!(s.breakdown.novel_command, W_NOVEL_COMMAND, "{s:?}");
+        assert!(s
+            .signals
+            .iter()
+            .any(|sig| sig.kind == SignalKind::NovelCommand));
+    }
+
+    #[test]
+    fn novel_command_skips_when_stem_in_history() {
+        let history = ShellHistoryStems::from_raw_lines(["cargo test --workspace"]);
+        let events = vec![bash_cmd("cargo test --release"), err_result()];
+        let s = score_full(&events, "s2", None, &RecurrenceIndex::default(), &history);
+        assert_eq!(s.breakdown.novel_command, 0);
+    }
+
+    #[test]
+    fn novel_command_skips_for_passing_bash() {
+        let history = ShellHistoryStems::from_raw_lines(["true"]);
+        let events = vec![bash_cmd("never-seen-cmd --do-thing"), ok_result()];
+        let s = score_full(&events, "s3", None, &RecurrenceIndex::default(), &history);
+        // Only FAILED bash counts as novel-worthy.
+        assert_eq!(s.breakdown.novel_command, 0);
+    }
+
+    #[test]
+    fn novel_command_silent_when_history_unavailable() {
+        // Empty history → don't flag every command as novel.
+        let history = ShellHistoryStems::default();
+        let events = vec![bash_cmd("anything"), err_result()];
+        let s = score_full(&events, "s4", None, &RecurrenceIndex::default(), &history);
+        assert_eq!(s.breakdown.novel_command, 0);
+    }
+
+    #[test]
+    fn novel_command_caps_at_three_distinct_stems() {
+        let history = ShellHistoryStems::from_raw_lines(["something familiar"]);
+        let events = vec![
+            bash_cmd("foo cmd"),
+            err_result(),
+            bash_cmd("bar cmd"),
+            err_result(),
+            bash_cmd("baz cmd"),
+            err_result(),
+            bash_cmd("qux cmd"),
+            err_result(),
+            bash_cmd("zap cmd"),
+            err_result(),
+        ];
+        let s = score_full(&events, "s5", None, &RecurrenceIndex::default(), &history);
+        assert_eq!(s.breakdown.novel_command, 3 * W_NOVEL_COMMAND, "{s:?}");
+    }
+
+    #[test]
+    fn novel_command_deduplicates_same_stem() {
+        let history = ShellHistoryStems::from_raw_lines(["ls -la"]);
+        let events = vec![
+            bash_cmd("never-seen-cmd"),
+            err_result(),
+            bash_cmd("never-seen-cmd"),
+            err_result(),
+            bash_cmd("never-seen-cmd"),
+            err_result(),
+        ];
+        let s = score_full(&events, "s6", None, &RecurrenceIndex::default(), &history);
+        // Same stem 3× = one novel signal.
+        assert_eq!(s.breakdown.novel_command, W_NOVEL_COMMAND);
+    }
+
+    #[test]
+    fn shell_history_handles_zsh_extended_format() {
+        let history = ShellHistoryStems::from_raw_lines([
+            ": 1700000000:0;cargo test --release",
+            ": 1700000010:5;pytest tests/",
+        ]);
+        assert!(history.contains_stem("cargo test"));
+        assert!(history.contains_stem("pytest tests/"));
+    }
+
+    #[test]
+    fn shell_history_handles_plain_bash_format() {
+        let history = ShellHistoryStems::from_raw_lines(["cargo build --release", "pytest tests/"]);
+        assert!(history.contains_stem("cargo build"));
+        assert!(history.contains_stem("pytest tests/"));
     }
 
     #[test]

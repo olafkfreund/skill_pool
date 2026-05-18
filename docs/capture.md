@@ -138,6 +138,7 @@ merge, never an overwrite.
 | Failing → passing test recovery | 50 | same `cargo test`/`pytest`/`npm test` failed ≥2× then passed |
 | Edit retries on one file    |     30 | >3 failed `Edit`/`Write` on the same `file_path` |
 | Cross-session recurrence    |     30 | same fingerprint (first 2 non-flag tokens of a failed Bash, or failed Edit basename) seen in 3+ distinct local sessions |
+| Novel command               |     15 | failed Bash stem not present in `~/.bash_history` / `~/.zsh_history` (per distinct stem, capped at 3) |
 | Long session                |      5 | >20 assistant turns                              |
 
 The recurrence index lives at `~/.skill-pool/recurrence_index.json` and
@@ -167,15 +168,13 @@ skill-pool capture-status
 `--json` dumps the raw records — useful for piping into the capturer
 daemon when it lands.
 
-### Deferred signals (Phase 5+)
+### Scorer signals — all five wired today
 
-- **Novel command** — Bash command not present in shell history → medium.
-  Needs to compare against `~/.bash_history` / `~/.zsh_history` and
-  handle zsh's `EXTENDED_HISTORY` format. Defer until we have real
-  capture telemetry to tune the false-positive rate.
-
-Cross-session recurrence is wired today; novel-command will layer onto
-the same `scorer.rs` structure when it lands.
+The full set from the master plan is now scoring. Cross-session
+recurrence and novel-command both read state outside the transcript
+(the local recurrence index and the user's shell history respectively)
+but neither makes a network call — the hook stays well under the 50ms
+budget.
 
 ## Capturer pipeline (Phase 4.6 — wired today)
 
