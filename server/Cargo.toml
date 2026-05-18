@@ -92,9 +92,27 @@ prometheus = { version = "0.13", default-features = false }
 # want dedup build with `--features fastembed`.
 fastembed = { version = "4", optional = true }
 
+# OTLP distributed tracing — opt-in via `--features otlp`.
+# Versions are pinned together because opentelemetry, opentelemetry_sdk,
+# opentelemetry-otlp, and tracing-opentelemetry must share the same
+# opentelemetry major version (0.32).
+# tracing-opentelemetry 0.32.1 requires opentelemetry 0.31.x — all four crates
+# must share the same opentelemetry major version.
+opentelemetry = { version = "0.31", optional = true }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["rt-tokio", "trace"], optional = true }
+# http-proto + reqwest-rustls: protobuf-over-HTTP transport with rustls — no OpenSSL required.
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-rustls", "trace"], optional = true }
+tracing-opentelemetry = { version = "0.32", optional = true }
+
 [features]
 default = []
 fastembed = ["dep:fastembed"]
+otlp = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+]
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
