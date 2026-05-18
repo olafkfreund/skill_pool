@@ -29,6 +29,8 @@ export const actions: Actions = {
       mutedFg: String(data.get('mutedFg') ?? '').trim(),
       border: String(data.get('border') ?? '').trim(),
       radius: String(data.get('radius') ?? '0.5rem').trim(),
+      // Checkbox: present = true, absent = false.
+      footerBranding: data.has('footerBranding'),
     };
 
     // WCAG AA contrast validation — refuse to save before touching the API.

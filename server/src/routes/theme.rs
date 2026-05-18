@@ -31,6 +31,14 @@ pub struct Theme {
     pub radius: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logo_uri: Option<String>,
+    /// When true the "Powered by skill-pool" footer is shown on every authed
+    /// page. Default true (Free tier). Enterprise tenants may turn this off.
+    #[serde(default = "default_true")]
+    pub footer_branding: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Theme {
@@ -47,6 +55,7 @@ impl Theme {
             border: "#e2e8f0".into(),
             radius: "0.5rem".into(),
             logo_uri: None,
+            footer_branding: true,
         }
     }
 }
@@ -54,7 +63,7 @@ impl Theme {
 pub async fn get_theme(State(state): State<AppState>, tenant: TenantCtx) -> AppResult<Json<Theme>> {
     let row: Option<ThemeRow> = sqlx::query_as(
         "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
-                border, radius, logo_uri \
+                border, radius, logo_uri, footer_branding \
          FROM tenant_theme WHERE tenant_id = $1",
     )
     .bind(tenant.tenant_id)
@@ -77,8 +86,8 @@ pub async fn put_theme(
 
     sqlx::query(
         "INSERT INTO tenant_theme \
-           (tenant_id, brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, border, radius, logo_uri) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+           (tenant_id, brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, border, radius, logo_uri, footer_branding) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
          ON CONFLICT (tenant_id) DO UPDATE SET \
            brand_name = EXCLUDED.brand_name, \
            primary_ = EXCLUDED.primary_, \
@@ -90,7 +99,8 @@ pub async fn put_theme(
            muted_fg = EXCLUDED.muted_fg, \
            border = EXCLUDED.border, \
            radius = EXCLUDED.radius, \
-           logo_uri = EXCLUDED.logo_uri",
+           logo_uri = EXCLUDED.logo_uri, \
+           footer_branding = EXCLUDED.footer_branding",
     )
     .bind(caller.tenant.tenant_id)
     .bind(&body.brand_name)
@@ -104,6 +114,7 @@ pub async fn put_theme(
     .bind(&body.border)
     .bind(&body.radius)
     .bind(body.logo_uri.as_deref())
+    .bind(body.footer_branding)
     .execute(state.db())
     .await?;
 
@@ -235,6 +246,7 @@ struct ThemeRow {
     border: String,
     radius: String,
     logo_uri: Option<String>,
+    footer_branding: bool,
 }
 
 impl From<ThemeRow> for Theme {
@@ -251,6 +263,7 @@ impl From<ThemeRow> for Theme {
             border: r.border,
             radius: r.radius,
             logo_uri: r.logo_uri,
+            footer_branding: r.footer_branding,
         }
     }
 }

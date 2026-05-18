@@ -26,7 +26,15 @@
   const liveFailures = $derived(checkThemeContrast(theme));
   const blocked = $derived(liveFailures.length > 0);
 
-  const colorFields: Array<[string, keyof Theme]> = [
+  function confirmReset(e: MouseEvent) {
+    if (!confirm('Reset all theme fields to built-in defaults? This cannot be undone.')) {
+      e.preventDefault();
+    }
+  }
+
+  // Only the required-string colour fields; optional/boolean fields handled separately.
+  type RequiredStringKey = 'primary' | 'primaryFg' | 'accent' | 'bg' | 'fg' | 'muted' | 'mutedFg' | 'border' | 'radius' | 'brandName';
+  const colorFields: Array<[string, RequiredStringKey]> = [
     ['Primary', 'primary'],
     ['Primary fg', 'primaryFg'],
     ['Accent', 'accent'],
@@ -135,6 +143,19 @@
       />
     </label>
 
+    <label class="flex items-center justify-between gap-3">
+      <span class="text-sm text-[var(--sp-fg)]">
+        Show "Powered by skill-pool" footer
+        <span class="block text-xs text-[var(--sp-muted-fg)]">Default on (Free tier). Uncheck to hide the footer credit.</span>
+      </span>
+      <input
+        type="checkbox"
+        name="footerBranding"
+        bind:checked={theme.footerBranding}
+        class="h-4 w-4 cursor-pointer rounded border border-[var(--sp-border)]"
+      />
+    </label>
+
     <!-- Contrast ratio dashboard -->
     <div class="space-y-2 pt-2" aria-label="Contrast ratio checks">
       <div class="flex items-center justify-between text-xs">
@@ -192,9 +213,10 @@
       <button
         type="submit"
         formaction="?/reset"
+        onclick={confirmReset}
         class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] border border-[var(--sp-border)] px-4 py-2 text-sm"
       >
-        <RotateCcw size="14" aria-hidden="true" /> Reset
+        <RotateCcw size="14" aria-hidden="true" /> Reset to defaults
       </button>
     </div>
   </form>

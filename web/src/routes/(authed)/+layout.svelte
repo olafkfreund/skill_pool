@@ -110,7 +110,8 @@
   }
 </script>
 
-<div class="flex min-h-screen">
+<div class="flex min-h-screen flex-col">
+  <div class="flex flex-1">
   <aside
     class="hidden w-60 shrink-0 border-r border-[var(--sp-border)] bg-[var(--sp-muted)] px-4 py-6 md:flex md:flex-col"
   >
@@ -204,4 +205,16 @@
   <main class="flex-1 px-6 py-8 md:px-10">
     {@render children?.()}
   </main>
+</div>
+
+{#if data.theme.footerBranding}
+  <footer class="border-t border-[var(--sp-border)] py-3 text-center text-xs text-[var(--sp-muted-fg)]">
+    Powered by <a
+      href="https://github.com/anthropics/skill-pool"
+      class="underline hover:text-[var(--sp-fg)]"
+      target="_blank"
+      rel="noopener noreferrer"
+    >skill-pool</a>
+  </footer>
+{/if}
 </div>
