@@ -137,7 +137,13 @@ merge, never an overwrite.
 | Explicit marker             |   1000 | user said "remember this" / "TIL" / "/capture-skill" |
 | Failing → passing test recovery | 50 | same `cargo test`/`pytest`/`npm test` failed ≥2× then passed |
 | Edit retries on one file    |     30 | >3 failed `Edit`/`Write` on the same `file_path` |
+| Cross-session recurrence    |     30 | same fingerprint (first 2 non-flag tokens of a failed Bash, or failed Edit basename) seen in 3+ distinct local sessions |
 | Long session                |      5 | >20 assistant turns                              |
+
+The recurrence index lives at `~/.skill-pool/recurrence_index.json` and
+maps fingerprint → `[session_ids]`. Each `capture-score` invocation
+appends the current session before consulting the count, so the same
+session never inflates its own recurrence score.
 
 Default draft-worthy threshold: **score ≥ 100**. The capturer daemon
 (Phase 4.6) will pick from `sessions/` files at or above this; for now
@@ -161,16 +167,15 @@ skill-pool capture-status
 `--json` dumps the raw records — useful for piping into the capturer
 daemon when it lands.
 
-### Deferred signals (Phase 4.6)
+### Deferred signals (Phase 5+)
 
-- **Cross-session recurrence** — same retry pattern across ≥3 sessions
-  → high weight. Needs a persisted index of past sessions.
 - **Novel command** — Bash command not present in shell history → medium.
-  Needs to compare against `~/.bash_history` / `~/.zsh_history`.
+  Needs to compare against `~/.bash_history` / `~/.zsh_history` and
+  handle zsh's `EXTENDED_HISTORY` format. Defer until we have real
+  capture telemetry to tune the false-positive rate.
 
-Both are layered into `scorer.rs` next to the existing rules when their
-storage layer lands; the score record's `version` field is bumped on
-schema changes.
+Cross-session recurrence is wired today; novel-command will layer onto
+the same `scorer.rs` structure when it lands.
 
 ## Capturer pipeline (Phase 4.6 — wired today)
 

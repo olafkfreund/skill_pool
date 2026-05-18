@@ -69,7 +69,22 @@ pub fn run() -> Result<()> {
     };
 
     let events = scorer::parse_transcript(&transcript);
-    let score = scorer::score(&events, &payload.session_id, payload.cwd.as_deref());
+
+    // Load the cross-session recurrence index (Phase 5+). Failure here is
+    // non-fatal — we degrade to the v1 scorer rather than blocking the hook.
+    let mut index = scorer::load_recurrence_index().unwrap_or_default();
+    let score =
+        scorer::score_with_recurrence(&events, &payload.session_id, payload.cwd.as_deref(), &index);
+
+    // Update the index for next time. Cheap: only if this session has a
+    // distinguishable fingerprint AND it wasn't already recorded.
+    if let Some(fp) = scorer::fingerprint_from_events(&events) {
+        if index.touch(&fp, &payload.session_id) {
+            if let Err(e) = scorer::save_recurrence_index(&index) {
+                tracing::warn!(error = ?e, "capture-score: index save failed");
+            }
+        }
+    }
 
     if let Err(e) = scorer::save_score(&score) {
         tracing::warn!(error = ?e, "capture-score: save failed");
@@ -93,7 +108,14 @@ pub fn run_from_file(path: &std::path::Path) -> Result<()> {
     let transcript = std::fs::read_to_string(&payload.transcript_path)
         .with_context(|| format!("read transcript {}", payload.transcript_path))?;
     let events = scorer::parse_transcript(&transcript);
-    let score = scorer::score(&events, &payload.session_id, payload.cwd.as_deref());
+    let mut index = scorer::load_recurrence_index().unwrap_or_default();
+    let score =
+        scorer::score_with_recurrence(&events, &payload.session_id, payload.cwd.as_deref(), &index);
+    if let Some(fp) = scorer::fingerprint_from_events(&events) {
+        if index.touch(&fp, &payload.session_id) {
+            let _ = scorer::save_recurrence_index(&index);
+        }
+    }
     let path = scorer::save_score(&score)?;
     println!(
         "scored {} → {} (saved to {})",

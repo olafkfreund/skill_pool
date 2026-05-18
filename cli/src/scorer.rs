@@ -35,6 +35,12 @@ const W_EXPLICIT: u32 = 1000;
 const W_TEST_RECOVERY: u32 = 50;
 const W_EDIT_RETRY_PER_FILE: u32 = 30;
 const W_LONG_SESSION: u32 = 5;
+const W_CROSS_SESSION_RECURRENCE: u32 = 30;
+
+/// Min number of distinct sessions (including the current one) that must
+/// share a fingerprint before the recurrence signal fires. Master plan
+/// says "seen in 3+ sessions"; 3 is the floor.
+pub const RECURRENCE_MIN_SESSIONS: usize = 3;
 
 const LONG_SESSION_TURNS: usize = 20;
 const EDIT_RETRY_MIN_FAILURES: usize = 3;
@@ -117,6 +123,11 @@ pub struct ScoreBreakdown {
     pub test_recovery: u32,
     pub edit_retries: u32,
     pub long_session: u32,
+    /// Cross-session recurrence — same failing fingerprint seen in 3+
+    /// distinct sessions. Additive field; older records (v1/v2 on disk)
+    /// deserialize with this defaulted to 0.
+    #[serde(default)]
+    pub cross_session_recurrence: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +146,7 @@ pub enum SignalKind {
     TestRecovery,
     EditRetry,
     LongSession,
+    CrossSessionRecurrence,
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +476,106 @@ fn rule_long_session(turn_count: usize) -> Option<Signal> {
     }
 }
 
+/// Extract a stable fingerprint for the session's most salient failing
+/// pattern. Used by the cross-session recurrence index.
+///
+/// Priority order:
+///   1. First Bash `ToolUse` whose result is an error → "first two
+///      non-flag tokens" of the command (e.g. `cargo test`, `pytest`,
+///      `nix flake`).
+///   2. First Edit/Write that errored → its file basename.
+///   3. None — nothing distinctive failed; recurrence signal cannot fire.
+pub fn fingerprint_from_events(events: &[Event]) -> Option<String> {
+    let mut iter = events.iter().peekable();
+    while let Some(ev) = iter.next() {
+        let Event::ToolUse { name, target } = ev else {
+            continue;
+        };
+        let Some(target) = target else { continue };
+        // Peek the next event for the matching result.
+        let is_error = match iter.peek() {
+            Some(Event::ToolResult { is_error, .. }) => *is_error,
+            _ => continue,
+        };
+        iter.next(); // consume the result
+        if !is_error {
+            continue;
+        }
+        match name.as_str() {
+            "Bash" => {
+                let stem = command_stem(target);
+                if !stem.is_empty() {
+                    return Some(stem);
+                }
+            }
+            "Edit" | "Write" => {
+                let basename = std::path::Path::new(target)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned());
+                if let Some(b) = basename.filter(|s| !s.is_empty()) {
+                    return Some(format!("edit:{b}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Normalise a Bash command into its semantic "subject": first two
+/// non-flag tokens, lowercased. Drops env-var assignments like
+/// `RUST_LOG=info cargo test` → `cargo test`. Stable across flag drift.
+fn command_stem(cmd: &str) -> String {
+    let mut tokens: Vec<&str> = Vec::with_capacity(2);
+    for tok in cmd.split_whitespace() {
+        if tokens.is_empty() && tok.contains('=') && !tok.starts_with('-') {
+            // env var prefix; skip
+            continue;
+        }
+        if tok.starts_with('-') {
+            continue;
+        }
+        tokens.push(tok);
+        if tokens.len() == 2 {
+            break;
+        }
+    }
+    tokens.join(" ").to_lowercase()
+}
+
+fn rule_cross_session_recurrence(
+    fingerprint: Option<&str>,
+    index: &RecurrenceIndex,
+    this_session_id: &str,
+) -> Option<Signal> {
+    let fp = fingerprint?;
+    // Count distinct sessions sharing this fingerprint, including the
+    // current one whether or not it's already been written to the index.
+    let mut sessions = index
+        .fingerprints
+        .get(fp)
+        .cloned()
+        .unwrap_or_default();
+    if !sessions.iter().any(|s| s == this_session_id) {
+        sessions.push(this_session_id.to_string());
+    }
+    if sessions.len() >= RECURRENCE_MIN_SESSIONS {
+        Some(Signal {
+            kind: SignalKind::CrossSessionRecurrence,
+            weight: W_CROSS_SESSION_RECURRENCE,
+            evidence: truncate(
+                &format!(
+                    "`{fp}` seen in {} sessions",
+                    sessions.len()
+                ),
+                240,
+            ),
+        })
+    } else {
+        None
+    }
+}
+
 fn count_assistant_turns(events: &[Event]) -> usize {
     // Count each contiguous run of assistant emissions (text or any number
     // of tool_uses) as one logical turn. A turn boundary is any UserText
@@ -567,6 +679,109 @@ pub fn load_all_scores_in(dir: &Path) -> Result<Vec<SessionScore>> {
 fn read_score(path: &Path) -> Result<SessionScore> {
     let raw = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&raw)?)
+}
+
+// ---------------------------------------------------------------------------
+// Recurrence index — cross-session fingerprint → [session_ids]
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecurrenceIndex {
+    #[serde(default = "default_index_version")]
+    pub version: u32,
+    /// Map of fingerprint → set of session_ids that hit it.
+    #[serde(default)]
+    pub fingerprints: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+impl Default for RecurrenceIndex {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            fingerprints: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+fn default_index_version() -> u32 {
+    1
+}
+
+impl RecurrenceIndex {
+    /// Add this session to the fingerprint's bucket. Returns true if the
+    /// index changed (i.e. needs persisting). A session_id already
+    /// present is a no-op.
+    pub fn touch(&mut self, fingerprint: &str, session_id: &str) -> bool {
+        let entry = self.fingerprints.entry(fingerprint.to_string()).or_default();
+        if entry.iter().any(|s| s == session_id) {
+            return false;
+        }
+        entry.push(session_id.to_string());
+        true
+    }
+}
+
+/// Resolve the recurrence index path. Lives next to `sessions/` under
+/// the env-resolved skill-pool home so users see the whole capture
+/// state in one place.
+pub fn recurrence_index_path() -> Result<std::path::PathBuf> {
+    Ok(sessions_dir()?.parent().map_or_else(
+        || std::path::PathBuf::from("recurrence_index.json"),
+        |p| p.join("recurrence_index.json"),
+    ))
+}
+
+pub fn load_recurrence_index() -> Result<RecurrenceIndex> {
+    load_recurrence_index_at(&recurrence_index_path()?)
+}
+
+pub fn load_recurrence_index_at(path: &Path) -> Result<RecurrenceIndex> {
+    if !path.exists() {
+        return Ok(RecurrenceIndex::default());
+    }
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("read {}", path.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(RecurrenceIndex::default());
+    }
+    Ok(serde_json::from_str(&raw)?)
+}
+
+pub fn save_recurrence_index(index: &RecurrenceIndex) -> Result<std::path::PathBuf> {
+    save_recurrence_index_at(index, &recurrence_index_path()?)
+}
+
+pub fn save_recurrence_index_at(
+    index: &RecurrenceIndex,
+    path: &Path,
+) -> Result<std::path::PathBuf> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("mkdir -p {}", parent.display()))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let pretty = serde_json::to_string_pretty(index)?;
+    std::fs::write(&tmp, pretty)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(path.to_path_buf())
+}
+
+/// Score a session AND include the recurrence rule. Caller is expected
+/// to persist the updated index afterwards if it touched.
+pub fn score_with_recurrence(
+    events: &[Event],
+    session_id: &str,
+    cwd: Option<&str>,
+    index: &RecurrenceIndex,
+) -> SessionScore {
+    let mut s = score(events, session_id, cwd);
+    let fingerprint = fingerprint_from_events(events);
+    if let Some(sig) = rule_cross_session_recurrence(fingerprint.as_deref(), index, session_id) {
+        s.breakdown.cross_session_recurrence = sig.weight;
+        s.score = s.score.saturating_add(sig.weight);
+        s.signals.push(sig);
+    }
+    s
 }
 
 // ---------------------------------------------------------------------------
@@ -884,5 +1099,167 @@ mod tests {
         save_score_in(&s, tmp.path()).unwrap();
         let loaded = load_all_scores_in(tmp.path()).expect("load");
         assert_eq!(loaded.len(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 5+: cross-session recurrence signal
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn fingerprint_picks_first_failed_bash_command_stem() {
+        let ev = vec![
+            bash_cmd("ls -la"),
+            ok_result(),
+            bash_cmd("cargo test --release"),
+            err_result(),
+            bash_cmd("cargo build"),
+            err_result(),
+        ];
+        // First *failed* bash is `cargo test --release` → stem is "cargo test".
+        assert_eq!(fingerprint_from_events(&ev).as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn fingerprint_strips_env_var_prefix() {
+        let ev = vec![
+            bash_cmd("RUST_LOG=info cargo test"),
+            err_result(),
+        ];
+        assert_eq!(fingerprint_from_events(&ev).as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn fingerprint_drops_flag_only_tokens() {
+        let ev = vec![bash_cmd("cargo --release test"), err_result()];
+        // Flags get dropped between non-flag tokens.
+        assert_eq!(fingerprint_from_events(&ev).as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn fingerprint_falls_back_to_failed_edit_basename() {
+        let ev = vec![
+            edit("/abs/path/to/handler.rs"),
+            err_result(),
+            edit("/abs/path/to/other.rs"),
+            ok_result(),
+        ];
+        assert_eq!(
+            fingerprint_from_events(&ev).as_deref(),
+            Some("edit:handler.rs")
+        );
+    }
+
+    #[test]
+    fn fingerprint_none_when_nothing_failed() {
+        let ev = vec![user("hi"), ass()];
+        assert_eq!(fingerprint_from_events(&ev), None);
+    }
+
+    #[test]
+    fn recurrence_index_touch_is_idempotent() {
+        let mut idx = RecurrenceIndex::default();
+        assert!(idx.touch("cargo test", "s1"));
+        assert!(!idx.touch("cargo test", "s1"), "second touch is no-op");
+        assert!(idx.touch("cargo test", "s2"), "new session counts");
+        assert_eq!(idx.fingerprints["cargo test"].len(), 2);
+    }
+
+    #[test]
+    fn recurrence_index_round_trips_through_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("recurrence_index.json");
+        let mut idx = RecurrenceIndex::default();
+        idx.touch("cargo test", "s1");
+        idx.touch("cargo test", "s2");
+        idx.touch("pytest", "s3");
+        save_recurrence_index_at(&idx, &path).unwrap();
+        let loaded = load_recurrence_index_at(&path).unwrap();
+        assert_eq!(loaded.fingerprints["cargo test"], vec!["s1", "s2"]);
+        assert_eq!(loaded.fingerprints["pytest"], vec!["s3"]);
+    }
+
+    #[test]
+    fn recurrence_index_load_returns_empty_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let idx = load_recurrence_index_at(&tmp.path().join("nope.json")).unwrap();
+        assert!(idx.fingerprints.is_empty());
+    }
+
+    #[test]
+    fn cross_session_recurrence_fires_at_three_sessions() {
+        let mut idx = RecurrenceIndex::default();
+        // Two OTHER sessions already saw it.
+        idx.touch("cargo test", "other-1");
+        idx.touch("cargo test", "other-2");
+
+        let events = vec![bash_cmd("cargo test"), err_result()];
+        let s = score_with_recurrence(&events, "me", None, &idx);
+        assert_eq!(
+            s.breakdown.cross_session_recurrence,
+            W_CROSS_SESSION_RECURRENCE,
+            "{s:?}"
+        );
+        assert!(s
+            .signals
+            .iter()
+            .any(|sig| sig.kind == SignalKind::CrossSessionRecurrence));
+    }
+
+    #[test]
+    fn cross_session_recurrence_skips_at_two_sessions() {
+        let mut idx = RecurrenceIndex::default();
+        idx.touch("cargo test", "other-1");
+        // Only ONE other session — me + 1 = 2 distinct, below threshold of 3.
+        let events = vec![bash_cmd("cargo test"), err_result()];
+        let s = score_with_recurrence(&events, "me", None, &idx);
+        assert_eq!(s.breakdown.cross_session_recurrence, 0);
+    }
+
+    #[test]
+    fn cross_session_recurrence_counts_me_only_once_even_if_in_index() {
+        // Defends against a regression where adding myself again would
+        // bump the count past threshold spuriously.
+        let mut idx = RecurrenceIndex::default();
+        idx.touch("cargo test", "me");
+        idx.touch("cargo test", "other-1");
+        let events = vec![bash_cmd("cargo test"), err_result()];
+        let s = score_with_recurrence(&events, "me", None, &idx);
+        // Distinct: {me, other-1} = 2 → below threshold.
+        assert_eq!(s.breakdown.cross_session_recurrence, 0);
+    }
+
+    #[test]
+    fn cross_session_recurrence_skips_when_no_fingerprint() {
+        let mut idx = RecurrenceIndex::default();
+        idx.touch("cargo test", "s1");
+        idx.touch("cargo test", "s2");
+        idx.touch("cargo test", "s3");
+        // This session has nothing distinctive that failed.
+        let events = vec![user("hello"), ass()];
+        let s = score_with_recurrence(&events, "quiet", None, &idx);
+        assert_eq!(s.breakdown.cross_session_recurrence, 0);
+    }
+
+    #[test]
+    fn v1_records_still_load_with_new_breakdown_field() {
+        // ScoreBreakdown gained `cross_session_recurrence` since v2 was
+        // pinned. A v1 record (with version: 1 and no capture_state, no
+        // cross_session_recurrence) must still deserialize.
+        let raw = r#"{
+            "session_id": "old",
+            "score": 100,
+            "breakdown": {
+                "explicit_markers": 0,
+                "test_recovery": 50,
+                "edit_retries": 30,
+                "long_session": 0
+            },
+            "signals": [],
+            "turn_count": 5,
+            "last_scored_at": "2026-05-01T00:00:00Z",
+            "version": 1
+        }"#;
+        let s: SessionScore = serde_json::from_str(raw).expect("v1 still loads");
+        assert_eq!(s.breakdown.cross_session_recurrence, 0);
     }
 }

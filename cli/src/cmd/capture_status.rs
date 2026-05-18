@@ -83,5 +83,6 @@ fn serde_kind(k: &scorer::SignalKind) -> &'static str {
         scorer::SignalKind::TestRecovery => "test_recovery",
         scorer::SignalKind::EditRetry => "edit_retry",
         scorer::SignalKind::LongSession => "long_session",
+        scorer::SignalKind::CrossSessionRecurrence => "cross_session_recurrence",
     }
 }
