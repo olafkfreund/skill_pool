@@ -1,0 +1,10 @@
+/result
+/result-*
+/target/
+/node_modules/
+/.direnv/
+*.log
+.DS_Store
+
+# Phase 0 — local library cache; tracked separately by user installs
+/.local-library/
