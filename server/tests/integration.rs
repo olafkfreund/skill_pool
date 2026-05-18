@@ -30,6 +30,7 @@ struct Harness {
     base: String,
     acme_token: String,
     globex_token: String,
+    db: sqlx::PgPool,
     _pg: testcontainers::ContainerAsync<Postgres>,
     _storage_dir: tempfile::TempDir,
 }
@@ -83,6 +84,7 @@ async fn boot() -> Result<Harness> {
         base: format!("http://{addr}"),
         acme_token,
         globex_token,
+        db: pool,
         _pg: pg,
         _storage_dir: storage_dir,
     })
@@ -329,6 +331,15 @@ async fn full_publish_install_and_isolation() -> Result<()> {
     .send()
     .await?;
     assert_eq!(resp.status().as_u16(), 400);
+
+    // -------- audit row written for the publish --------
+    let audit: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM audit_events \
+         WHERE action = 'skill.publish' AND target_id = 'hello'",
+    )
+    .fetch_one(&h.db)
+    .await?;
+    assert_eq!(audit.0, 1, "expected exactly one audit row for the publish");
 
     // -------- duplicate publish: 400 --------
     let dup_bundle = build_bundle("---\nname: hello\ndescription: dup attempt.\n---\nbody\n");

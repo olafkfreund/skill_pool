@@ -22,10 +22,11 @@ pub struct Event<'a> {
 }
 
 pub async fn record(db: &PgPool, ev: Event<'_>) -> Result<()> {
+    // ip_addr column is INET; bind as text and cast explicitly so NULL/Some(String) both work.
     sqlx::query(
         "INSERT INTO audit_events \
          (tenant_id, actor_user, actor_token, action, target_kind, target_id, metadata, ip_addr, user_agent) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::inet, $9)",
     )
     .bind(ev.tenant_id)
     .bind(ev.actor_user)

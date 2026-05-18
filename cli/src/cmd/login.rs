@@ -1,10 +1,19 @@
+use std::io::{IsTerminal, Read};
+
 use anyhow::Result;
 
 use crate::config::{Config, RegistryConfig};
 
 pub async fn run(cfg: &Config, registry: &str, tenant: &str) -> Result<()> {
-    let token = rpassword::prompt_password("API token: ")?;
-    if token.trim().is_empty() {
+    let token = if std::io::stdin().is_terminal() {
+        rpassword::prompt_password("API token: ")?
+    } else {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    };
+    let token = token.trim().to_string();
+    if token.is_empty() {
         anyhow::bail!("token must not be empty");
     }
 

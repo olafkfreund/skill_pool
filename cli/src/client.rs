@@ -67,6 +67,7 @@ impl Client {
         &self.tenant
     }
 
+    #[allow(dead_code)] // reserved for `skill-pool doctor` registry-reachability check
     pub async fn healthz(&self) -> Result<serde_json::Value> {
         let url = self.base.join("/v1/healthz")?;
         let resp = self.http.get(url).send().await?;
@@ -76,11 +77,24 @@ impl Client {
         Ok(resp.json().await?)
     }
 
-    #[allow(dead_code)] // wired into `search` command in the next CLI iteration
-    pub async fn list_skills(&self, query: Option<&str>) -> Result<Vec<Skill>> {
+    pub async fn list_skills(
+        &self,
+        query: Option<&str>,
+        tags: &[String],
+        limit: Option<u32>,
+    ) -> Result<Vec<Skill>> {
         let mut url = self.base.join("/v1/skills")?;
-        if let Some(q) = query {
-            url.query_pairs_mut().append_pair("query", q);
+        {
+            let mut q = url.query_pairs_mut();
+            if let Some(s) = query {
+                q.append_pair("query", s);
+            }
+            if !tags.is_empty() {
+                q.append_pair("tags", &tags.join(","));
+            }
+            if let Some(n) = limit {
+                q.append_pair("limit", &n.to_string());
+            }
         }
         let resp = self.http.get(url).send().await?;
         let status = resp.status();

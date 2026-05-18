@@ -42,8 +42,20 @@ enum Cmd {
     Ensure,
     /// Add a skill to the manifest and install it.
     Add { slug: String },
-    /// Search the registry.
-    Search { query: String },
+    /// Search the registry. With no query, lists all skills.
+    Search {
+        /// Optional substring matched against slug and description (ILIKE).
+        query: Option<String>,
+        /// Comma-separated tags; ALL must be present on a result.
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Limit results (1..200).
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Emit JSON instead of a table — useful in scripts.
+        #[arg(long)]
+        json: bool,
+    },
     /// Publish a local skill directory to the registry.
     Publish {
         #[arg(value_name = "DIR")]
@@ -76,7 +88,12 @@ async fn main() -> Result<()> {
         Cmd::Login { registry, tenant } => cmd::login::run(&cfg, &registry, &tenant).await,
         Cmd::Ensure => cmd::ensure::run(&cfg).await,
         Cmd::Add { slug } => cmd::add::run(&cfg, &slug).await,
-        Cmd::Search { query } => cmd::search::run(&cfg, &query).await,
+        Cmd::Search {
+            query,
+            tags,
+            limit,
+            json,
+        } => cmd::search::run(&cfg, query.as_deref(), &tags, limit, json).await,
         Cmd::Publish { dir, slug, version } => {
             cmd::publish::run(&cfg, &dir, slug.as_deref(), &version).await
         }
