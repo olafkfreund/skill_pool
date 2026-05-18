@@ -3,7 +3,7 @@
 </script>
 
 <main class="mx-auto max-w-xl px-6 py-24 text-center">
-  <p class="text-sm font-medium uppercase tracking-widest text-[var(--sp-muted-fg)]">
+  <p class="text-sm font-medium tracking-widest text-[var(--sp-muted-fg)] uppercase">
     {page.status}
   </p>
   <h1 class="mt-2 text-3xl font-semibold text-[var(--sp-fg)]">

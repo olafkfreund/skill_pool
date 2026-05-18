@@ -74,10 +74,48 @@ jobs:
           RUST_BACKTRACE: 1
         run: cargo test --workspace --verbose
 
+  web:
+    name: Web (lint + check + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Prettier
+        run: npm run lint
+
+      - name: svelte-check
+        run: npm run check
+
+      - name: Build (adapter-node)
+        run: npm run build
+
+      - name: Upload SvelteKit build
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-pool-web-${{ github.sha }}
+          path: |
+            web/build
+            web/.svelte-kit/output
+          retention-days: 14
+          if-no-files-found: error
+
   build:
     name: Release build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, web]
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4

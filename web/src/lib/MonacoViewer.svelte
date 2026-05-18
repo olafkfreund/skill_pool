@@ -18,7 +18,13 @@
     onChange?: (next: string) => void;
   };
 
-  let { value, language = 'markdown', readOnly = false, height = '24rem', onChange }: Props = $props();
+  let {
+    value,
+    language = 'markdown',
+    readOnly = false,
+    height = '24rem',
+    onChange,
+  }: Props = $props();
 
   let container = $state<HTMLDivElement | null>(null);
   let editor: { dispose(): void; setValue(v: string): void; getValue(): string } | null = null;

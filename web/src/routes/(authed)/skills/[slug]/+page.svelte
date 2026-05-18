@@ -40,7 +40,7 @@
 <section class="space-y-6">
   {#if data.skill.when_to_use}
     <div>
-      <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--sp-muted-fg)]">
+      <h2 class="mb-2 text-sm font-semibold tracking-wide text-[var(--sp-muted-fg)] uppercase">
         When to use
       </h2>
       <p class="text-[var(--sp-fg)]">{data.skill.when_to_use}</p>
@@ -48,7 +48,9 @@
   {/if}
 
   <div>
-    <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[var(--sp-muted-fg)]">
+    <h2
+      class="mb-2 flex items-center gap-2 text-sm font-semibold tracking-wide text-[var(--sp-muted-fg)] uppercase"
+    >
       <FileCode size="14" /> SKILL.md
     </h2>
     {#if data.body}
@@ -61,7 +63,7 @@
   </div>
 
   <div>
-    <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--sp-muted-fg)]">
+    <h2 class="mb-2 text-sm font-semibold tracking-wide text-[var(--sp-muted-fg)] uppercase">
       Install
     </h2>
     <pre

@@ -6,7 +6,9 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ locals, cookies }) => {
   const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
   const server = await getTheme(auth);
-  const theme = server ? toClientTheme(server) : { ...DEFAULT_THEME, brandName: locals.tenant.slug };
+  const theme = server
+    ? toClientTheme(server)
+    : { ...DEFAULT_THEME, brandName: locals.tenant.slug };
   return { theme };
 };
 

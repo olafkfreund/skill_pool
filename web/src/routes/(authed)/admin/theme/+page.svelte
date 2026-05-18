@@ -8,9 +8,7 @@
 
   // Editable copy. Intentionally non-reactive — `untrack` tells the compiler
   // we mean it. The `$effect` below re-syncs after a successful save.
-  let theme = $state<Theme>(
-    untrack(() => ({ ...(form?.draft ?? form?.theme ?? data.theme) })),
-  );
+  let theme = $state<Theme>(untrack(() => ({ ...(form?.draft ?? form?.theme ?? data.theme) })));
 
   $effect(() => {
     if (form?.theme && form?.saved) {
@@ -47,8 +45,8 @@
 <header class="mb-6">
   <h1 class="text-2xl font-semibold">Theme</h1>
   <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-    Brand colours and logo. Saved theme renders for everyone on this tenant — including the
-    login page. Body-text contrast is checked on save (WCAG AA = 4.5:1).
+    Brand colours and logo. Saved theme renders for everyone on this tenant — including the login
+    page. Body-text contrast is checked on save (WCAG AA = 4.5:1).
   </p>
 </header>
 
@@ -161,7 +159,7 @@
       border-radius: {theme.radius};
     "
   >
-    <p class="mb-2 text-xs uppercase tracking-widest" style="color: {theme.mutedFg}">
+    <p class="mb-2 text-xs tracking-widest uppercase" style="color: {theme.mutedFg}">
       Live preview
     </p>
     <h2 class="text-2xl font-semibold">{theme.brandName || 'skill-pool'}</h2>

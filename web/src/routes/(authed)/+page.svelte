@@ -22,16 +22,13 @@
 
 <form class="mb-6 flex max-w-md items-center gap-2" data-sveltekit-reload>
   <div class="relative flex-1">
-    <Search
-      size="16"
-      class="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--sp-muted-fg)]"
-    />
+    <Search size="16" class="absolute top-1/2 left-3 -translate-y-1/2 text-[var(--sp-muted-fg)]" />
     <input
       type="search"
       name="q"
       value={data.query}
       placeholder="search slug or description…"
-      class="w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] py-2 pl-9 pr-3 text-sm focus:border-[var(--sp-primary)] focus:outline-none"
+      class="w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] py-2 pr-3 pl-9 text-sm focus:border-[var(--sp-primary)] focus:outline-none"
     />
   </div>
   <button

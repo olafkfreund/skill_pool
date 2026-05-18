@@ -33,8 +33,8 @@
 <header class="mb-6">
   <h1 class="text-2xl font-semibold">New skill</h1>
   <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-    Write a SKILL.md, validate it (frontmatter / secret scan / WCAG-equivalent quality gates),
-    then publish. Publishing creates the first version; subsequent versions reuse the same slug.
+    Write a SKILL.md, validate it (frontmatter / secret scan / WCAG-equivalent quality gates), then
+    publish. Publishing creates the first version; subsequent versions reuse the same slug.
   </p>
 </header>
 
@@ -43,7 +43,7 @@
     class="mb-4 flex items-start gap-2 rounded-[var(--sp-radius)] border border-red-300 bg-red-50 p-3 text-sm text-red-800"
   >
     <AlertTriangle size="16" class="mt-0.5 shrink-0" />
-    <span class="whitespace-pre-wrap break-words">{form.error}</span>
+    <span class="break-words whitespace-pre-wrap">{form.error}</span>
   </div>
 {:else if form?.validated}
   <div

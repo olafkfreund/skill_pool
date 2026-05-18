@@ -87,7 +87,10 @@ export async function getTheme(auth: Auth): Promise<ServerTheme | null> {
   return resp.json();
 }
 
-export async function putTheme(auth: Auth, theme: ServerTheme): Promise<{ ok: boolean; status: number; error?: string }> {
+export async function putTheme(
+  auth: Auth,
+  theme: ServerTheme,
+): Promise<{ ok: boolean; status: number; error?: string }> {
   const resp = await call('PUT', '/v1/theme', auth, { jsonBody: theme });
   if (resp.ok) return { ok: true, status: resp.status };
   const error = await resp.text();
