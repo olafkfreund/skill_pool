@@ -1,8 +1,10 @@
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::metrics;
 use crate::state::AppState;
 
 mod bootstrap;
@@ -25,6 +27,8 @@ const MAX_BUNDLE_BYTES: usize = 5 * 1024 * 1024;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        // Prometheus scrape endpoint — no auth, no middleware overhead.
+        .route("/metrics", get(metrics::handler))
         .route("/v1/healthz", get(health::healthz))
         .route("/v1/skills", get(skills::list).post(skills::publish))
         .route("/v1/skills/validate", post(skills::validate))
@@ -110,5 +114,12 @@ pub fn router(state: AppState) -> Router {
         )
         .layer(RequestBodyLimitLayer::new(MAX_BUNDLE_BYTES + 64 * 1024))
         .layer(TraceLayer::new_for_http())
+        // Prometheus instrumentation: records count, latency, and in-flight
+        // for every request that enters the router. Applied after TraceLayer
+        // so both observe the same request.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            metrics::track,
+        ))
         .with_state(state)
 }
