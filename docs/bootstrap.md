@@ -15,6 +15,10 @@ all if `direnv` is wired up. This doc covers the two paths.
   registry → confirm → save manifest → run ensure.
 - **direnv hook** — `use skill_pool` in `.envrc` calls
   `skill-pool ensure --quiet` on shell entry; silent on the happy path.
+- **Claude SessionStart hook** — `skill-pool hook-install` wires a
+  `SessionStart` entry into `.claude/settings.json` so every Claude
+  session re-runs `skill-pool ensure --quiet`. Catches users who skip
+  direnv or open Claude directly.
 
 ## Tenant admin setup (one-time per team)
 
@@ -99,6 +103,46 @@ The hook **never blocks shell entry**. If the registry is unreachable or
 the CLI isn't installed, you get a `log_status` warning and the shell
 loads normally.
 
+### Pattern C: Claude SessionStart hook
+
+Complements direnv — direnv fires on shell entry, the SessionStart hook
+fires when Claude opens a session in the project. Useful for users who
+skip direnv or launch Claude directly without `cd`-ing first.
+
+```bash
+cd my-project
+skill-pool hook-install
+# installed skill-pool SessionStart hook in /path/.claude/settings.json
+```
+
+What it writes into `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "skill-pool ensure --quiet", "timeout": 30 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Existing keys (`model`, `permissions`, other `SessionStart` entries) are
+preserved — the install merges JSON, it doesn't overwrite.
+
+Flags:
+- `--remove` — strip the hook (leaves the rest of the file intact)
+- `--print` — dump the merged settings to stdout without writing
+
+Like direnv, the hook is best-effort: if `skill-pool` isn't on PATH or
+the registry is unreachable, the session continues normally (Claude's
+hook system swallows non-fatal failures).
+
 ## Manifest reference
 
 `.skill-pool/manifest.toml` lives in the repo, gets committed.
@@ -124,10 +168,6 @@ The manifest is what `skill-pool ensure` reads. Both `bootstrap` and
 
 ## What's NOT yet wired (later iterations)
 
-- **SessionStart Claude Code hook** — re-runs `ensure --quiet` when a
-  Claude session starts in this dir. Currently you need `direnv` to get
-  per-`cd` updates; once the SessionStart hook lands, even plain shells
-  pick up new skills as soon as Claude opens.
 - **Manifest deep-parse tier** — currently `detect` reads top-level
   `Cargo.toml`. Workspace member traversal + AST parsing for richer
   framework distinctions lands later.

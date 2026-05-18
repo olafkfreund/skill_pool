@@ -102,6 +102,17 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Install a Claude Code SessionStart hook that runs `skill-pool ensure
+    /// --quiet` on every session start. Writes to .claude/settings.json in
+    /// the current project. Preserves all other settings.
+    HookInstall {
+        /// Remove the hook instead of installing it.
+        #[arg(long)]
+        remove: bool,
+        /// Print the merged settings.json content to stdout; don't write.
+        #[arg(long)]
+        print: bool,
+    },
 }
 
 #[tokio::main]
@@ -138,5 +149,6 @@ async fn main() -> Result<()> {
             dry_run,
         } => cmd::bootstrap::run(&cfg, detect, yes, dry_run).await,
         Cmd::DirenvInstall { force } => cmd::direnv_install::run(force),
+        Cmd::HookInstall { remove, print } => cmd::hook_install::run(remove, print),
     }
 }
