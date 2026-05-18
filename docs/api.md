@@ -48,6 +48,7 @@ Query params:
 | `limit`          | int       | Default 50, clamped to 1..200                                                        |
 | `semantic`       | string    | Rank by cosine similarity of `description_embedding` (Phase 5)                       |
 | `min_similarity` | float     | Minimum cosine similarity (0.0..1.0) when `semantic` is set. Default 0.0             |
+| `kind`           | string    | `skill` (default), `agent`, or `command`. The same catalog table holds all three.    |
 
 When `semantic` is omitted, results are ordered by `slug, created_at DESC` and the response shape is unchanged from Phase 1.
 
@@ -70,6 +71,14 @@ Response (semantic):
 ```
 
 `semantic` and `tags` compose — both filters apply. `semantic` and `query` (keyword) are mutually exclusive in effect: `semantic` takes precedence.
+
+### Agents and commands (Phase 5+)
+
+The `kind` discriminator lets one catalog row be a skill, an agent (Claude Code subagent), or a slash-command. All three share the same schema, validation, dependency graph, embedding column, and decay model. The other catalog endpoints (`GET /v1/skills/{slug}`, `/bundle.tar.gz`, `/skill-md`, `/detail`) accept the same `?kind=` query param; default is `skill`.
+
+`POST /v1/skills` (publish) accepts an optional `"kind": "agent"|"command"` in the metadata JSON; omitting it defaults to `skill` so existing clients are unchanged.
+
+Decay candidates and the MCP search adapter are skills-only for v1.
 
 ## `GET /v1/tenant/skills/decay` — decay candidates (admin)
 

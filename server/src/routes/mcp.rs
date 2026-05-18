@@ -300,12 +300,15 @@ async fn call_search(state: &AppState, caller: &AuthedCaller, args: Value) -> Re
             );
         };
         let lit = crate::embedding::vector_to_pg_literal(&v);
+        // MCP search is skills-only for v1; agents/commands surface in the
+        // portal but aren't yet exposed to Claude through MCP.
         sqlx::query_as(
             "WITH latest AS ( \
                SELECT DISTINCT ON (slug) \
                  slug, version, description, when_to_use, tags, created_at, description_embedding \
                FROM skills \
                WHERE tenant_id = $1 \
+                 AND kind = 'skill' \
                  AND status = 'published' \
                  AND ($2::text[] = '{}' OR tags @> $2) \
                  AND description_embedding IS NOT NULL \
@@ -333,6 +336,7 @@ async fn call_search(state: &AppState, caller: &AuthedCaller, args: Value) -> Re
                 NULL::real AS similarity, created_at \
              FROM skills \
              WHERE tenant_id = $1 \
+               AND kind = 'skill' \
                AND status = 'published' \
                AND ($2::text IS NULL OR description ILIKE $2 OR slug ILIKE $2) \
                AND ($3::text[] = '{}' OR tags @> $3) \
@@ -395,7 +399,7 @@ async fn call_get_skill(
         .map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))?;
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT bundle_uri FROM skills \
-         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         WHERE tenant_id = $1 AND slug = $2 AND kind = 'skill' AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(caller.tenant.tenant_id)

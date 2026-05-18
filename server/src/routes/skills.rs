@@ -57,6 +57,28 @@ pub struct ListQuery {
     /// Minimum similarity (0.0..=1.0) when `semantic` is set. Defaults to 0.0
     /// — return all matches ordered by similarity.
     pub min_similarity: Option<f32>,
+    /// Catalog-item kind. Defaults to `skill`. Accepts `agent` or
+    /// `command` as parallel surfaces (Phase 5+). Any other value is
+    /// a 400.
+    pub kind: Option<String>,
+}
+
+/// The three catalog-item kinds. Normalising the inbound string here
+/// keeps all the SQL builders honest about valid values.
+const VALID_KINDS: &[&str] = &["skill", "agent", "command"];
+const DEFAULT_KIND: &str = "skill";
+
+fn resolve_kind(raw: Option<&str>) -> AppResult<&'static str> {
+    let v = raw.unwrap_or(DEFAULT_KIND).trim();
+    match v {
+        "skill" => Ok("skill"),
+        "agent" => Ok("agent"),
+        "command" => Ok("command"),
+        other => Err(AppError::BadRequest(format!(
+            "kind must be one of {:?}, got `{other}`",
+            VALID_KINDS
+        ))),
+    }
 }
 
 pub async fn list(
@@ -65,6 +87,7 @@ pub async fn list(
     Query(q): Query<ListQuery>,
 ) -> AppResult<Json<Vec<Skill>>> {
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let kind = resolve_kind(q.kind.as_deref())?;
     let tag_list: Vec<String> = q
         .tags
         .as_deref()
@@ -101,6 +124,7 @@ pub async fn list(
                  description_embedding \
                FROM skills \
                WHERE tenant_id = $1 \
+                 AND kind = $6 \
                  AND status = 'published' \
                  AND ($2::text[] = '{}' OR tags @> $2) \
                  AND description_embedding IS NOT NULL \
@@ -118,19 +142,21 @@ pub async fn list(
         .bind(lit)
         .bind(min_sim)
         .bind(limit)
+        .bind(kind)
         .fetch_all(state.db())
         .await?;
 
         return Ok(Json(rows.into_iter().map(Into::into).collect()));
     }
 
-    // --- Keyword / tag / plain-list branch (unchanged) ------------------
+    // --- Keyword / tag / plain-list branch ------------------------------
     let needle = q.query.as_deref().map(|s| format!("%{s}%"));
     let rows: Vec<SkillRow> = sqlx::query_as(
         "SELECT DISTINCT ON (slug) \
             slug, version, description, when_to_use, tags, status, created_at \
          FROM skills \
          WHERE tenant_id = $1 \
+           AND kind = $5 \
            AND status = 'published' \
            AND ($2::text IS NULL OR description ILIKE $2 OR slug ILIKE $2) \
            AND ($3::text[] = '{}' OR tags @> $3) \
@@ -141,25 +167,37 @@ pub async fn list(
     .bind(needle)
     .bind(&tag_list)
     .bind(limit)
+    .bind(kind)
     .fetch_all(state.db())
     .await?;
 
     Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
+/// Tiny query struct shared by all get_* endpoints that take `:slug`.
+/// `?kind=agent` etc. is how callers fetch a non-default kind by slug
+/// until slice 2 adds dedicated `/v1/agents/...` paths.
+#[derive(Deserialize)]
+pub struct KindQuery {
+    pub kind: Option<String>,
+}
+
 pub async fn get_one(
     State(state): State<AppState>,
     tenant: TenantCtx,
     Path(slug): Path<String>,
+    Query(kq): Query<KindQuery>,
 ) -> AppResult<Json<Skill>> {
+    let kind = resolve_kind(kq.kind.as_deref())?;
     let row: Option<SkillRow> = sqlx::query_as(
         "SELECT slug, version, description, when_to_use, tags, status, created_at \
          FROM skills \
-         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(tenant.tenant_id)
     .bind(&slug)
+    .bind(kind)
     .fetch_optional(state.db())
     .await?;
 
@@ -171,17 +209,20 @@ pub async fn get_skill_md(
     State(state): State<AppState>,
     caller: AuthedCaller,
     Path(slug): Path<String>,
+    Query(kq): Query<KindQuery>,
 ) -> AppResult<String> {
     use flate2::read::GzDecoder;
     use std::io::Read;
 
+    let kind = resolve_kind(kq.kind.as_deref())?;
     let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
         "SELECT id, bundle_uri FROM skills \
-         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(caller.tenant.tenant_id)
     .bind(&slug)
+    .bind(kind)
     .fetch_optional(state.db())
     .await?;
     let (skill_id, key) = row.ok_or(AppError::NotFound)?;
@@ -228,14 +269,17 @@ pub async fn get_bundle(
     State(state): State<AppState>,
     caller: AuthedCaller,
     Path(slug): Path<String>,
+    Query(kq): Query<KindQuery>,
 ) -> AppResult<Response> {
+    let kind = resolve_kind(kq.kind.as_deref())?;
     let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
         "SELECT id, bundle_uri FROM skills \
-         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(caller.tenant.tenant_id)
     .bind(&slug)
+    .bind(kind)
     .fetch_optional(state.db())
     .await?;
 
@@ -320,6 +364,9 @@ struct PublishMetadata {
     when_to_use: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    /// Catalog kind. Defaults to `skill` for backward compat.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 pub async fn publish(
@@ -370,6 +417,7 @@ pub async fn publish(
     }
 
     let validated = bundle::validate(&bytes).map_err(bundle_to_app_err)?;
+    let kind = resolve_kind(meta.kind.as_deref())?;
 
     // Persist to storage first; on DB conflict we leave one orphan blob — a
     // background sweeper (Phase 5) cleans those. The reverse order would
@@ -401,8 +449,8 @@ pub async fn publish(
 
     let row: Result<SkillRowWithId, sqlx::Error> = sqlx::query_as(
         "INSERT INTO skills \
-           (tenant_id, slug, version, description, when_to_use, tags, bundle_uri, bundle_sha256, created_by, description_embedding) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9::text::vector) \
+           (tenant_id, slug, version, description, when_to_use, tags, bundle_uri, bundle_sha256, created_by, description_embedding, kind) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9::text::vector, $10) \
          RETURNING id, slug, version, description, when_to_use, tags, status, created_at",
     )
     .bind(caller.tenant.tenant_id)
@@ -414,6 +462,7 @@ pub async fn publish(
     .bind(&key)
     .bind(&validated.sha256_hex)
     .bind(embedding_literal)
+    .bind(kind)
     .fetch_one(state.db())
     .await;
 
@@ -545,16 +594,19 @@ pub async fn get_detail(
     State(state): State<AppState>,
     tenant: TenantCtx,
     Path(slug): Path<String>,
+    Query(kq): Query<KindQuery>,
 ) -> AppResult<Json<SkillDetail>> {
+    let kind = resolve_kind(kq.kind.as_deref())?;
     let parent: Option<SkillDetailRow> = sqlx::query_as(
         "SELECT id, slug, version, description, when_to_use, tags, status, created_at, \
                 use_count, last_used_at \
          FROM skills \
-         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(tenant.tenant_id)
     .bind(&slug)
+    .bind(kind)
     .fetch_optional(state.db())
     .await?;
     let parent = parent.ok_or(AppError::NotFound)?;

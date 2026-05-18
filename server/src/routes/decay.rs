@@ -53,12 +53,15 @@ pub async fn list_candidates(
 
     // CTE picks the latest published version per slug, then filters by
     // staleness on that result. Mirrors the list endpoint's semantics.
+    // Skills-only by default for v1. Agents and commands would need
+    // their own decay tuning (different baseline usage); revisit when
+    // those kinds have meaningful traffic.
     let rows: Vec<DecayCandidate> = sqlx::query_as(
         "WITH latest AS ( \
            SELECT DISTINCT ON (slug) \
              slug, version, description, use_count, last_used_at, created_at \
            FROM skills \
-           WHERE tenant_id = $1 AND status = 'published' \
+           WHERE tenant_id = $1 AND kind = 'skill' AND status = 'published' \
            ORDER BY slug, created_at DESC \
          ) \
          SELECT slug, version, description, use_count, last_used_at, created_at \
