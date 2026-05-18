@@ -21,7 +21,7 @@ export const DEFAULT_THEME: Theme = {
   bg: '#ffffff',
   fg: '#0f172a',
   muted: '#f1f5f9',
-  mutedFg: '#64748b',
+  mutedFg: '#475569',
   border: '#e2e8f0',
   radius: '0.5rem',
   brandName: 'skill-pool',

@@ -51,7 +51,7 @@ impl Theme {
             bg: "#ffffff".into(),
             fg: "#0f172a".into(),
             muted: "#f1f5f9".into(),
-            muted_fg: "#64748b".into(),
+            muted_fg: "#475569".into(),
             border: "#e2e8f0".into(),
             radius: "0.5rem".into(),
             logo_uri: None,
