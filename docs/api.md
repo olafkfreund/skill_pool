@@ -246,9 +246,31 @@ JSON-RPC 2.0 adapter so a developer's Claude session can search the team catalog
 
 Response: same shape, plus version history (when implemented).
 
-## `GET /v1/skills/{slug}/bundle.tar.gz` — download (stub)
+## `GET /v1/skills/{slug}/bundle.tar.gz` — download
 
-Streams the bundle or 302-redirects to a short-lived signed URL on object storage.
+Returns the published bundle for `{slug}`. Two response shapes depending on
+storage backend:
+
+| Backend                       | Response                                                    |
+|-------------------------------|-------------------------------------------------------------|
+| `s3://`, `gcs://`, `azblob://`| **307 Temporary Redirect** to a 5-minute presigned URL      |
+| `fs://`                       | **200 OK** with `Content-Type: application/gzip` body       |
+
+Query params:
+
+| Param   | Type | Description                                                    |
+|---------|------|----------------------------------------------------------------|
+| `kind`  | str  | `skill` (default), `agent`, or `command`                       |
+| `bytes` | bool | If `true`, force the streaming-bytes path regardless of backend.|
+
+Use `?bytes=true` from corporate proxies that strip cross-origin redirects
+or test harnesses asserting on `Content-Disposition`. The presigned URL
+expires in 300 seconds — clients should not cache it; re-call the endpoint
+to refresh.
+
+Both paths emit a `download` event into `skill_usage_events` (used by the
+decay model and `GET /v1/tenant/usage/*` aggregations) before returning,
+so usage counts are correct regardless of the response shape.
 
 ## `POST /v1/skills` — publish (stub)
 

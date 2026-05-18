@@ -263,6 +263,33 @@ async fn full_publish_install_and_isolation() -> Result<()> {
     // Sanity: gzip magic bytes
     assert_eq!(&bytes[..2], &[0x1f, 0x8b], "expected gzip magic header");
 
+    // -------- ?bytes=true forces the streaming path --------
+    // fs:// has no presign so this is the default behaviour, but the test
+    // pins the contract: callers can always force-stream regardless of
+    // backend capabilities (e.g. corporate proxies stripping redirects).
+    let resp = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/hello/bundle.tar.gz?bytes=true",
+            "acme",
+        ),
+        &h.acme_token,
+    )
+    .send()
+    .await?;
+    assert_eq!(resp.status().as_u16(), 200, "?bytes=true should 200");
+    let cd = resp
+        .headers()
+        .get(reqwest::header::CONTENT_DISPOSITION)
+        .map(|v| v.to_str().unwrap_or("").to_owned())
+        .unwrap_or_default();
+    assert!(
+        cd.contains("attachment"),
+        "expected attachment Content-Disposition on byte path, got {cd:?}"
+    );
+
     // -------- download as globex: 404 --------
     let resp = authed(
         req(

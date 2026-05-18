@@ -182,6 +182,19 @@ pub struct KindQuery {
     pub kind: Option<String>,
 }
 
+/// Query params for `GET /v1/skills/{slug}/bundle.tar.gz`.
+///
+/// `bytes=true` forces the proxy-bytes path even when the storage backend
+/// supports presigned URLs. Two use cases:
+///   - corporate proxies that strip cross-origin redirects
+///   - test harnesses asserting on Content-Disposition headers
+#[derive(Deserialize)]
+pub struct BundleQuery {
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub bytes: bool,
+}
+
 pub async fn get_one(
     State(state): State<AppState>,
     tenant: TenantCtx,
@@ -269,9 +282,9 @@ pub async fn get_bundle(
     State(state): State<AppState>,
     caller: AuthedCaller,
     Path(slug): Path<String>,
-    Query(kq): Query<KindQuery>,
+    Query(bq): Query<BundleQuery>,
 ) -> AppResult<Response> {
-    let kind = resolve_kind(kq.kind.as_deref())?;
+    let kind = resolve_kind(bq.kind.as_deref())?;
     let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
         "SELECT id, bundle_uri FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
@@ -297,8 +310,13 @@ pub async fn get_bundle(
     )
     .await;
 
-    if let Ok(Some(url)) = state.storage().presign_read(&key).await {
-        return Ok(Redirect::temporary(&url).into_response());
+    // Redirect to a short-lived signed URL when the backend supports it
+    // (S3 / GCS / Azure) and the caller hasn't asked for bytes explicitly.
+    // fs:// backends always fall through to streaming.
+    if !bq.bytes {
+        if let Ok(Some(url)) = state.storage().presign_read(&key).await {
+            return Ok(Redirect::temporary(&url).into_response());
+        }
     }
 
     let bytes = state
