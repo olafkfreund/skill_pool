@@ -437,6 +437,35 @@ export interface TopSkillRow {
   total: number;
 }
 
+export interface StackMapping {
+  stack: string;
+  skill: string;
+}
+
+export async function listStackMappings(auth: Auth): Promise<StackMapping[]> {
+  const resp = await call('GET', '/v1/tenant/stack-mappings', auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function upsertStackMapping(
+  auth: Auth,
+  body: StackMapping,
+): Promise<{ ok: true; mapping: StackMapping } | { ok: false; status: number; error: string }> {
+  const resp = await call('POST', '/v1/tenant/stack-mappings', auth, { jsonBody: body });
+  if (resp.ok) return { ok: true, mapping: (await resp.json()) as StackMapping };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function removeStackMapping(
+  auth: Auth,
+  body: StackMapping,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', '/v1/tenant/stack-mappings', auth, { jsonBody: body });
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
 export async function getUsageTimeline(auth: Auth, days: number): Promise<TimelineBucket[]> {
   const resp = await call('GET', `/v1/tenant/usage/timeline?days=${days}`, auth);
   if (!resp.ok) throw new ApiError(resp.status, await resp.text());

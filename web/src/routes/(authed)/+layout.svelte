@@ -11,6 +11,7 @@
     Skull,
     BookOpen,
     BarChart3,
+    Layers,
     LogOut,
   } from '@lucide/svelte';
 
@@ -39,6 +40,7 @@
         { href: '/admin/members', icon: Users, label: 'Members' },
         { href: '/admin/sso', icon: ShieldCheck, label: 'SSO' },
         { href: '/admin/notifications', icon: Bell, label: 'Notifications' },
+        { href: '/admin/stack-mappings', icon: Layers, label: 'Stack mappings' },
         { href: '/admin/domain', icon: Globe2, label: 'Domain' },
       ],
     },

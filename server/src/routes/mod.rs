@@ -17,6 +17,7 @@ mod oidc;
 mod saml;
 mod scim;
 mod skills;
+mod stack_mappings;
 mod theme;
 mod usage;
 
@@ -70,6 +71,14 @@ pub fn router(state: AppState) -> Router {
         // Telemetry dashboards (Phase 5)
         .route("/v1/tenant/usage/timeline", get(usage::timeline))
         .route("/v1/tenant/usage/top", get(usage::top))
+        // Stack mappings — curated stack-tag → skill-slug recommendations
+        // that drive `skill-pool bootstrap` (Phase 3 finish-up).
+        .route(
+            "/v1/tenant/stack-mappings",
+            get(stack_mappings::list)
+                .post(stack_mappings::upsert)
+                .delete(stack_mappings::remove),
+        )
         // MCP transport (Phase 5) — JSON-RPC adapter for skill search
         .route("/v1/mcp", post(mcp::handle))
         // OIDC
