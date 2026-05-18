@@ -136,10 +136,12 @@ Existing keys (`model`, `permissions`, other `SessionStart` entries) are
 preserved — the install merges JSON, it doesn't overwrite.
 
 Flags:
-- `--remove` — strip the hook (leaves the rest of the file intact)
+- `--remove` — strip our hooks (leaves the rest of the file intact)
 - `--print` — dump the merged settings to stdout without writing
+- `--with-scorer` — also install the Phase 4.5 `Stop` hook
+  (`skill-pool capture-score`). See `docs/capture.md`.
 
-Like direnv, the hook is best-effort: if `skill-pool` isn't on PATH or
+Like direnv, the hooks are best-effort: if `skill-pool` isn't on PATH or
 the registry is unreachable, the session continues normally (Claude's
 hook system swallows non-fatal failures).
 

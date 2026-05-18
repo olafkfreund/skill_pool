@@ -109,12 +109,71 @@ Drafts live under a separate object-storage prefix so that:
 {tenant_id}/{slug}/{version}.tar.gz          ← after publish
 ```
 
-## What's NOT yet wired (Phase 4.5+)
+## Signal scorer (Phase 4.5 — wired today)
 
-- **Signal scorer** — runs in a `Stop` hook every assistant turn, scores
-  the session against explicit markers / failing→passing test
-  transitions / multiple-retry patterns. Auto-fires the capturer when
-  the score crosses a threshold. Off by default in v1.
+The scorer is a `Stop`-hook that fires after every assistant turn,
+reads the session transcript, and persists a deterministic score to
+`~/.skill-pool/sessions/<session_id>.json`. **No LLM. No network. No
+mid-session prompts.** Designed to run in well under 50 ms.
+
+### Install
+
+```bash
+skill-pool hook-install --with-scorer
+```
+
+This installs both:
+- `SessionStart` → `skill-pool ensure --quiet` (Phase 3)
+- `Stop`        → `skill-pool capture-score`  (Phase 4.5)
+
+`--remove` pulls both. The CLI preserves any other hooks in
+`.claude/settings.json` — both install and remove operate on a JSON
+merge, never an overwrite.
+
+### Signals scored today
+
+| Rule                        | Weight | Threshold                                       |
+| --------------------------- | -----: | ----------------------------------------------- |
+| Explicit marker             |   1000 | user said "remember this" / "TIL" / "/capture-skill" |
+| Failing → passing test recovery | 50 | same `cargo test`/`pytest`/`npm test` failed ≥2× then passed |
+| Edit retries on one file    |     30 | >3 failed `Edit`/`Write` on the same `file_path` |
+| Long session                |      5 | >20 assistant turns                              |
+
+Default draft-worthy threshold: **score ≥ 100**. The capturer daemon
+(Phase 4.6) will pick from `sessions/` files at or above this; for now
+the threshold drives the ★ marker in `capture-status`.
+
+### Inspect
+
+```bash
+skill-pool capture-status
+# 12 sessions scored (3 ≥ draft threshold of 100)
+#
+#   SCORE TURNS          CWD                                      SESSION
+#  ★1050  3              /proj/foo                                signals-1
+#         ↳ explicit_marker: user said `remember this`
+#  ★ 130  18             /proj/bar                                a4b2c1d…
+#         ↳ test_recovery: `cargo test` failed 3× then passed
+#     5   26             /proj/baz                                f8e9d2c…
+#         ↳ long_session: 26 assistant turns in this session
+```
+
+`--json` dumps the raw records — useful for piping into the capturer
+daemon when it lands.
+
+### Deferred signals (Phase 4.6)
+
+- **Cross-session recurrence** — same retry pattern across ≥3 sessions
+  → high weight. Needs a persisted index of past sessions.
+- **Novel command** — Bash command not present in shell history → medium.
+  Needs to compare against `~/.bash_history` / `~/.zsh_history`.
+
+Both are layered into `scorer.rs` next to the existing rules when their
+storage layer lands; the score record's `version` field is bumped on
+schema changes.
+
+## What's NOT yet wired (Phase 4.6+)
+
 - **`skill-pool-capturer` daemon** — systemd user unit that pulls
   high-score sessions, runs a two-stage LLM pipeline (Haiku extractor →
   Sonnet drafter), and POSTs to `/v1/drafts` with origin
@@ -124,10 +183,11 @@ Drafts live under a separate object-storage prefix so that:
   "merge proposal" instead of a fresh draft.
 - **Curator notifications** — desktop / email "N drafts ready for
   review" pings when the inbox grows.
+- **Cross-session recurrence + novel-command signals** — see above.
 
-The first slice ships the human-in-the-loop path with no LLM work and no
-in-session prompts — exactly the "explicit path stable before scorer"
-policy in the master plan.
+The signal scorer ships today as the cheap gate; the LLM drafter only
+runs on the small fraction of sessions whose score clears the threshold
+— exactly the "precision over recall" policy in the master plan.
 
 ## Audit trail
 

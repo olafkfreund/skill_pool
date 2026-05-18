@@ -8,6 +8,7 @@ mod config;
 mod detect;
 mod install;
 mod manifest;
+mod scorer;
 
 #[derive(Parser)]
 #[command(
@@ -88,6 +89,22 @@ enum Cmd {
         #[arg(long, value_delimiter = ',')]
         tags: Vec<String>,
     },
+    /// Score a session for "this was worth capturing" signals (Phase 4.5).
+    /// Designed to run as the Claude Code Stop hook — reads the hook payload
+    /// from stdin, runs cheap deterministic rules (no LLM), persists the
+    /// score under ~/.skill-pool/sessions/. Exits 0 on any error so the
+    /// hook never blocks the user.
+    CaptureScore {
+        /// Read the hook payload from a file instead of stdin.
+        #[arg(long, value_name = "PATH")]
+        from_file: Option<std::path::PathBuf>,
+    },
+    /// List persisted session scores, ranked. Star marks draft-worthy
+    /// sessions. `--json` dumps the raw records.
+    CaptureStatus {
+        #[arg(long)]
+        json: bool,
+    },
     /// Diagnose: list loaded skills, dangling symlinks, drift.
     Doctor,
     /// Detect the current project's stack from filesystem fingerprints.
@@ -117,16 +134,20 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Install a Claude Code SessionStart hook that runs `skill-pool ensure
-    /// --quiet` on every session start. Writes to .claude/settings.json in
-    /// the current project. Preserves all other settings.
+    /// Install Claude Code hooks into .claude/settings.json. Installs the
+    /// SessionStart hook (`skill-pool ensure --quiet`). With `--with-scorer`,
+    /// also installs the Stop hook (`skill-pool capture-score`) for Phase
+    /// 4.5 signal scoring. Preserves all other settings.
     HookInstall {
-        /// Remove the hook instead of installing it.
+        /// Remove our hooks (both SessionStart and Stop) instead of installing.
         #[arg(long)]
         remove: bool,
         /// Print the merged settings.json content to stdout; don't write.
         #[arg(long)]
         print: bool,
+        /// Also install the Stop hook that scores each session.
+        #[arg(long)]
+        with_scorer: bool,
     },
 }
 
@@ -162,6 +183,11 @@ async fn main() -> Result<()> {
             notes,
             tags,
         } => cmd::capture::run(&cfg, &dir, slug.as_deref(), notes.as_deref(), &tags).await,
+        Cmd::CaptureScore { from_file } => match from_file {
+            Some(p) => cmd::capture_score::run_from_file(&p),
+            None => cmd::capture_score::run(),
+        },
+        Cmd::CaptureStatus { json } => cmd::capture_status::run(json),
         Cmd::Doctor => cmd::doctor::run(&cfg),
         Cmd::Detect { json } => cmd::detect::run(json),
         Cmd::Bootstrap {
@@ -170,6 +196,10 @@ async fn main() -> Result<()> {
             dry_run,
         } => cmd::bootstrap::run(&cfg, detect, yes, dry_run).await,
         Cmd::DirenvInstall { force } => cmd::direnv_install::run(force),
-        Cmd::HookInstall { remove, print } => cmd::hook_install::run(remove, print),
+        Cmd::HookInstall {
+            remove,
+            print,
+            with_scorer,
+        } => cmd::hook_install::run(remove, print, with_scorer),
     }
 }
