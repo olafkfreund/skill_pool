@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  lint:
+    name: Lint (fmt + clippy + shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+      - name: Install shellcheck + shfmt
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          SHFMT_VERSION=v3.8.0
+          curl -fsSL -o /tmp/shfmt \
+            https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64
+          sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
+          shfmt --version
+          shellcheck --version
+
+      - name: Lint shell scripts
+        run: |
+          shellcheck scripts/*.sh
+          shfmt -i 2 -ci -d scripts
+
+  test:
+    name: Tests (unit + integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Pre-pull Postgres image (testcontainers backend)
+        run: docker pull postgres:alpine
+
+      - name: cargo test --workspace
+        env:
+          # testcontainers uses the runner's docker socket; nothing else needed.
+          RUST_BACKTRACE: 1
+        run: cargo test --workspace --verbose
+
+  build:
+    name: Release build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+          save-if: true
+
+      - name: Build release binaries
+        run: cargo build --workspace --release --bins
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-pool-binaries-${{ github.sha }}
+          path: |
+            target/release/skill-pool
+            target/release/skill-pool-server
+          retention-days: 14
+          if-no-files-found: error
