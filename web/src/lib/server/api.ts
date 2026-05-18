@@ -8,6 +8,7 @@
 
 import { env } from '$env/dynamic/private';
 import type { Skill } from '$lib/types';
+import type { Theme } from '$lib/theme';
 
 const DEFAULT_API_BASE = 'http://127.0.0.1:8080';
 
@@ -41,8 +42,7 @@ async function call(
   if (init?.jsonBody !== undefined) {
     headers.set('Content-Type', 'application/json');
   }
-  const body =
-    init?.jsonBody !== undefined ? JSON.stringify(init.jsonBody) : init?.body;
+  const body = init?.jsonBody !== undefined ? JSON.stringify(init.jsonBody) : init?.body;
   return fetch(`${base()}${path}`, { method, headers, body });
 }
 
@@ -61,13 +61,71 @@ export async function getSkill(auth: Auth, slug: string): Promise<Skill> {
   return resp.json();
 }
 
-export async function pingHealth(auth: Auth): Promise<boolean> {
-  try {
-    const resp = await call('GET', '/v1/healthz', auth);
-    return resp.ok;
-  } catch {
-    return false;
-  }
+export async function getSkillMd(auth: Auth, slug: string): Promise<string> {
+  const resp = await call('GET', `/v1/skills/${encodeURIComponent(slug)}/skill-md`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.text();
+}
+
+export interface ServerTheme {
+  brand_name: string;
+  primary: string;
+  primary_fg: string;
+  accent: string;
+  bg: string;
+  fg: string;
+  muted: string;
+  muted_fg: string;
+  border: string;
+  radius: string;
+  logo_uri?: string | null;
+}
+
+export async function getTheme(auth: Auth): Promise<ServerTheme | null> {
+  const resp = await call('GET', '/v1/theme', auth);
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export async function putTheme(auth: Auth, theme: ServerTheme): Promise<{ ok: boolean; status: number; error?: string }> {
+  const resp = await call('PUT', '/v1/theme', auth, { jsonBody: theme });
+  if (resp.ok) return { ok: true, status: resp.status };
+  const error = await resp.text();
+  return { ok: false, status: resp.status, error };
+}
+
+/** Server-side translation helper — fold the API shape into the client's. */
+export function toClientTheme(s: ServerTheme): Theme {
+  return {
+    brandName: s.brand_name,
+    primary: s.primary,
+    primaryFg: s.primary_fg,
+    accent: s.accent,
+    bg: s.bg,
+    fg: s.fg,
+    muted: s.muted,
+    mutedFg: s.muted_fg,
+    border: s.border,
+    radius: s.radius,
+    logoUrl: s.logo_uri ?? undefined,
+  };
+}
+
+/** Inverse of toClientTheme, used when saving from the editor. */
+export function fromClientTheme(t: Theme): ServerTheme {
+  return {
+    brand_name: t.brandName,
+    primary: t.primary,
+    primary_fg: t.primaryFg,
+    accent: t.accent,
+    bg: t.bg,
+    fg: t.fg,
+    muted: t.muted,
+    muted_fg: t.mutedFg,
+    border: t.border,
+    radius: t.radius,
+    logo_uri: t.logoUrl,
+  };
 }
 
 /** Lightweight check: the token authenticates against /v1/skills for this tenant. */

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ArrowLeft, Download } from '@lucide/svelte';
+  import { ArrowLeft, Download, FileCode } from '@lucide/svelte';
+  import MonacoViewer from '$lib/MonacoViewer.svelte';
 
   let { data } = $props();
 </script>
@@ -47,6 +48,19 @@
   {/if}
 
   <div>
+    <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[var(--sp-muted-fg)]">
+      <FileCode size="14" /> SKILL.md
+    </h2>
+    {#if data.body}
+      <MonacoViewer value={data.body} language="markdown" readOnly height="32rem" />
+    {:else}
+      <p class="text-sm text-[var(--sp-muted-fg)]">
+        (couldn't fetch the SKILL.md body; the download link below still works)
+      </p>
+    {/if}
+  </div>
+
+  <div>
     <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--sp-muted-fg)]">
       Install
     </h2>
@@ -57,19 +71,13 @@
   </div>
 
   <div>
-    <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--sp-muted-fg)]">
-      Bundle
-    </h2>
     <a
       href={`${data.skill.slug}/bundle.tar.gz`}
       data-sveltekit-reload
       class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] border border-[var(--sp-border)] px-3 py-2 text-sm hover:border-[var(--sp-primary)]"
     >
       <Download size="14" />
-      Download tar.gz
+      Download bundle.tar.gz
     </a>
-    <p class="mt-2 text-xs text-[var(--sp-muted-fg)]">
-      The Monaco-based SKILL.md viewer/editor lands in the next iteration of #4.
-    </p>
   </div>
 </section>

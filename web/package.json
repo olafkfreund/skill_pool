@@ -28,6 +28,7 @@
     "vite": "^6.0.5"
   },
   "dependencies": {
-    "@lucide/svelte": "^1.16.0"
+    "@lucide/svelte": "^1.16.0",
+    "monaco-editor": "^0.52.0"
   }
 }

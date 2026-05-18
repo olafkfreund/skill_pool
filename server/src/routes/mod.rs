@@ -7,6 +7,7 @@ use crate::state::AppState;
 
 mod health;
 mod skills;
+mod theme;
 
 const MAX_BUNDLE_BYTES: usize = 5 * 1024 * 1024;
 
@@ -17,6 +18,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills/validate", post(skills::validate))
         .route("/v1/skills/{slug}", get(skills::get_one))
         .route("/v1/skills/{slug}/bundle.tar.gz", get(skills::get_bundle))
+        .route("/v1/skills/{slug}/skill-md", get(skills::get_skill_md))
+        .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
         .layer(RequestBodyLimitLayer::new(MAX_BUNDLE_BYTES + 64 * 1024))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

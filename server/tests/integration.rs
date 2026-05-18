@@ -332,6 +332,123 @@ async fn full_publish_install_and_isolation() -> Result<()> {
     .await?;
     assert_eq!(resp.status().as_u16(), 400);
 
+    // -------- theme GET defaults to brand_name = tenant slug --------
+    let theme: Value = c
+        .get(format!("{}/v1/theme", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(theme["brand_name"], "acme");
+    assert_eq!(theme["primary"], "#2563eb");
+
+    // -------- theme PUT without admin scope returns 403 --------
+    let resp = authed(
+        c.put(format!("{}/v1/theme", h.base))
+            .header("x-skill-pool-tenant", "acme"),
+        &h.acme_token,
+    )
+    .json(&serde_json::json!({
+        "brand_name": "Acme Corp",
+        "primary": "#7c3aed",
+        "primary_fg": "#ffffff",
+        "accent": "#0ea5e9",
+        "bg": "#ffffff",
+        "fg": "#0f172a",
+        "muted": "#f1f5f9",
+        "muted_fg": "#64748b",
+        "border": "#e2e8f0",
+        "radius": "0.5rem"
+    }))
+    .send()
+    .await?;
+    assert_eq!(
+        resp.status().as_u16(),
+        403,
+        "default scope must not edit themes"
+    );
+
+    // -------- theme PUT with admin scope succeeds --------
+    let admin_token = {
+        use skill_pool_server::admin;
+        admin::create_token(&h.db, "acme", "admin", "tenant:admin")
+            .await?
+            .raw_token
+    };
+    let resp = c
+        .put(format!("{}/v1/theme", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_token)
+        .json(&serde_json::json!({
+            "brand_name": "Acme Corp",
+            "primary": "#7c3aed",
+            "primary_fg": "#ffffff",
+            "accent": "#0ea5e9",
+            "bg": "#ffffff",
+            "fg": "#0f172a",
+            "muted": "#f1f5f9",
+            "muted_fg": "#64748b",
+            "border": "#e2e8f0",
+            "radius": "0.5rem"
+        }))
+        .send()
+        .await?;
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "admin theme PUT: {}",
+        resp.text().await?
+    );
+
+    // PUT below WCAG should be rejected.
+    let resp = c
+        .put(format!("{}/v1/theme", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_token)
+        .json(&serde_json::json!({
+            "brand_name": "Acme Corp",
+            "primary": "#7c3aed",
+            "primary_fg": "#ffffff",
+            "accent": "#0ea5e9",
+            "bg": "#ffffff",
+            "fg": "#eeeeee",
+            "muted": "#f1f5f9",
+            "muted_fg": "#64748b",
+            "border": "#e2e8f0",
+            "radius": "0.5rem"
+        }))
+        .send()
+        .await?;
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "WCAG-failing PUT should be 400"
+    );
+
+    // GET reflects the saved theme.
+    let theme: Value = c
+        .get(format!("{}/v1/theme", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(theme["brand_name"], "Acme Corp");
+    assert_eq!(theme["primary"], "#7c3aed");
+
+    // -------- skill-md endpoint returns the SKILL.md body --------
+    let md = authed(
+        c.get(format!("{}/v1/skills/hello/skill-md", h.base))
+            .header("x-skill-pool-tenant", "acme"),
+        &h.acme_token,
+    )
+    .send()
+    .await?
+    .text()
+    .await?;
+    assert!(md.contains("Greet the user."), "skill-md body: {md:?}");
+
     // -------- audit row written for the publish --------
     let audit: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM audit_events \

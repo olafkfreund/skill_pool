@@ -107,6 +107,53 @@ pub async fn get_one(
     Ok(Json(row.into()))
 }
 
+pub async fn get_skill_md(
+    State(state): State<AppState>,
+    tenant: TenantCtx,
+    Path(slug): Path<String>,
+) -> AppResult<String> {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT bundle_uri FROM skills \
+         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(tenant.tenant_id)
+    .bind(&slug)
+    .fetch_optional(state.db())
+    .await?;
+    let (key,) = row.ok_or(AppError::NotFound)?;
+
+    let bytes = state
+        .storage()
+        .read_bundle(&key)
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    let gz = GzDecoder::new(bytes.as_ref());
+    let mut tar = tar::Archive::new(gz);
+    for entry in tar
+        .entries()
+        .map_err(|e| AppError::BadRequest(e.to_string()))?
+    {
+        let mut entry = entry.map_err(|e| AppError::BadRequest(e.to_string()))?;
+        let path = entry
+            .path()
+            .map_err(|e| AppError::BadRequest(e.to_string()))?
+            .to_path_buf();
+        if path.to_string_lossy().trim_start_matches("./") == "SKILL.md" {
+            let mut buf = String::new();
+            entry
+                .read_to_string(&mut buf)
+                .map_err(|e| AppError::BadRequest(e.to_string()))?;
+            return Ok(buf);
+        }
+    }
+    Err(AppError::NotFound)
+}
+
 pub async fn get_bundle(
     State(state): State<AppState>,
     tenant: TenantCtx,
