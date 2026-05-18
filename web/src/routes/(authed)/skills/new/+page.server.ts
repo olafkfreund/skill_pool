@@ -1,9 +1,18 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { buildSkillBundle } from '$lib/server/tar';
-import { publishSkill, validateSkill } from '$lib/server/api';
-import type { Actions } from './$types';
+import {
+  isCatalogKind,
+  publishSkill,
+  validateSkill,
+  type CatalogKind,
+} from '$lib/server/api';
+import type { Actions, PageServerLoad } from './$types';
 
-const TEMPLATE = `---
+// One starter template per kind. Body is intentionally minimal —
+// curators replace it; the frontmatter shape is what the server cares
+// about.
+const TEMPLATES: Record<CatalogKind, string> = {
+  skill: `---
 name: my-new-skill
 description: Describe what this skill is for and when Claude should invoke it.
 when_to_use: User explicitly asks about X, or is doing Y and would benefit from Z.
@@ -19,10 +28,51 @@ Body of the skill. Write the instructions Claude will read when this skill loads
 \`\`\`bash
 # Show a concrete example here.
 \`\`\`
-`;
+`,
+  agent: `---
+name: my-new-agent
+description: A focused subagent that handles <task>. Used by the parent Claude session.
+when_to_use: Delegate when the user is doing <thing> and benefits from a fresh context window.
+tags: [example, agent]
+---
 
-export const load = async () => {
-  return { template: TEMPLATE };
+# my-new-agent
+
+You are a specialised assistant that <persona>. Be terse, factual, and only
+do <task>. Don't speculate beyond what you can verify from the inputs.
+
+## Capabilities
+
+- <capability 1>
+- <capability 2>
+
+## Boundaries
+
+- <what you must not do>
+`,
+  command: `---
+name: my-new-command
+description: A slash-command that codifies a repeatable workflow.
+when_to_use: User types /my-new-command. Should be invocable without any further context.
+tags: [example, command]
+---
+
+# my-new-command
+
+Run the following steps in order:
+
+1. <step 1>
+2. <step 2>
+3. <step 3>
+
+Stop and report when any step fails.
+`,
+};
+
+export const load: PageServerLoad = async ({ url }) => {
+  const rawKind = url.searchParams.get('kind');
+  const kind: CatalogKind = isCatalogKind(rawKind) ? rawKind : 'skill';
+  return { template: TEMPLATES[kind], kind };
 };
 
 interface Draft {
@@ -30,14 +80,17 @@ interface Draft {
   version: string;
   tags: string;
   skillMd: string;
+  kind: CatalogKind;
 }
 
 function readDraft(form: FormData): Draft {
+  const rawKind = String(form.get('kind') ?? '').trim();
   return {
     slug: String(form.get('slug') ?? '').trim(),
     version: String(form.get('version') ?? '').trim(),
     tags: String(form.get('tags') ?? '').trim(),
     skillMd: String(form.get('skillMd') ?? ''),
+    kind: isCatalogKind(rawKind) ? rawKind : 'skill',
   };
 }
 
@@ -83,7 +136,12 @@ export const actions: Actions = {
     const bundle = buildSkillBundle(draft.skillMd);
     const result = await publishSkill(
       auth,
-      { slug: draft.slug, version: draft.version, tags: parseTags(draft.tags) },
+      {
+        slug: draft.slug,
+        version: draft.version,
+        tags: parseTags(draft.tags),
+        kind: draft.kind,
+      },
       bundle,
     );
 
@@ -91,6 +149,7 @@ export const actions: Actions = {
       return fail(result.status, { draft, error: result.error });
     }
 
-    throw redirect(303, `/skills/${encodeURIComponent(result.skill.slug)}`);
+    const detailQuery = draft.kind === 'skill' ? '' : `?kind=${draft.kind}`;
+    throw redirect(303, `/skills/${encodeURIComponent(result.skill.slug)}${detailQuery}`);
   },
 };

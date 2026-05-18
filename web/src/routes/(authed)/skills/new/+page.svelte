@@ -12,6 +12,11 @@
   let version = $state(untrack(() => form?.draft?.version ?? ''));
   let tags = $state(untrack(() => form?.draft?.tags ?? ''));
   let skillMd = $state(untrack(() => form?.draft?.skillMd ?? data.template));
+  let kind = $state(untrack(() => form?.draft?.kind ?? data.kind));
+
+  const kindLabel = $derived(
+    kind === 'agent' ? 'agent' : kind === 'command' ? 'command' : 'skill',
+  );
 
   // When the validate action returns auto-filled metadata, populate the
   // frontmatter fields the user hasn't touched yet.
@@ -31,10 +36,11 @@
 </a>
 
 <header class="mb-6">
-  <h1 class="text-2xl font-semibold">New skill</h1>
+  <h1 class="text-2xl font-semibold">New {kindLabel}</h1>
   <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-    Write a SKILL.md, validate it (frontmatter / secret scan / WCAG-equivalent quality gates), then
-    publish. Publishing creates the first version; subsequent versions reuse the same slug.
+    Write a SKILL.md, validate it (frontmatter / secret scan / quality gates), then publish.
+    The on-disk format is the same for all three catalog kinds — the kind selector below just
+    tells the server which catalog tab this item belongs to.
   </p>
 </header>
 
@@ -60,6 +66,23 @@
 {/if}
 
 <form method="POST" class="space-y-4">
+  <fieldset class="flex flex-wrap items-center gap-3 text-sm">
+    <span class="text-[var(--sp-muted-fg)]">Kind:</span>
+    {#each ['skill', 'agent', 'command'] as k (k)}
+      <label class="inline-flex cursor-pointer items-center gap-1.5">
+        <input
+          type="radio"
+          name="kind"
+          value={k}
+          checked={kind === k}
+          onchange={() => (kind = k as typeof kind)}
+          class="h-3.5 w-3.5 border-[var(--sp-border)] text-[var(--sp-primary)] focus:ring-[var(--sp-primary)]"
+        />
+        <span class="capitalize">{k}</span>
+      </label>
+    {/each}
+  </fieldset>
+
   <div class="grid gap-3 sm:grid-cols-[1fr_140px_2fr]">
     <label class="block text-sm">
       <span class="text-[var(--sp-muted-fg)]">Slug</span>

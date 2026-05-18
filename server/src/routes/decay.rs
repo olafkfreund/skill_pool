@@ -87,27 +87,40 @@ pub struct ArchiveResponse {
     pub version: String,
 }
 
+#[derive(Deserialize)]
+pub struct ArchiveQuery {
+    pub kind: Option<String>,
+}
+
 pub async fn archive(
     State(state): State<AppState>,
     caller: AuthedCaller,
     Path(slug): Path<String>,
+    Query(q): Query<ArchiveQuery>,
 ) -> AppResult<Json<ArchiveResponse>> {
     require_scope(&caller.scope, "tenant:admin")?;
+    let kind = match q.kind.as_deref().unwrap_or("skill") {
+        k @ ("skill" | "agent" | "command") => k,
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "kind must be skill/agent/command, got `{other}`"
+            )))
+        }
+    };
 
-    // Flip the latest published version. Updating older versions of the
-    // same slug doesn't change anything user-facing because the list
-    // endpoint already picks DISTINCT ON (slug) by recency.
+    // Flip the latest published version of this slug + kind.
     let row: Option<(String,)> = sqlx::query_as(
         "UPDATE skills SET status = 'archived' \
          WHERE id = ( \
             SELECT id FROM skills \
-            WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+            WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
             ORDER BY created_at DESC LIMIT 1 \
          ) \
          RETURNING version",
     )
     .bind(caller.tenant.tenant_id)
     .bind(&slug)
+    .bind(kind)
     .fetch_optional(state.db())
     .await?;
 

@@ -46,9 +46,28 @@ async function call(
   return fetch(`${base()}${path}`, { method, headers, body });
 }
 
+/** Catalog item kind discriminator. Slice 1 added this to the server. */
+export type CatalogKind = 'skill' | 'agent' | 'command';
+export const CATALOG_KINDS: CatalogKind[] = ['skill', 'agent', 'command'];
+
+export function isCatalogKind(v: string | null | undefined): v is CatalogKind {
+  return v === 'skill' || v === 'agent' || v === 'command';
+}
+
+/** Append `?kind=` only when not the default to keep URLs tidy. */
+function kindQuery(kind: CatalogKind | undefined): string {
+  return kind && kind !== 'skill' ? `?kind=${kind}` : '';
+}
+
 export async function listSkills(
   auth: Auth,
-  options: { query?: string; semantic?: string; minSimilarity?: number; limit?: number } = {},
+  options: {
+    query?: string;
+    semantic?: string;
+    minSimilarity?: number;
+    limit?: number;
+    kind?: CatalogKind;
+  } = {},
 ): Promise<Skill[]> {
   const params = new URLSearchParams();
   if (options.semantic) {
@@ -60,20 +79,29 @@ export async function listSkills(
     params.set('query', options.query);
   }
   if (options.limit !== undefined) params.set('limit', String(options.limit));
+  if (options.kind && options.kind !== 'skill') params.set('kind', options.kind);
   const url = `/v1/skills${params.size ? '?' + params : ''}`;
   const resp = await call('GET', url, auth);
   if (!resp.ok) throw new ApiError(resp.status, await resp.text());
   return resp.json();
 }
 
-export async function getSkill(auth: Auth, slug: string): Promise<Skill> {
-  const resp = await call('GET', `/v1/skills/${encodeURIComponent(slug)}`, auth);
+export async function getSkill(auth: Auth, slug: string, kind?: CatalogKind): Promise<Skill> {
+  const resp = await call(
+    'GET',
+    `/v1/skills/${encodeURIComponent(slug)}${kindQuery(kind)}`,
+    auth,
+  );
   if (!resp.ok) throw new ApiError(resp.status, await resp.text());
   return resp.json();
 }
 
-export async function getSkillMd(auth: Auth, slug: string): Promise<string> {
-  const resp = await call('GET', `/v1/skills/${encodeURIComponent(slug)}/skill-md`, auth);
+export async function getSkillMd(auth: Auth, slug: string, kind?: CatalogKind): Promise<string> {
+  const resp = await call(
+    'GET',
+    `/v1/skills/${encodeURIComponent(slug)}/skill-md${kindQuery(kind)}`,
+    auth,
+  );
   if (!resp.ok) throw new ApiError(resp.status, await resp.text());
   return resp.text();
 }
@@ -105,8 +133,16 @@ export interface SkillDetail {
   merge_proposals: PendingMergeProposal[];
 }
 
-export async function getSkillDetail(auth: Auth, slug: string): Promise<SkillDetail> {
-  const resp = await call('GET', `/v1/skills/${encodeURIComponent(slug)}/detail`, auth);
+export async function getSkillDetail(
+  auth: Auth,
+  slug: string,
+  kind?: CatalogKind,
+): Promise<SkillDetail> {
+  const resp = await call(
+    'GET',
+    `/v1/skills/${encodeURIComponent(slug)}/detail${kindQuery(kind)}`,
+    auth,
+  );
   if (!resp.ok) throw new ApiError(resp.status, await resp.text());
   return resp.json();
 }
@@ -216,6 +252,8 @@ export interface PublishMetadata {
   version: string;
   when_to_use?: string;
   tags?: string[];
+  /** Slice 1 added this. Defaults to `skill` on the server side. */
+  kind?: CatalogKind;
 }
 
 export interface ValidationResult {
@@ -422,11 +460,16 @@ export async function listDecayCandidates(
 export async function archiveSkill(
   auth: Auth,
   slug: string,
+  kind?: CatalogKind,
 ): Promise<
   | { ok: true; slug: string; version: string }
   | { ok: false; status: number; error: string }
 > {
-  const resp = await call('POST', `/v1/skills/${encodeURIComponent(slug)}/archive`, auth);
+  const resp = await call(
+    'POST',
+    `/v1/skills/${encodeURIComponent(slug)}/archive${kindQuery(kind)}`,
+    auth,
+  );
   if (resp.ok) {
     const j = (await resp.json()) as { slug: string; version: string };
     return { ok: true, ...j };
