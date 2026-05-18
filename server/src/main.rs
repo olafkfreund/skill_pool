@@ -2,9 +2,8 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing_subscriber::EnvFilter;
 
-use skill_pool_server::{admin, config, routes, state};
+use skill_pool_server::{admin, config, routes, state, tracing_setup};
 
 #[derive(Parser)]
 #[command(
@@ -145,12 +144,7 @@ enum AdminAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    tracing_setup::init();
 
     let cli = Cli::parse();
     let cfg = config::Config::load()?;
