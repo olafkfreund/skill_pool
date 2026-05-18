@@ -329,6 +329,44 @@ export async function putNotifications(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+export interface DecayCandidate {
+  slug: string;
+  version: string;
+  description: string;
+  use_count: number;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export async function listDecayCandidates(
+  auth: Auth,
+  opts: { days?: number; maxUses?: number; limit?: number } = {},
+): Promise<DecayCandidate[]> {
+  const params = new URLSearchParams();
+  if (opts.days !== undefined) params.set('days', String(opts.days));
+  if (opts.maxUses !== undefined) params.set('max_uses', String(opts.maxUses));
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+  const url = `/v1/tenant/skills/decay${params.size ? '?' + params : ''}`;
+  const resp = await call('GET', url, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function archiveSkill(
+  auth: Auth,
+  slug: string,
+): Promise<
+  | { ok: true; slug: string; version: string }
+  | { ok: false; status: number; error: string }
+> {
+  const resp = await call('POST', `/v1/skills/${encodeURIComponent(slug)}/archive`, auth);
+  if (resp.ok) {
+    const j = (await resp.json()) as { slug: string; version: string };
+    return { ok: true, ...j };
+  }
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
 export async function pendingDraftsCount(auth: Auth): Promise<number> {
   const resp = await call('GET', '/v1/tenant/notifications/pending-count', auth);
   if (!resp.ok) return 0;

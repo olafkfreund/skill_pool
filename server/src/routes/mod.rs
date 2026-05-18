@@ -6,6 +6,7 @@ use tower_http::trace::TraceLayer;
 use crate::state::AppState;
 
 mod bootstrap;
+mod decay;
 mod drafts;
 mod enterprise;
 mod health;
@@ -56,6 +57,9 @@ pub fn router(state: AppState) -> Router {
             "/v1/tenant/notifications/pending-count",
             get(notifications::pending_count),
         )
+        // Decay / archive (Phase 5)
+        .route("/v1/tenant/skills/decay", get(decay::list_candidates))
+        .route("/v1/skills/{slug}/archive", post(decay::archive))
         // OIDC
         .route("/v1/auth/oidc/discover", get(oidc::discover))
         .route("/v1/auth/oidc/{slug}/start", get(oidc::start))

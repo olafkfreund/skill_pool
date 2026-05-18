@@ -219,8 +219,8 @@ pub async fn get_bundle(
     tenant: TenantCtx,
     Path(slug): Path<String>,
 ) -> AppResult<Response> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT bundle_uri FROM skills \
+    let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT id, bundle_uri FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
@@ -229,7 +229,12 @@ pub async fn get_bundle(
     .fetch_optional(state.db())
     .await?;
 
-    let (key,) = row.ok_or(AppError::NotFound)?;
+    let (skill_id, key) = row.ok_or(AppError::NotFound)?;
+
+    // Best-effort usage bump for the Phase 5 decay heuristic. Failure
+    // here is logged but never blocks the response — a DB blip during
+    // a download shouldn't fail the user's `skill-pool ensure`.
+    bump_usage(state.db(), skill_id).await;
 
     if let Ok(Some(url)) = state.storage().presign_read(&key).await {
         return Ok(Redirect::temporary(&url).into_response());
@@ -252,6 +257,20 @@ pub async fn get_bundle(
             .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
     Ok(resp)
+}
+
+/// Bump `use_count` + `last_used_at` for one skill. Best-effort: errors
+/// are logged at warn level but never propagate.
+async fn bump_usage(db: &sqlx::PgPool, skill_id: uuid::Uuid) {
+    let r = sqlx::query(
+        "UPDATE skills SET use_count = use_count + 1, last_used_at = now() WHERE id = $1",
+    )
+    .bind(skill_id)
+    .execute(db)
+    .await;
+    if let Err(e) = r {
+        tracing::warn!(error = ?e, skill_id = %skill_id, "bump_usage failed");
+    }
 }
 
 #[derive(Deserialize)]

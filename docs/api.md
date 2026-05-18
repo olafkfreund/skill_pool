@@ -71,6 +71,24 @@ Response (semantic):
 
 `semantic` and `tags` compose — both filters apply. `semantic` and `query` (keyword) are mutually exclusive in effect: `semantic` takes precedence.
 
+## `GET /v1/tenant/skills/decay` — decay candidates (admin)
+
+`tenant:admin` scope required.
+
+| Param      | Type | Description                                       |
+|------------|------|---------------------------------------------------|
+| `days`     | int  | Stale-for-N-days threshold. Default 180, max 1825 |
+| `max_uses` | int  | Return rows with `use_count < max_uses`. Default 3 |
+| `limit`    | int  | Max rows. Default 200, max 1000                    |
+
+Response: `[ { slug, version, description, use_count, last_used_at, created_at } ]`. Sorted by `last_used_at ASC` so the stalest rows surface first.
+
+## `POST /v1/skills/{slug}/archive` — archive a skill (admin)
+
+`tenant:admin` scope required. Flips the latest published version's `status` to `archived`. Catalog list automatically filters archived skills out. Returns `{ slug, version }`. 404 when no published version exists.
+
+Skill usage tracking: `GET /v1/skills/{slug}/bundle.tar.gz` (both the redirect path and the streamed-bytes path) bumps `use_count` and refreshes `last_used_at` server-side. Failure here is logged but never fails the response.
+
 ## `GET /v1/skills/{slug}` — get one (stub)
 
 Response: same shape, plus version history (when implemented).

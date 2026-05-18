@@ -8,6 +8,7 @@
     Globe2,
     Inbox,
     Bell,
+    Skull,
     LogOut,
   } from '@lucide/svelte';
 
@@ -20,6 +21,7 @@
     { href: '/admin/members', icon: Users, label: 'Members' },
     { href: '/admin/sso', icon: ShieldCheck, label: 'SSO' },
     { href: '/admin/notifications', icon: Bell, label: 'Notifications' },
+    { href: '/admin/decay', icon: Skull, label: 'Graveyard' },
     { href: '/admin/domain', icon: Globe2, label: 'Domain' },
   ];
 
