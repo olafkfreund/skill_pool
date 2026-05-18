@@ -10,6 +10,7 @@ mod decay;
 mod drafts;
 mod enterprise;
 mod health;
+mod mcp;
 mod members;
 mod notifications;
 mod oidc;
@@ -60,6 +61,8 @@ pub fn router(state: AppState) -> Router {
         // Decay / archive (Phase 5)
         .route("/v1/tenant/skills/decay", get(decay::list_candidates))
         .route("/v1/skills/{slug}/archive", post(decay::archive))
+        // MCP transport (Phase 5) — JSON-RPC adapter for skill search
+        .route("/v1/mcp", post(mcp::handle))
         // OIDC
         .route("/v1/auth/oidc/discover", get(oidc::discover))
         .route("/v1/auth/oidc/{slug}/start", get(oidc::start))

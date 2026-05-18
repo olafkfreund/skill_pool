@@ -1,0 +1,509 @@
+//! MCP transport (Phase 5).
+//!
+//! A thin JSON-RPC 2.0 endpoint at `POST /v1/mcp` that exposes the
+//! catalog as MCP tools, so a developer's Claude session can search
+//! skills without leaving the conversation. Per the master plan,
+//! MCP is a search adapter — not a replacement for REST + CLI.
+//!
+//! Methods implemented:
+//!   - `initialize` — server capability handshake
+//!   - `tools/list` — advertise the two tools below
+//!   - `tools/call` — dispatch
+//!
+//! Tools:
+//!   - `search_skills(query?, tags?, semantic?, limit?)` — wraps the
+//!     existing list endpoint. Returns a formatted text block listing
+//!     matches, plus the raw JSON for tooling.
+//!   - `get_skill(slug)` — returns the rendered `SKILL.md` body.
+//!
+//! Auth: reuses the standard `AuthedCaller` extractor — operators set
+//! `Authorization: Bearer <token>` and `X-Skill-Pool-Tenant: <slug>`
+//! in their Claude MCP config.
+
+use axum::extract::State;
+use axum::Json;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::auth::AuthedCaller;
+use crate::error::{AppError, AppResult};
+use crate::state::AppState;
+
+const PROTOCOL_VERSION: &str = "2025-03-26";
+const SERVER_NAME: &str = "skill-pool";
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_LIMIT: i64 = 50;
+const DEFAULT_LIMIT: i64 = 10;
+
+// ---------------------------------------------------------------------------
+// JSON-RPC envelope
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct JsonRpcRequest {
+    /// Accepted for protocol completeness; we don't enforce a specific
+    /// version because every MCP client sets "2.0" and a mismatch would
+    /// confuse end users more than it would catch real bugs.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub jsonrpc: String,
+    pub method: String,
+    /// `null` is valid (notification — but MCP uses `id`-bearing
+    /// requests). We accept either.
+    #[serde(default)]
+    pub id: Option<Value>,
+    #[serde(default)]
+    pub params: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonRpcResponse {
+    pub jsonrpc: &'static str,
+    pub id: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcError>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JsonRpcError {
+    pub code: i32,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+impl JsonRpcResponse {
+    fn ok(id: Option<Value>, result: Value) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    fn err(id: Option<Value>, code: i32, message: impl Into<String>) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(JsonRpcError {
+                code,
+                message: message.into(),
+                data: None,
+            }),
+        }
+    }
+}
+
+// Standard JSON-RPC 2.0 error codes.
+const METHOD_NOT_FOUND: i32 = -32601;
+const INVALID_PARAMS: i32 = -32602;
+const INTERNAL_ERROR: i32 = -32603;
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
+pub async fn handle(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    Json(req): Json<JsonRpcRequest>,
+) -> AppResult<Json<JsonRpcResponse>> {
+    let id = req.id.clone();
+    let resp = match req.method.as_str() {
+        "initialize" => initialize(id.clone()),
+        "tools/list" => tools_list(id.clone()),
+        "tools/call" => tools_call(&state, &caller, id.clone(), req.params).await,
+        "ping" => JsonRpcResponse::ok(id.clone(), serde_json::json!({})),
+        // Notifications/connected — clients may send these eagerly; ack
+        // with empty success so we don't 404 spam the logs.
+        m if m.starts_with("notifications/") => JsonRpcResponse::ok(id.clone(), Value::Null),
+        other => JsonRpcResponse::err(
+            id.clone(),
+            METHOD_NOT_FOUND,
+            format!("unknown method: {other}"),
+        ),
+    };
+    Ok(Json(resp))
+}
+
+fn initialize(id: Option<Value>) -> JsonRpcResponse {
+    JsonRpcResponse::ok(
+        id,
+        serde_json::json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {
+                "tools": { "listChanged": false }
+            },
+            "serverInfo": {
+                "name": SERVER_NAME,
+                "version": SERVER_VERSION,
+            },
+        }),
+    )
+}
+
+fn tools_list(id: Option<Value>) -> JsonRpcResponse {
+    JsonRpcResponse::ok(
+        id,
+        serde_json::json!({
+            "tools": [
+                {
+                    "name": "search_skills",
+                    "description":
+                        "Search the team skill catalog. Returns matching skill slugs, \
+                         versions, and descriptions. Use this to find a reusable team \
+                         skill before re-deriving a pattern from scratch.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Substring matched against slug + description (keyword search)."
+                            },
+                            "tags": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "All tags must be present on a result."
+                            },
+                            "semantic": {
+                                "type": "string",
+                                "description": "Rank by cosine similarity of description_embedding. Mutually exclusive with `query`; takes precedence if both supplied. Requires server build with --features fastembed."
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 50,
+                                "description": "Maximum results returned. Default 10."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                {
+                    "name": "get_skill",
+                    "description":
+                        "Fetch a skill's rendered SKILL.md (frontmatter + body). \
+                         Use after `search_skills` to read the full skill contents.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["slug"],
+                        "properties": {
+                            "slug": {
+                                "type": "string",
+                                "description": "Skill slug — exact match, no globbing."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
+                }
+            ]
+        }),
+    )
+}
+
+async fn tools_call(
+    state: &AppState,
+    caller: &AuthedCaller,
+    id: Option<Value>,
+    params: Option<Value>,
+) -> JsonRpcResponse {
+    let Some(params) = params else {
+        return JsonRpcResponse::err(id, INVALID_PARAMS, "missing params");
+    };
+    let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Default::default()));
+
+    match name {
+        "search_skills" => match call_search(state, caller, args).await {
+            Ok(v) => JsonRpcResponse::ok(id, v),
+            Err(e) => JsonRpcResponse::err(id, INTERNAL_ERROR, e),
+        },
+        "get_skill" => match call_get_skill(state, caller, args).await {
+            Ok(v) => JsonRpcResponse::ok(id, v),
+            Err(ToolError::NotFound(msg)) => tool_error_result(id, &msg),
+            Err(ToolError::Invalid(msg)) => JsonRpcResponse::err(id, INVALID_PARAMS, msg),
+            Err(ToolError::Internal(msg)) => JsonRpcResponse::err(id, INTERNAL_ERROR, msg),
+        },
+        other => JsonRpcResponse::err(id, METHOD_NOT_FOUND, format!("unknown tool: {other}")),
+    }
+}
+
+#[derive(Debug)]
+enum ToolError {
+    Invalid(String),
+    NotFound(String),
+    Internal(String),
+}
+
+impl From<sqlx::Error> for ToolError {
+    fn from(e: sqlx::Error) -> Self {
+        ToolError::Internal(e.to_string())
+    }
+}
+
+impl From<String> for ToolError {
+    fn from(s: String) -> Self {
+        ToolError::Internal(s)
+    }
+}
+
+#[derive(Deserialize)]
+struct SearchArgs {
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    semantic: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(sqlx::FromRow, Serialize)]
+struct SearchRow {
+    slug: String,
+    version: String,
+    description: String,
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    when_to_use: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    similarity: Option<f32>,
+    created_at: DateTime<Utc>,
+}
+
+async fn call_search(state: &AppState, caller: &AuthedCaller, args: Value) -> Result<Value, String> {
+    let args: SearchArgs = serde_json::from_value(args)
+        .map_err(|e| format!("invalid arguments: {e}"))?;
+    let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let tag_list: Vec<String> = args.tags.unwrap_or_default();
+
+    let rows: Vec<SearchRow> = if let Some(query_text) =
+        args.semantic.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    {
+        // Semantic branch: mirror the REST endpoint's CTE + similarity ORDER.
+        let embedding = state
+            .embedder()
+            .embed(query_text)
+            .map_err(|e| format!("embedder error: {e}"))?;
+        let Some(v) = embedding else {
+            return Err(
+                "semantic search is not enabled on this server (no embedder configured)".into(),
+            );
+        };
+        let lit = crate::embedding::vector_to_pg_literal(&v);
+        sqlx::query_as(
+            "WITH latest AS ( \
+               SELECT DISTINCT ON (slug) \
+                 slug, version, description, when_to_use, tags, created_at, description_embedding \
+               FROM skills \
+               WHERE tenant_id = $1 \
+                 AND status = 'published' \
+                 AND ($2::text[] = '{}' OR tags @> $2) \
+                 AND description_embedding IS NOT NULL \
+               ORDER BY slug, created_at DESC \
+             ) \
+             SELECT slug, version, description, when_to_use, tags, \
+                    (1 - (description_embedding <=> $3::text::vector))::real AS similarity, \
+                    created_at \
+             FROM latest \
+             ORDER BY similarity DESC \
+             LIMIT $4",
+        )
+        .bind(caller.tenant.tenant_id)
+        .bind(&tag_list)
+        .bind(lit)
+        .bind(limit)
+        .fetch_all(state.db())
+        .await
+        .map_err(|e| e.to_string())?
+    } else {
+        let needle = args.query.as_deref().map(|s| format!("%{s}%"));
+        sqlx::query_as(
+            "SELECT DISTINCT ON (slug) \
+                slug, version, description, when_to_use, tags, \
+                NULL::real AS similarity, created_at \
+             FROM skills \
+             WHERE tenant_id = $1 \
+               AND status = 'published' \
+               AND ($2::text IS NULL OR description ILIKE $2 OR slug ILIKE $2) \
+               AND ($3::text[] = '{}' OR tags @> $3) \
+             ORDER BY slug, created_at DESC \
+             LIMIT $4",
+        )
+        .bind(caller.tenant.tenant_id)
+        .bind(needle)
+        .bind(&tag_list)
+        .bind(limit)
+        .fetch_all(state.db())
+        .await
+        .map_err(|e| e.to_string())?
+    };
+
+    let text = render_search_text(&rows);
+    let json = serde_json::to_value(&rows).unwrap_or(Value::Null);
+    Ok(serde_json::json!({
+        "content": [
+            { "type": "text", "text": text },
+            { "type": "text", "text": format!("```json\n{}\n```", serde_json::to_string_pretty(&json).unwrap_or_default()) }
+        ],
+        "isError": false
+    }))
+}
+
+fn render_search_text(rows: &[SearchRow]) -> String {
+    if rows.is_empty() {
+        return "No matching skills.".to_string();
+    }
+    let mut out = format!("{} matching skill(s):\n\n", rows.len());
+    for r in rows {
+        out.push_str(&format!("- {}", r.slug));
+        if let Some(sim) = r.similarity {
+            out.push_str(&format!(" ({:.0}% match)", (sim * 100.0).clamp(0.0, 100.0)));
+        }
+        out.push_str(&format!(" — v{}\n", r.version));
+        out.push_str(&format!("  {}\n", r.description));
+        if let Some(when) = &r.when_to_use {
+            out.push_str(&format!("  when: {when}\n"));
+        }
+        if !r.tags.is_empty() {
+            out.push_str(&format!("  tags: {}\n", r.tags.join(", ")));
+        }
+    }
+    out
+}
+
+#[derive(Deserialize)]
+struct GetSkillArgs {
+    slug: String,
+}
+
+async fn call_get_skill(
+    state: &AppState,
+    caller: &AuthedCaller,
+    args: Value,
+) -> Result<Value, ToolError> {
+    let args: GetSkillArgs = serde_json::from_value(args)
+        .map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))?;
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT bundle_uri FROM skills \
+         WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(&args.slug)
+    .fetch_optional(state.db())
+    .await?;
+    let Some((key,)) = row else {
+        return Err(ToolError::NotFound(format!(
+            "no published skill `{}` in tenant `{}`",
+            args.slug, caller.tenant.tenant_slug
+        )));
+    };
+
+    let bytes = state
+        .storage()
+        .read_bundle(&key)
+        .await
+        .map_err(|e| ToolError::Internal(e.to_string()))?;
+    let md = read_skill_md(&bytes)
+        .ok_or_else(|| ToolError::Internal("SKILL.md missing from bundle".into()))?;
+
+    Ok(serde_json::json!({
+        "content": [{ "type": "text", "text": md }],
+        "isError": false
+    }))
+}
+
+fn read_skill_md(bytes: &[u8]) -> Option<String> {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    let gz = GzDecoder::new(bytes);
+    let mut tar = tar::Archive::new(gz);
+    for entry in tar.entries().ok()? {
+        let mut entry = entry.ok()?;
+        let path = entry.path().ok()?.to_path_buf();
+        if path.to_string_lossy().trim_start_matches("./") == "SKILL.md" {
+            let mut s = String::new();
+            if entry.read_to_string(&mut s).is_ok() {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+/// Build an MCP tool-error response — `isError: true` with the message
+/// in a text content block. Used for the "skill not found" path that
+/// MCP convention says should be a tool error (the model can recover),
+/// not a JSON-RPC error (the protocol broke).
+fn tool_error_result(id: Option<Value>, message: &str) -> JsonRpcResponse {
+    JsonRpcResponse::ok(
+        id,
+        serde_json::json!({
+            "content": [{ "type": "text", "text": message }],
+            "isError": true,
+        }),
+    )
+}
+
+// Silence unused warning during initial bring-up; `AppError` is only
+// needed if we promote tool errors to JSON-RPC errors later.
+#[allow(dead_code)]
+fn _swallow_unused(_: AppError) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initialize_advertises_tools_capability() {
+        let r = initialize(Some(serde_json::json!(1)));
+        let v = r.result.unwrap();
+        assert_eq!(v["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(v["serverInfo"]["name"], SERVER_NAME);
+        assert!(v["capabilities"]["tools"].is_object());
+    }
+
+    #[test]
+    fn tools_list_advertises_both_tools() {
+        let r = tools_list(Some(serde_json::json!(2)));
+        let v = r.result.unwrap();
+        let tools = v["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"search_skills"));
+        assert!(names.contains(&"get_skill"));
+    }
+
+    #[test]
+    fn render_search_text_handles_empty() {
+        assert_eq!(render_search_text(&[]), "No matching skills.");
+    }
+
+    #[test]
+    fn render_search_text_includes_similarity_when_set() {
+        let rows = vec![SearchRow {
+            slug: "foo".into(),
+            version: "1.0.0".into(),
+            description: "bar".into(),
+            tags: vec!["test".into()],
+            when_to_use: None,
+            similarity: Some(0.94),
+            created_at: chrono::Utc::now(),
+        }];
+        let s = render_search_text(&rows);
+        assert!(s.contains("94% match"), "{s}");
+        assert!(s.contains("foo"));
+        assert!(s.contains("v1.0.0"));
+    }
+}

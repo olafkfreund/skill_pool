@@ -89,6 +89,53 @@ Response: `[ { slug, version, description, use_count, last_used_at, created_at }
 
 Skill usage tracking: `GET /v1/skills/{slug}/bundle.tar.gz` (both the redirect path and the streamed-bytes path) bumps `use_count` and refreshes `last_used_at` server-side. Failure here is logged but never fails the response.
 
+## `POST /v1/mcp` — MCP transport (Phase 5)
+
+JSON-RPC 2.0 adapter so a developer's Claude session can search the team catalog without leaving the conversation. Single POST endpoint; same `Authorization: Bearer …` + `X-Skill-Pool-Tenant: …` headers as the REST surface.
+
+### Claude config
+
+```json
+{
+  "mcpServers": {
+    "skill-pool": {
+      "type": "http",
+      "url": "https://acme.skill-pool.example.com/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer spk_…",
+        "X-Skill-Pool-Tenant": "acme"
+      }
+    }
+  }
+}
+```
+
+### Methods
+
+| Method | Purpose |
+|---|---|
+| `initialize` | Returns `{ protocolVersion, capabilities: { tools: {} }, serverInfo }`. |
+| `tools/list` | Returns the two tools below. |
+| `tools/call` | Dispatches `{ name, arguments }` to a tool. |
+| `ping` | Acknowledges health. |
+| `notifications/*` | Acked silently. |
+
+### Tools
+
+**`search_skills`** — args: `{ query?, tags?, semantic?, limit? }`. Returns content blocks: a human-readable summary followed by a fenced JSON dump for tool-savvy consumers. Mirrors `GET /v1/skills` semantics (semantic takes precedence over keyword; tags compose with either).
+
+**`get_skill`** — args: `{ slug }`. Returns the rendered SKILL.md (frontmatter + body) as a single text content block. A missing slug returns `isError: true` with the message in the result — not a JSON-RPC error — so the model can recover gracefully.
+
+### Errors
+
+| Code | Meaning |
+|---|---|
+| `-32601` | Method not found |
+| `-32602` | Invalid params |
+| `-32603` | Internal error |
+
+`401 Unauthorized` is returned at the HTTP layer when the bearer token is missing or invalid.
+
 ## `GET /v1/skills/{slug}` — get one (stub)
 
 Response: same shape, plus version history (when implemented).
