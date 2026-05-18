@@ -13,6 +13,8 @@
     # by `nix build`.
     nixosModules.default = ./nix/modules/skill-pool-capturer.nix;
     nixosModules.skill-pool-capturer = ./nix/modules/skill-pool-capturer.nix;
+    # Server (system-scope, single-node deploys + cluster nodes).
+    nixosModules.skill-pool-server = ./nix/modules/skill-pool-server.nix;
     # Home Manager users import this at the same path; same module shape.
     homeManagerModules.default = ./nix/modules/skill-pool-capturer.nix;
   } // flake-utils.lib.eachDefaultSystem (system:

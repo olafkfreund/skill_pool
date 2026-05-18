@@ -47,4 +47,15 @@ COPY server/migrations /app/migrations
 ENV SKILL_POOL_BIND=0.0.0.0:8080
 EXPOSE 8080
 USER skillpool
+
+# `wget` is not installed; we rely on the orchestrator's HTTP healthcheck
+# (k8s readinessProbe, docker compose healthcheck against /v1/healthz).
+# If you need an in-image healthcheck, COPY busybox or curl into runtime.
+
+LABEL org.opencontainers.image.title="skill-pool-server" \
+      org.opencontainers.image.description="Self-hosted Claude Code skill/agent/command registry" \
+      org.opencontainers.image.source="https://github.com/olafkfreund/skill_pool" \
+      org.opencontainers.image.licenses="MIT"
+
 ENTRYPOINT ["/usr/local/bin/skill-pool-server"]
+CMD ["serve"]

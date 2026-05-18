@@ -1,0 +1,63 @@
+# Caddyfile — wildcard certs + tenant subdomain routing
+#
+# Caddy is the recommended default: zero-config TLS via Let's Encrypt,
+# wildcard cert support via DNS challenge, automatic redirect from :80,
+# HTTP/2 + HTTP/3 out of the box. Single binary, single config.
+#
+# DNS challenge requires a credentials file for your DNS provider.
+# Example below uses Cloudflare; swap for Route53, DigitalOcean,
+# Gandi, etc. — Caddy modules cover most providers.
+#
+# Install:
+#   1. Replace skill-pool.example.com with your domain.
+#   2. Replace the email + Cloudflare API token.
+#   3. Symlink into /etc/caddy/Caddyfile (or include from your existing one).
+#   4. caddy validate --config /etc/caddy/Caddyfile
+#   5. systemctl reload caddy
+
+{
+    email ops@example.com
+    # acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}    # uncomment for wildcard certs
+}
+
+# Apex — landing/marketing page or registry-management portal.
+skill-pool.example.com {
+    encode zstd gzip
+
+    # The SvelteKit web portal.
+    reverse_proxy 127.0.0.1:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    log {
+        output file /var/log/caddy/skill-pool.access.log
+        format json
+    }
+}
+
+# Wildcard tenant subdomains — each subdomain becomes a tenant slug via the
+# server's tenant extractor. Requires a wildcard DNS record AND a wildcard
+# TLS cert (Caddy handles the cert automatically when DNS challenge is on).
+*.skill-pool.example.com {
+    encode zstd gzip
+
+    # Web portal first; API routes are prefixed with /v1/ so we route those
+    # to the registry server directly.
+    @api path /v1/* /metrics
+    reverse_proxy @api 127.0.0.1:8080
+
+    reverse_proxy 127.0.0.1:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    log {
+        output file /var/log/caddy/skill-pool-tenants.access.log
+        format json
+    }
+}

@@ -1,0 +1,80 @@
+# skill-pool-server — single-node systemd unit
+#
+# Install:
+#   sudo cp packaging/systemd/skill-pool-server.service /etc/systemd/system/
+#   sudo mkdir -p /etc/skill-pool /var/lib/skill-pool
+#   sudo install -o skillpool -g skillpool -m 0600 \
+#       packaging/systemd/skill-pool-server.env.example \
+#       /etc/skill-pool/skill-pool-server.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now skill-pool-server.service
+#
+# Secrets (database URL, OIDC client secret, etc.) live in
+# /etc/skill-pool/skill-pool-server.env, owned by `skillpool:skillpool`
+# with mode 0600. systemd reads it via EnvironmentFile= so secrets never
+# appear in `systemctl cat` or `ps`.
+#
+# Logs: stdout/stderr → journald. Tail with `journalctl -u skill-pool-server -f`.
+
+[Unit]
+Description=skill-pool registry server
+Documentation=https://github.com/olafkfreund/skill_pool
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=skillpool
+Group=skillpool
+DynamicUser=false
+WorkingDirectory=/var/lib/skill-pool
+
+# Secrets + non-secret env vars; see skill-pool-server.env.example.
+EnvironmentFile=/etc/skill-pool/skill-pool-server.env
+
+ExecStart=/usr/local/bin/skill-pool-server serve
+
+# Graceful shutdown: the server traps SIGTERM and drains. 30s is enough
+# for an in-flight bundle download to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+Restart=on-failure
+RestartSec=5s
+
+# --- Hardening ---
+# Filesystem: read-only root, writable state dir, no /home, no /tmp
+# leakage. Mirrors the capturer unit's profile.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/skill-pool
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+# Network: only AF_INET/AF_INET6/AF_UNIX. No raw sockets.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Resource limits — bump for high-traffic deployments.
+LimitNOFILE=65536
+TasksMax=1024
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

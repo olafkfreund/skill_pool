@@ -1,0 +1,75 @@
+# Traefik dynamic configuration for skill-pool with **per-tenant custom-domain
+# ACME automation**. The thing Caddy doesn't do as smoothly: when an
+# Enterprise tenant adds their own CNAME pointing at us, Traefik can request
+# a cert for that hostname on-demand without a config push.
+#
+# Pair this with the static config below (or your existing traefik.yml).
+# This file is meant to live in a directory Traefik watches via the
+# `providers.file.directory` setting.
+
+http:
+  routers:
+    skill-pool-portal:
+      rule: "HostRegexp(`{subdomain:[a-z0-9-]+}.skill-pool.example.com`)"
+      entryPoints: [websecure]
+      service: skill-pool-web
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "skill-pool.example.com"
+            sans: ["*.skill-pool.example.com"]
+
+    skill-pool-api:
+      rule: "HostRegexp(`{subdomain:[a-z0-9-]+}.skill-pool.example.com`) && (PathPrefix(`/v1/`) || Path(`/metrics`))"
+      entryPoints: [websecure]
+      service: skill-pool-api
+      tls:
+        certResolver: letsencrypt
+      priority: 100  # Higher than the portal rule so /v1/* wins.
+
+    # Per-tenant custom domains: any host that isn't skill-pool.example.com
+    # is treated as a custom-domain tenant. Traefik issues a cert via
+    # HTTP-01 on first request (after DNS is pointed at us).
+    skill-pool-custom-domain:
+      rule: "!HostRegexp(`{any:.*}.skill-pool.example.com`) && !Host(`skill-pool.example.com`)"
+      entryPoints: [websecure]
+      service: skill-pool-web
+      tls:
+        certResolver: letsencrypt
+      priority: 1
+
+  services:
+    skill-pool-web:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:3000"
+        passHostHeader: true
+
+    skill-pool-api:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+        passHostHeader: true
+
+# --- Static config (traefik.yml) excerpt ---
+#
+# entryPoints:
+#   web:       { address: ":80",  http: { redirections: { entryPoint: { to: websecure, scheme: https } } } }
+#   websecure: { address: ":443" }
+#
+# certificatesResolvers:
+#   letsencrypt:
+#     acme:
+#       email: ops@example.com
+#       storage: /var/lib/traefik/acme.json
+#       httpChallenge:
+#         entryPoint: web
+#       # For wildcard certs, switch to dnsChallenge with your provider:
+#       # dnsChallenge:
+#       #   provider: cloudflare
+#       #   delayBeforeCheck: 30
+#
+# providers:
+#   file:
+#     directory: /etc/traefik/dynamic
+#     watch: true
