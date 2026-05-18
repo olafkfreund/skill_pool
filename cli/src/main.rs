@@ -76,6 +76,20 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Detect the stack, ask the registry which skills it recommends, then
+    /// (with confirmation) add them to the manifest and install. The
+    /// canonical "onboard a new project" command.
+    Bootstrap {
+        /// Skip the Y/n confirmation prompt.
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Re-run detection even if the manifest already has a stack.
+        #[arg(long)]
+        detect: bool,
+        /// Show what would be added without saving the manifest or calling ensure.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -106,5 +120,10 @@ async fn main() -> Result<()> {
         }
         Cmd::Doctor => cmd::doctor::run(&cfg),
         Cmd::Detect { json } => cmd::detect::run(json),
+        Cmd::Bootstrap {
+            yes,
+            detect,
+            dry_run,
+        } => cmd::bootstrap::run(&cfg, detect, yes, dry_run).await,
     }
 }

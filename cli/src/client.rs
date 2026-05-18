@@ -15,6 +15,13 @@ pub struct Client {
     tenant: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct BootstrapResponse {
+    #[allow(dead_code)] // server-echoed, useful for debug logs
+    pub stack: Vec<String>,
+    pub skills: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
     pub slug: String,
@@ -115,6 +122,24 @@ impl Client {
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("get_skill: {status} — {body}"));
+        }
+        Ok(resp.json().await?)
+    }
+
+    pub async fn bootstrap(&self, stack: &[String]) -> Result<BootstrapResponse> {
+        if stack.is_empty() {
+            return Ok(BootstrapResponse {
+                stack: vec![],
+                skills: vec![],
+            });
+        }
+        let mut url = self.base.join("/v1/bootstrap")?;
+        url.query_pairs_mut().append_pair("stack", &stack.join(","));
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("bootstrap: {status} — {body}"));
         }
         Ok(resp.json().await?)
     }
