@@ -43,8 +43,21 @@ skill-pool/
 ## Phases
 
 - **Phase 0** — spike: shell installer, one test skill.
-- **Phase 1** — server + CLI MVP (skills only).
+- **Phase 1** — server + CLI MVP (skills only). ← *in progress*
 - **Phase 2** — web UI for browse/edit/publish.
 - **Phase 3** — auto-bootstrap (stack detection + direnv).
 - **Phase 4** — retrospective capture (hooks + drafts inbox).
 - **Phase 5** — lifecycle: embeddings, decay, dependencies, agents+commands.
+
+## Testing
+
+```bash
+cargo test --workspace               # unit + integration (requires Docker)
+cargo test --workspace --bins        # unit only (no Docker needed)
+scripts/integration-test.sh          # human-driven smoke against docker-compose stack
+```
+
+The integration test (`server/tests/integration.rs`) brings up Postgres via
+testcontainers, spawns the router on a random port, and asserts the full
+publish → list → fetch flow plus tenant isolation (tenant B cannot see
+tenant A's skills, even with a valid token).

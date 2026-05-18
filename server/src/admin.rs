@@ -1,35 +1,39 @@
-//! Admin ops invoked from the server binary — `skill-pool-server admin ...`.
-//! No network exposure; talks directly to Postgres. Run on the box.
+//! Admin ops — exposed as plain functions on the library so the binary's
+//! main and the integration tests can both call them. No network exposure;
+//! talks directly to Postgres.
 
 use anyhow::{anyhow, Context, Result};
 use rand::RngCore;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::hash_token;
 use crate::config::Config;
-use crate::AdminCmd;
 
-pub async fn run(cfg: &Config, cmd: AdminCmd) -> Result<()> {
-    let db = PgPoolOptions::new()
+pub struct CreatedTenant {
+    pub id: Uuid,
+}
+
+pub struct CreatedToken {
+    pub id: Uuid,
+    pub raw_token: String,
+}
+
+pub async fn connect(cfg: &Config) -> Result<PgPool> {
+    PgPoolOptions::new()
         .max_connections(2)
         .connect(&cfg.database_url)
         .await
-        .context("connect to database")?;
-
-    match cmd {
-        AdminCmd::TenantCreate { slug, name, plan } => {
-            create_tenant(&db, &slug, &name, &plan).await
-        }
-        AdminCmd::TokenCreate {
-            tenant,
-            name,
-            scope,
-        } => create_token(&db, &tenant, &name, &scope).await,
-    }
+        .context("connect to database")
 }
 
-async fn create_tenant(db: &sqlx::PgPool, slug: &str, name: &str, plan: &str) -> Result<()> {
+pub async fn create_tenant(
+    db: &PgPool,
+    slug: &str,
+    name: &str,
+    plan: &str,
+) -> Result<CreatedTenant> {
     if !matches!(plan, "team" | "business" | "enterprise") {
         return Err(anyhow!("plan must be one of: team, business, enterprise"));
     }
@@ -46,11 +50,15 @@ async fn create_tenant(db: &sqlx::PgPool, slug: &str, name: &str, plan: &str) ->
     println!("  id:   {}", row.0);
     println!("  slug: {slug}");
     println!("  plan: {plan}");
-    println!("\nnext: skill-pool-server admin token-create --tenant {slug} --name bootstrap");
-    Ok(())
+    Ok(CreatedTenant { id: row.0 })
 }
 
-async fn create_token(db: &sqlx::PgPool, tenant_slug: &str, name: &str, scope: &str) -> Result<()> {
+pub async fn create_token(
+    db: &PgPool,
+    tenant_slug: &str,
+    name: &str,
+    scope: &str,
+) -> Result<CreatedToken> {
     let tenant: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
             .bind(tenant_slug)
@@ -73,14 +81,10 @@ async fn create_token(db: &sqlx::PgPool, tenant_slug: &str, name: &str, scope: &
     .await
     .context("insert token")?;
 
-    println!("token created");
-    println!("  id:     {}", row.0);
-    println!("  tenant: {tenant_slug}");
-    println!("  scope:  {scope}");
-    println!();
-    println!("RAW TOKEN (shown once — copy now):");
-    println!("  {raw}");
-    Ok(())
+    Ok(CreatedToken {
+        id: row.0,
+        raw_token: raw,
+    })
 }
 
 fn generate_token() -> String {

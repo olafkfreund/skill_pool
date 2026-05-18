@@ -4,16 +4,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-mod admin;
-mod audit;
-mod auth;
-mod bundle;
-mod config;
-mod error;
-mod routes;
-mod state;
-mod storage;
-mod tenant;
+use skill_pool_server::{admin, config, routes, state};
 
 #[derive(Parser)]
 #[command(
@@ -33,12 +24,12 @@ enum Cmd {
     /// Ops actions: create tenants, mint tokens. Run server-side; no network exposure.
     Admin {
         #[command(subcommand)]
-        action: AdminCmd,
+        action: AdminAction,
     },
 }
 
 #[derive(Subcommand)]
-enum AdminCmd {
+enum AdminAction {
     /// Create a tenant.
     TenantCreate {
         #[arg(long)]
@@ -73,7 +64,32 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Cmd::Serve) {
         Cmd::Serve => serve(cfg).await,
-        Cmd::Admin { action } => admin::run(&cfg, action).await,
+        Cmd::Admin { action } => {
+            match action {
+                AdminAction::TenantCreate { slug, name, plan } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::create_tenant(&db, &slug, &name, &plan).await?;
+                    println!("\nnext: skill-pool-server admin token-create --tenant {slug} --name bootstrap");
+                    Ok(())
+                }
+                AdminAction::TokenCreate {
+                    tenant,
+                    name,
+                    scope,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    let created = admin::create_token(&db, &tenant, &name, &scope).await?;
+                    println!("token created");
+                    println!("  id:     {}", created.id);
+                    println!("  tenant: {tenant}");
+                    println!("  scope:  {scope}");
+                    println!();
+                    println!("RAW TOKEN (shown once — copy now):");
+                    println!("  {}", created.raw_token);
+                    Ok(())
+                }
+            }
+        }
     }
 }
 

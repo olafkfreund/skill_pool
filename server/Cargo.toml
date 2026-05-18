@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "skill-pool registry HTTP server (multi-tenant)"
 
+[lib]
+name = "skill_pool_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "skill-pool-server"
 path = "src/main.rs"
@@ -57,4 +61,8 @@ config = { version = "0.15", default-features = false, features = ["toml", "json
 figment = { version = "0.10", features = ["env", "toml"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+tempfile = "3"
+tokio = { version = "1", features = ["full", "test-util"] }
