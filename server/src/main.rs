@@ -1,14 +1,63 @@
 use std::net::SocketAddr;
 
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+mod admin;
+mod audit;
 mod auth;
+mod bundle;
 mod config;
 mod error;
 mod routes;
 mod state;
+mod storage;
 mod tenant;
+
+#[derive(Parser)]
+#[command(
+    name = "skill-pool-server",
+    version,
+    about = "skill-pool registry HTTP server"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Start the HTTP server (default if no subcommand given).
+    Serve,
+    /// Ops actions: create tenants, mint tokens. Run server-side; no network exposure.
+    Admin {
+        #[command(subcommand)]
+        action: AdminCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCmd {
+    /// Create a tenant.
+    TenantCreate {
+        #[arg(long)]
+        slug: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "team")]
+        plan: String,
+    },
+    /// Mint a new API token for a tenant. Prints the raw token once.
+    TokenCreate {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "skills:read skills:publish")]
+        scope: String,
+    },
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,8 +68,17 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let cli = Cli::parse();
     let cfg = config::Config::load()?;
-    tracing::info!(addr = %cfg.bind, tenancy = ?cfg.tenancy_mode, "skill-pool-server starting");
+
+    match cli.command.unwrap_or(Cmd::Serve) {
+        Cmd::Serve => serve(cfg).await,
+        Cmd::Admin { action } => admin::run(&cfg, action).await,
+    }
+}
+
+async fn serve(cfg: config::Config) -> Result<()> {
+    tracing::info!(addr = %cfg.bind, "skill-pool-server starting");
 
     let state = state::AppState::new(&cfg).await?;
     let app = routes::router(state);

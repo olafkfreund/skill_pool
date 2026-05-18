@@ -5,6 +5,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
 use crate::config::{Config, TenancyMode};
+use crate::storage::Storage;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -14,8 +15,9 @@ pub struct AppState {
 struct Inner {
     pub db: PgPool,
     pub tenancy: TenancyMode,
+    pub storage: Storage,
+    #[allow(dead_code)]
     pub origin_pattern: String,
-    // storage: Arc<dyn opendal::Accessor> — wired in when bundle endpoints are implemented
 }
 
 impl AppState {
@@ -25,14 +27,13 @@ impl AppState {
             .connect(&cfg.database_url)
             .await?;
 
-        // Migrations run via `sqlx migrate run` ahead of boot in dev/prod.
-        // Optionally enable here behind a feature flag once we have CI seed data:
-        // sqlx::migrate!("./migrations").run(&db).await?;
+        let storage = Storage::from_uri(&cfg.storage_uri)?;
 
         Ok(Self {
             inner: Arc::new(Inner {
                 db,
                 tenancy: cfg.resolved_tenancy(),
+                storage,
                 origin_pattern: cfg.origin_pattern.clone(),
             }),
         })
@@ -44,6 +45,10 @@ impl AppState {
 
     pub fn tenancy(&self) -> &TenancyMode {
         &self.inner.tenancy
+    }
+
+    pub fn storage(&self) -> &Storage {
+        &self.inner.storage
     }
 
     #[allow(dead_code)]
