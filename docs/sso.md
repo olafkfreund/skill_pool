@@ -13,6 +13,50 @@ Either way, the first user to sign in for a tenant is provisioned with
 `tenant_users.role = default_role` (configurable per IdP). Subsequent sign-ins
 just refresh the session.
 
+## Group → role mappings
+
+On every sign-in (OIDC + SAML), the server reads the user's group claims and
+picks the highest-precedence matched role. Order: `viewer < publisher < curator < admin`.
+
+Configure via the admin CLI:
+
+```bash
+skill-pool-server admin group-map-set --tenant acme \
+  --group "Engineering-Admins" --role admin
+skill-pool-server admin group-map-set --tenant acme \
+  --group "Curators" --role curator
+skill-pool-server admin group-map-set --tenant acme \
+  --group "Engineers" --role publisher
+
+skill-pool-server admin group-map-list --tenant acme
+skill-pool-server admin group-map-remove --tenant acme --group "Engineers"
+```
+
+Claim names the server looks for:
+
+| Protocol | Claim names (in priority order) |
+|---|---|
+| OIDC | `groups` (Okta, Authentik, Keycloak), `roles` (Azure AD with app-role mapping), `memberOf` (custom mappers) |
+| SAML | `<AttributeStatement>` named `groups`, `memberOf`, or `Role` |
+
+Key properties:
+
+- **Highest role wins.** Mary in `Engineering-Admins` + `Engineers` → `admin`.
+- **No-match preserves the existing role.** If the IdP omits groups or sends
+  groups that don't match any mapping, the membership row isn't touched.
+  Manual promotions via the members admin page survive sign-ins that lack
+  group claims.
+- **Downgrades propagate when groups ARE present.** Remove a user from
+  `Engineering-Admins` in Okta → next sign-in drops their role to whatever
+  else they're mapped to (or `default_role` if nothing matches).
+
+IdP-side setup tips:
+
+- **Okta** — App → Sign On → "Groups attribute statement". `Name = groups`. Set Filter = "Matches regex `.*`" or scope as desired.
+- **Azure AD / Entra** — App registration → Token configuration → Add groups claim. Default emits object IDs; configure "sAMAccountName" if you want names that match the mapping table.
+- **Authentik** — Property mapping → return `groups` as a list of human-readable names.
+- **Google Workspace** — `groups` claim isn't on the OIDC token by default; needs Cloud Identity Groups Toolkit integration.
+
 ## OIDC
 
 ### 1. Register skill-pool as an OIDC client in your IdP
