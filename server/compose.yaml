@@ -1,0 +1,59 @@
+# Local dev stack for skill-pool. Run from repo root:
+#   docker compose -f server/compose.yaml up
+#
+# Provides: Postgres 17, MinIO (S3-compatible), Caddy reverse proxy (subdomain
+# routing for multi-tenant testing), and the server itself.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: skillpool
+      POSTGRES_PASSWORD: skillpool
+      POSTGRES_DB: skillpool
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "skillpool"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: skillpool
+      MINIO_ROOT_PASSWORD: skillpoolsecret
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - minio-data:/data
+
+  server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    environment:
+      SKILL_POOL_DATABASE_URL: postgres://skillpool:skillpool@postgres:5432/skillpool
+      SKILL_POOL_STORAGE_URI: s3://skillpool-bundles?endpoint=http://minio:9000&access_key=skillpool&secret_key=skillpoolsecret&region=us-east-1
+      SKILL_POOL_BIND: 0.0.0.0:8080
+      SKILL_POOL_ORIGIN_PATTERN: http://{tenant}.localtest.me:8081
+      RUST_LOG: info,skill_pool=debug,tower_http=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    ports: ["8080:8080"]
+
+  caddy:
+    image: caddy:2-alpine
+    ports: ["8081:8081"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - server
+
+volumes:
+  pg-data:
+  minio-data:

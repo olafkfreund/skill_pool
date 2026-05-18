@@ -1,0 +1,16 @@
+# Local-dev reverse proxy. *.localtest.me resolves to 127.0.0.1 publicly,
+# so `acme.localtest.me:8081` and `globex.localtest.me:8081` both work without
+# editing /etc/hosts. Used to exercise subdomain-based tenant resolution.
+
+{
+    auto_https off
+    admin off
+}
+
+:8081 {
+    reverse_proxy server:8080 {
+        header_up Host {host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}

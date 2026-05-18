@@ -1,0 +1,79 @@
+use anyhow::Result;
+use serde::Deserialize;
+
+/// How the server resolves tenant identity from requests.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)] // Dedicated.tenant_slug consumed by tenant.rs's match arm (#3)
+pub enum TenancyMode {
+    /// Multi-tenant: tenant resolved from subdomain or X-Skill-Pool-Tenant header.
+    Shared,
+    /// Single-tenant deploy: tenant_id pinned at startup; no subdomain routing required.
+    Dedicated { tenant_slug: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // fields consumed as routes/storage land (#3)
+pub struct Config {
+    #[serde(default = "default_bind")]
+    pub bind: String,
+
+    #[serde(default)]
+    pub tenancy_mode: TenancyModeRaw,
+
+    pub database_url: String,
+
+    #[serde(default = "default_storage_uri")]
+    pub storage_uri: String,
+
+    /// Public origin pattern used when constructing absolute URLs.
+    /// `{tenant}` is substituted with the tenant slug in shared mode.
+    #[serde(default = "default_origin_pattern")]
+    pub origin_pattern: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TenancyModeRaw {
+    /// "shared" or "dedicated"
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    pub tenant_slug: Option<String>,
+}
+
+fn default_bind() -> String {
+    "0.0.0.0:8080".into()
+}
+fn default_storage_uri() -> String {
+    "fs:///var/lib/skill-pool/storage".into()
+}
+fn default_origin_pattern() -> String {
+    "https://{tenant}.skill-pool.example.com".into()
+}
+fn default_mode() -> String {
+    "shared".into()
+}
+
+impl Config {
+    pub fn load() -> Result<Self> {
+        use figment::{providers::Env, Figment};
+
+        let cfg: Config = Figment::new()
+            .merge(Env::prefixed("SKILL_POOL_").split("__"))
+            .extract()?;
+
+        Ok(cfg)
+    }
+
+    pub fn resolved_tenancy(&self) -> TenancyMode {
+        match self.tenancy_mode.mode.as_str() {
+            "dedicated" => TenancyMode::Dedicated {
+                tenant_slug: self
+                    .tenancy_mode
+                    .tenant_slug
+                    .clone()
+                    .unwrap_or_else(|| "default".into()),
+            },
+            _ => TenancyMode::Shared,
+        }
+    }
+}
