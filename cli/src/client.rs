@@ -33,6 +33,10 @@ pub struct Skill {
     pub tags: Vec<String>,
     #[serde(default)]
     pub status: String,
+    /// Cosine similarity to the semantic query when `?semantic=` was used.
+    /// Absent for plain list / keyword responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub similarity: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +112,8 @@ impl Client {
         query: Option<&str>,
         tags: &[String],
         limit: Option<u32>,
+        semantic: Option<&str>,
+        min_similarity: Option<f32>,
     ) -> Result<Vec<Skill>> {
         let mut url = self.base.join("/v1/skills")?;
         {
@@ -120,6 +126,12 @@ impl Client {
             }
             if let Some(n) = limit {
                 q.append_pair("limit", &n.to_string());
+            }
+            if let Some(s) = semantic {
+                q.append_pair("semantic", s);
+            }
+            if let Some(t) = min_similarity {
+                q.append_pair("min_similarity", &t.to_string());
             }
         }
         let resp = self.http.get(url).send().await?;

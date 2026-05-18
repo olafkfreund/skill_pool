@@ -64,6 +64,14 @@ enum Cmd {
         /// Emit JSON instead of a table — useful in scripts.
         #[arg(long)]
         json: bool,
+        /// Semantic search: rank by cosine similarity of `description_embedding`
+        /// to this query. Requires the server to be built with
+        /// `--features fastembed`.
+        #[arg(long, value_name = "TEXT")]
+        semantic: Option<String>,
+        /// Minimum similarity (0.0..1.0) when `--semantic` is set. Default 0.0.
+        #[arg(long, value_name = "FLOAT")]
+        min_similarity: Option<f32>,
     },
     /// Publish a local skill directory to the registry.
     Publish {
@@ -193,7 +201,20 @@ async fn main() -> Result<()> {
             tags,
             limit,
             json,
-        } => cmd::search::run(&cfg, query.as_deref(), &tags, limit, json).await,
+            semantic,
+            min_similarity,
+        } => {
+            cmd::search::run(
+                &cfg,
+                query.as_deref(),
+                &tags,
+                limit,
+                json,
+                semantic.as_deref(),
+                min_similarity,
+            )
+            .await
+        }
         Cmd::Publish { dir, slug, version } => {
             cmd::publish::run(&cfg, &dir, slug.as_deref(), &version).await
         }

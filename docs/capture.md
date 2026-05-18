@@ -313,9 +313,6 @@ because everything goes through `vector_to_pg_literal`.
   persisted historical state (across sessions and shell history).
 - **NixOS module** — declarative `services.skill-pool-capturer.enable`
   instead of the manual unit-copy step.
-- **Semantic search endpoint** — `GET /v1/skills?semantic=...` to use
-  the same embedding column for catalog search. The column is in place;
-  the endpoint is the next layer.
 
 The signal scorer plus the two-stage drafter together give the policy
 the master plan called for: precision over recall, deterministic gate

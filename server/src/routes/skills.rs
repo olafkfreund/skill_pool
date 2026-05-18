@@ -37,6 +37,11 @@ pub struct Skill {
     pub tags: Vec<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
+    /// Cosine similarity to the `semantic` query, if one was supplied.
+    /// Absent on plain list / keyword responses so the shape stays
+    /// byte-identical with the pre-Phase-5 API for default clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similarity: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -45,6 +50,13 @@ pub struct ListQuery {
     /// Comma-separated tag list. ALL must match.
     pub tags: Option<String>,
     pub limit: Option<i64>,
+    /// When set, rank results by cosine similarity of `description_embedding`
+    /// to this query string. Requires an embedder configured on the server
+    /// (`--features fastembed`). Coexists with `tags` (both apply).
+    pub semantic: Option<String>,
+    /// Minimum similarity (0.0..=1.0) when `semantic` is set. Defaults to 0.0
+    /// — return all matches ordered by similarity.
+    pub min_similarity: Option<f32>,
 }
 
 pub async fn list(
@@ -53,7 +65,6 @@ pub async fn list(
     Query(q): Query<ListQuery>,
 ) -> AppResult<Json<Vec<Skill>>> {
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let needle = q.query.as_deref().map(|s| format!("%{s}%"));
     let tag_list: Vec<String> = q
         .tags
         .as_deref()
@@ -65,7 +76,56 @@ pub async fn list(
         })
         .unwrap_or_default();
 
-    // Return the latest version per slug. Postgres `DISTINCT ON` makes this trivial.
+    // --- Semantic-ranked branch -----------------------------------------
+    if let Some(query_text) = q.semantic.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let embedding = state
+            .embedder()
+            .embed(query_text)
+            .map_err(AppError::Anyhow)?;
+        let Some(vec) = embedding else {
+            return Err(AppError::BadRequest(
+                "semantic search is not enabled on this server (no embedder configured)".into(),
+            ));
+        };
+        let lit = crate::embedding::vector_to_pg_literal(&vec);
+        let min_sim = q.min_similarity.unwrap_or(0.0).clamp(0.0, 1.0);
+
+        // CTE picks the latest published version per slug first (preserving
+        // the existing list semantics), then ranks by cosine similarity over
+        // that result. The HNSW index on description_embedding still helps
+        // because the planner can push the <=> ordering down.
+        let rows: Vec<SkillRowSemantic> = sqlx::query_as(
+            "WITH latest AS ( \
+               SELECT DISTINCT ON (slug) \
+                 slug, version, description, when_to_use, tags, status, created_at, \
+                 description_embedding \
+               FROM skills \
+               WHERE tenant_id = $1 \
+                 AND status = 'published' \
+                 AND ($2::text[] = '{}' OR tags @> $2) \
+                 AND description_embedding IS NOT NULL \
+               ORDER BY slug, created_at DESC \
+             ) \
+             SELECT slug, version, description, when_to_use, tags, status, created_at, \
+                    (1 - (description_embedding <=> $3::text::vector))::real AS similarity \
+             FROM latest \
+             WHERE (1 - (description_embedding <=> $3::text::vector))::real >= $4 \
+             ORDER BY similarity DESC \
+             LIMIT $5",
+        )
+        .bind(tenant.tenant_id)
+        .bind(&tag_list)
+        .bind(lit)
+        .bind(min_sim)
+        .bind(limit)
+        .fetch_all(state.db())
+        .await?;
+
+        return Ok(Json(rows.into_iter().map(Into::into).collect()));
+    }
+
+    // --- Keyword / tag / plain-list branch (unchanged) ------------------
+    let needle = q.query.as_deref().map(|s| format!("%{s}%"));
     let rows: Vec<SkillRow> = sqlx::query_as(
         "SELECT DISTINCT ON (slug) \
             slug, version, description, when_to_use, tags, status, created_at \
@@ -401,6 +461,34 @@ impl From<SkillRow> for Skill {
             tags: r.tags,
             status: r.status,
             created_at: r.created_at,
+            similarity: None,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SkillRowSemantic {
+    slug: String,
+    version: String,
+    description: String,
+    when_to_use: Option<String>,
+    tags: Vec<String>,
+    status: String,
+    created_at: DateTime<Utc>,
+    similarity: f32,
+}
+
+impl From<SkillRowSemantic> for Skill {
+    fn from(r: SkillRowSemantic) -> Self {
+        Self {
+            slug: r.slug,
+            version: r.version,
+            description: r.description,
+            when_to_use: r.when_to_use,
+            tags: r.tags,
+            status: r.status,
+            created_at: r.created_at,
+            similarity: Some(r.similarity),
         }
     }
 }
