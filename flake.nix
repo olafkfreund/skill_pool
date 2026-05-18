@@ -6,8 +6,16 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs = { self, nixpkgs, flake-utils }: {
+    # NixOS / home-manager module — declarative wrapper around the systemd
+    # units shipped in packaging/systemd/. Lives outside the per-system
+    # wrapper because modules are evaluated by the consumer's NixOS, not
+    # by `nix build`.
+    nixosModules.default = ./nix/modules/skill-pool-capturer.nix;
+    nixosModules.skill-pool-capturer = ./nix/modules/skill-pool-capturer.nix;
+    # Home Manager users import this at the same path; same module shape.
+    homeManagerModules.default = ./nix/modules/skill-pool-capturer.nix;
+  } // flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
 
