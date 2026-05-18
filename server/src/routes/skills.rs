@@ -143,7 +143,7 @@ pub async fn list(
         .bind(min_sim)
         .bind(limit)
         .bind(kind)
-        .fetch_all(state.db())
+        .fetch_all(state.db_read())
         .await?;
 
         return Ok(Json(rows.into_iter().map(Into::into).collect()));
@@ -168,7 +168,7 @@ pub async fn list(
     .bind(&tag_list)
     .bind(limit)
     .bind(kind)
-    .fetch_all(state.db())
+    .fetch_all(state.db_read())
     .await?;
 
     Ok(Json(rows.into_iter().map(Into::into).collect()))
@@ -211,7 +211,7 @@ pub async fn get_one(
     .bind(tenant.tenant_id)
     .bind(&slug)
     .bind(kind)
-    .fetch_optional(state.db())
+    .fetch_optional(state.db_read())
     .await?;
 
     let row = row.ok_or(AppError::NotFound)?;
@@ -236,7 +236,7 @@ pub async fn get_skill_md(
     .bind(caller.tenant.tenant_id)
     .bind(&slug)
     .bind(kind)
-    .fetch_optional(state.db())
+    .fetch_optional(state.db_read())
     .await?;
     let (skill_id, key) = row.ok_or(AppError::NotFound)?;
 
@@ -293,7 +293,7 @@ pub async fn get_bundle(
     .bind(caller.tenant.tenant_id)
     .bind(&slug)
     .bind(kind)
-    .fetch_optional(state.db())
+    .fetch_optional(state.db_read())
     .await?;
 
     let (skill_id, key) = row.ok_or(AppError::NotFound)?;
@@ -625,7 +625,7 @@ pub async fn get_detail(
     .bind(tenant.tenant_id)
     .bind(&slug)
     .bind(kind)
-    .fetch_optional(state.db())
+    .fetch_optional(state.db_read())
     .await?;
     let parent = parent.ok_or(AppError::NotFound)?;
 
@@ -647,7 +647,7 @@ pub async fn get_detail(
     )
     .bind(tenant.tenant_id)
     .bind(parent.id)
-    .fetch_all(state.db())
+    .fetch_all(state.db_read())
     .await?;
 
     // Reverse edges: who declares a dependency on this slug?
@@ -660,7 +660,7 @@ pub async fn get_detail(
     )
     .bind(tenant.tenant_id)
     .bind(&parent.slug)
-    .fetch_all(state.db())
+    .fetch_all(state.db_read())
     .await?;
 
     // Pending drafts that flagged this slug as a merge target (Phase 5
@@ -681,7 +681,7 @@ pub async fn get_detail(
     )
     .bind(tenant.tenant_id)
     .bind(&parent.slug)
-    .fetch_all(state.db())
+    .fetch_all(state.db_read())
     .await?;
 
     Ok(Json(SkillDetail {
@@ -716,7 +716,7 @@ pub async fn get_deps(
     )
     .bind(tenant.tenant_id)
     .bind(&slug)
-    .fetch_optional(state.db())
+    .fetch_optional(state.db_read())
     .await?;
     let Some((parent_id,)) = parent else {
         return Err(AppError::NotFound);
@@ -742,7 +742,7 @@ pub async fn get_deps(
     )
     .bind(tenant.tenant_id)
     .bind(parent_id)
-    .fetch_all(state.db())
+    .fetch_all(state.db_read())
     .await?;
 
     Ok(Json(rows))

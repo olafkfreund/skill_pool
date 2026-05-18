@@ -65,6 +65,26 @@ in
       '';
     };
 
+    databaseReadUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "postgres://skillpool@replica.internal/skillpool";
+      description = ''
+        Optional read-replica DSN. When set, read-only handlers route
+        to this pool; writes still go to `databaseUrl`. Like the primary
+        DSN, prefer setting this via `environmentFile` in production.
+      '';
+    };
+
+    dbPoolSize = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 20;
+      description = ''
+        sqlx connection-pool max size. The read pool (if configured)
+        uses the same cap. Rough rule: (peak RPS × p95-seconds) + 20%.
+      '';
+    };
+
     storageUri = lib.mkOption {
       type = lib.types.str;
       default = "fs:///var/lib/skill-pool/bundles";
@@ -188,6 +208,8 @@ in
         SKILL_POOL_BIND = cfg.bind;
         SKILL_POOL_STORAGE_URI = cfg.storageUri;
         SKILL_POOL_DATABASE_URL = cfg.databaseUrl;
+        SKILL_POOL_DATABASE_READ_URL = cfg.databaseReadUrl;
+        SKILL_POOL_DB_POOL_SIZE = toString cfg.dbPoolSize;
         SKILL_POOL_DEFAULT_TENANT = cfg.defaultTenant;
         RUST_LOG = cfg.logLevel;
         RUST_LOG_FORMAT = cfg.logFormat;

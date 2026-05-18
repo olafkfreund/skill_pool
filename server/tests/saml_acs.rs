@@ -280,6 +280,8 @@ async fn saml_acs_full_round_trip() -> Result<()> {
         bind: "127.0.0.1:0".into(),
         tenancy_mode: config::TenancyModeRaw::default(),
         database_url: db_url,
+        database_read_url: None,
+        db_pool_size: 20,
         storage_uri: format!("fs://{}", storage_dir.path().display()),
         origin_pattern: origin.clone(),
         embedding: config::EmbeddingConfig::default(),

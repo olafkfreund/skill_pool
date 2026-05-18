@@ -75,7 +75,7 @@ pub async fn list_candidates(
     .bind(max_uses)
     .bind(days as i32)
     .bind(limit)
-    .fetch_all(state.db())
+    .fetch_all(state.db_read())
     .await?;
 
     Ok(Json(rows))

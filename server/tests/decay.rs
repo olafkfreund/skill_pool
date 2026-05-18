@@ -65,6 +65,8 @@ async fn boot() -> Result<Harness> {
         bind: "127.0.0.1:0".into(),
         tenancy_mode: config::TenancyModeRaw::default(),
         database_url: db_url,
+        database_read_url: None,
+        db_pool_size: 20,
         storage_uri,
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),

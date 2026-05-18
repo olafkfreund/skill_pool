@@ -23,6 +23,18 @@ pub struct Config {
 
     pub database_url: String,
 
+    /// Optional read-replica DSN. When set, read-only handlers route to
+    /// this pool instead of `database_url`. Replication lag means a
+    /// publish-then-list within milliseconds can see stale state — for
+    /// the catalog that's acceptable (Postgres async replication is
+    /// typically <100ms).
+    pub database_read_url: Option<String>,
+
+    /// sqlx connection-pool max size for the primary DB. The read pool
+    /// (if configured) uses the same cap.
+    #[serde(default = "default_db_pool_size")]
+    pub db_pool_size: u32,
+
     #[serde(default = "default_storage_uri")]
     pub storage_uri: String,
 
@@ -56,6 +68,9 @@ pub struct TenancyModeRaw {
 
 fn default_bind() -> String {
     "0.0.0.0:8080".into()
+}
+fn default_db_pool_size() -> u32 {
+    20
 }
 fn default_storage_uri() -> String {
     "fs:///var/lib/skill-pool/storage".into()

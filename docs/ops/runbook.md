@@ -177,7 +177,7 @@ sudo -u postgres psql -c "
 **Common causes:**
 
 1. **Long-running query holding a connection.** Confirm: `pg_stat_activity` shows a query with `dur > 30s`. Fix: `SELECT pg_cancel_backend(<pid>);` for the offending pid, then add an index for that query.
-2. **Pool max-connections too low for traffic.** The pool cap is hardcoded at 20 (`PgPoolOptions::new().max_connections(20)` in `server/src/state.rs`). Fix: raise it in source and redeploy; there is no live-config knob for this today. [TODO: verify `SKILL_POOL_DB_POOL_SIZE` — referenced in alert annotations but not present in `server/src/config.rs` as of this revision.]
+2. **Pool max-connections too low for traffic.** Default cap is 20 (`server/src/state.rs::connect_pool`). Fix: set `SKILL_POOL_DB_POOL_SIZE` (NixOS option `services.skill-pool-server.dbPoolSize`) and restart. Rough rule: (peak RPS × p95-seconds) + 20% headroom. If a read replica is configured via `SKILL_POOL_DATABASE_READ_URL`, it shares the same cap.
 3. **Postgres restarted, sqlx still holds dead handles.** Confirm: errors like `connection closed` in the log. Fix: restart skill-pool-server.
 4. **Deadlock.** Confirm: `pg_locks WHERE NOT granted` shows two PIDs blocking each other. Fix: cancel both; investigate the offending route.
 5. **Connection leak in a new code path.** Confirm: pool stays low even when traffic drops. Fix: rollback the most recent deploy.

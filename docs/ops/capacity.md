@@ -110,8 +110,8 @@ egress per download collapses to a few hundred bytes of HTTP headers.
 | RAM                   | 1 GB request / 2 GB limit per pod (matches `docs/deploy/kubernetes.md` `resources.limits`) |
 | Disk (PG data)        | 500 GB (writer) + read replica                 |
 | Disk (bundles)        | S3 per region, CDN in front                    |
-| Postgres              | Managed primary + read replica (planned: `DATABASE_READ_URL`, issue #10 §B) |
-| sqlx pool size        | 20 (planned: configurable via `SKILL_POOL_DB_POOL_SIZE`, issue #10 §B) |
+| Postgres              | Managed primary + read replica (`SKILL_POOL_DATABASE_READ_URL`)        |
+| sqlx pool size        | `SKILL_POOL_DB_POOL_SIZE` (default 20); 50–100 typical for this tier  |
 | App replicas          | HPA `minReplicas=2`, `maxReplicas=20`, CPU target 70% (from `docs/deploy/kubernetes.md`) |
 | Network bandwidth     | 1 Gbps cluster ingress, CDN absorbs bundle egress |
 | Deploy path           | `docs/deploy/kubernetes.md` + per-region buckets |
@@ -206,8 +206,7 @@ The classic Little's Law form: `connections ≈ RPS × p95_seconds + buffer`.
 | 200           | 0.1       | 20 + 5 = 25 | 20 (saturated)        |
 
 Anything sustained above ~150 RPS per replica will run the pool hot.
-Today this requires a code change in `server/src/state.rs`; the
-planned `SKILL_POOL_DB_POOL_SIZE` env (issue #10 §B) lifts that.
+Bump it via `SKILL_POOL_DB_POOL_SIZE` (NixOS option: `dbPoolSize`).
 
 ### Network
 
@@ -232,15 +231,16 @@ Ordered cheapest to most invasive:
    `SKILL_POOL_STORAGE_URI=s3://...`. Cuts app bandwidth by ~99% and
    takes ~1 hour of S3+IAM setup. Cuts compute too — the app stops
    touching bundle bytes on hot paths.
-2. **Bump the sqlx pool size.** Planned env `SKILL_POOL_DB_POOL_SIZE`
-   (issue #10 §B). Until that lands, raising the cap is a one-line
-   change in `server/src/state.rs` and a rebuild.
+2. **Bump the sqlx pool size.** Set `SKILL_POOL_DB_POOL_SIZE` (or
+   `services.skill-pool-server.dbPoolSize` on NixOS); the read pool
+   (if configured) shares the same cap.
 3. **Add a second app replica behind the proxy.** Stateless app means
    replicas just plug in; see the `replicas: 2` example in
    `docs/deploy/kubernetes.md`.
-4. **Add a Postgres read replica.** Planned `DATABASE_READ_URL` (issue
-   #10 §B). Routes reads off the writer for the catalog list and
-   bundle-metadata queries.
+4. **Add a Postgres read replica.** Set `SKILL_POOL_DATABASE_READ_URL`
+   to the replica DSN. Read-only handlers (catalog list, detail, deps,
+   usage timelines, decay candidates) route there; writes stay on the
+   primary.
 5. **Cache theme and auth lookups in Redis.** Planned (issue #10 §A).
    Eliminates the per-request `tenants` + `tenant_users` joins.
 6. **Shard tenants across dedicated deploys.** The "dedicated"
@@ -252,18 +252,15 @@ Ordered cheapest to most invasive:
 - No production load-test data has been collected against the current
   codebase. The "100 RPS / p95 < 100 ms on 2 vCPU" target in issue #10
   is a goal, not a measurement.
-- The sqlx pool size is hardcoded to 20 in `server/src/state.rs`. The
-  operator cannot tune it via an env var today; this requires a code
-  change and rebuild until the planned `SKILL_POOL_DB_POOL_SIZE` env
-  lands.
 - The fastembed resident size figure of ~130 MB is an estimate based on
   the BGE-small-en-v1.5 ONNX model weights (`server/src/embedding.rs`).
   Actual residency depends on ONNX runtime version, page-cache state,
   and the operator's batching pattern. Measure on the target host
   before committing pod limits.
-- `DATABASE_READ_URL` is referenced in `docs/deploy/single-node.md` as
-  a forward-looking pointer but is not parsed by `server/src/config.rs`
-  today. Read-replica routing is planned (issue #10 §B), not present.
+- `SKILL_POOL_DATABASE_READ_URL` routes only the catalog read paths
+  (list/detail/deps/usage timelines/decay candidates). Token validation
+  and auth lookups always hit the primary so a misconfigured replica
+  cannot lock anyone out.
 - Bundle CDN behaviour is backend-dependent. The 307 redirect from
   `get_bundle` only fires for backends whose `presign_read` returns
   `Some` — `fs://` always streams bytes, S3 always presigns. Edge

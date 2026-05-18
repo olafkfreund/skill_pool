@@ -73,7 +73,7 @@ pub async fn timeline(
     )
     .bind(days as i32)
     .bind(caller.tenant.tenant_id)
-    .fetch_all(state.db())
+    .fetch_all(state.db_read())
     .await?;
 
     Ok(Json(rows))
@@ -113,7 +113,7 @@ pub async fn top(
     .bind(caller.tenant.tenant_id)
     .bind(days as i32)
     .bind(limit)
-    .fetch_all(state.db())
+    .fetch_all(state.db_read())
     .await?;
 
     Ok(Json(rows))
