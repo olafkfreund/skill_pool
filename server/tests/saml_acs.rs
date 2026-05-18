@@ -30,6 +30,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::Engine;
 use sqlx::postgres::PgPoolOptions;
 use testcontainers::runners::AsyncRunner;
+use testcontainers::ImageExt;
 use testcontainers_modules::postgres::Postgres;
 
 use skill_pool_server::{admin, config, routes, state};
@@ -231,7 +232,11 @@ async fn saml_acs_full_round_trip() -> Result<()> {
     }
 
     // -------- Postgres + tenants --------
-    let pg = Postgres::default().start().await?;
+    let pg = Postgres::default()
+        .with_name("pgvector/pgvector")
+        .with_tag("pg16")
+        .start()
+        .await?;
     let pg_port = pg.get_host_port_ipv4(5432).await?;
     let db_url = format!("postgres://postgres:postgres@127.0.0.1:{pg_port}/postgres");
     let pool = PgPoolOptions::new()
@@ -277,6 +282,7 @@ async fn saml_acs_full_round_trip() -> Result<()> {
         database_url: db_url,
         storage_uri: format!("fs://{}", storage_dir.path().display()),
         origin_pattern: origin.clone(),
+        embedding: config::EmbeddingConfig::default(),
     };
     let state = state::AppState::new(&cfg).await?;
     let app = routes::router(state);

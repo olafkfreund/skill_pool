@@ -30,6 +30,20 @@ pub struct Config {
     /// `{tenant}` is substituted with the tenant slug in shared mode.
     #[serde(default = "default_origin_pattern")]
     pub origin_pattern: String,
+
+    /// Phase 5 — embedding-based dedup. Off by default so a default build
+    /// (without `--features fastembed`) is fully functional without
+    /// pgvector or HuggingFace network.
+    #[serde(default)]
+    pub embedding: EmbeddingConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EmbeddingConfig {
+    /// Master switch. When false, the server uses `NullEmbedder` — schema
+    /// columns stay NULL, dedup is a no-op.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

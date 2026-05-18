@@ -246,17 +246,76 @@ sessions Stage 1 approved. The master plan estimates ~30% pass-through
 rate — meaning the expensive call is paid only on the small fraction
 worth drafting.
 
-## What's NOT yet wired (Phase 5+)
+## Embedding dedup (Phase 5 — wired today)
 
-- **Embedding dedup** — before insert, check the new draft's
-  description against existing skills. If `cosine > 0.85`, file as a
-  "merge proposal" instead of a fresh draft.
+The capturer is good at producing drafts, but a real team will quickly
+generate near-duplicates ("axum middleware tip" published in March
+becomes "axum middleware pattern" captured in May). The server runs an
+embedding-based dedup pass on every draft create so the curator can
+*merge* instead of stockpiling variants.
+
+### How it works
+
+On `POST /v1/skills` (publish) the server computes a 384-dim embedding
+of the description and persists it in `skills.description_embedding`
+(`vector(384)` column via pgvector).
+
+On `POST /v1/drafts` (create) the server:
+
+1. Computes the embedding of the new description.
+2. Queries existing published skills in the same tenant:
+   `1 - (description_embedding <=> $new_embedding) AS similarity`
+   ordered by closeness, limit 1.
+3. If `similarity >= 0.85`, persists `merge_proposal_skill_id` +
+   `merge_proposal_similarity` on the draft row.
+4. The response (and `GET /v1/drafts`) surface
+   `merge_proposal_slug` + `merge_proposal_similarity`.
+
+The web inbox shows a "Looks like *foo* (94% match)" badge with a link
+to the proposed target skill.
+
+### Tenant isolation
+
+Dedup queries are scoped to the same tenant. A near-duplicate in
+another tenant's catalog never flags — confirmed by the integration
+test.
+
+### Build switch
+
+Embedding is gated behind the `fastembed` Cargo feature so default
+builds (and CI) don't pull in ONNX Runtime or HuggingFace network:
+
+```bash
+# Default build — schema columns exist, dedup is a no-op:
+cargo build -p skill-pool-server
+
+# Embedding-enabled build:
+cargo build -p skill-pool-server --features fastembed
+```
+
+With the feature on AND `embedding.enabled = true` in config, the
+`FastembedEmbedder` lazy-loads `bge-small-en-v1.5` (~30MB) on first
+use. Without the feature, the server runs `NullEmbedder` and the
+embedding columns stay NULL — schema and code degrade gracefully.
+
+### Pluggable embedders
+
+The `Embedder` trait in `server/src/embedding.rs` is the seam. Adding
+another provider (Voyage AI, OpenAI text-embedding-3, a fine-tuned
+in-house model) is a new impl + a config switch; the schema stays put
+because everything goes through `vector_to_pg_literal`.
+
+### What's still NOT wired (Phase 5+)
+
 - **Curator notifications** — desktop / email "N drafts ready for
   review" pings when the inbox grows.
 - **Cross-session recurrence + novel-command signals** — need
   persisted historical state (across sessions and shell history).
 - **NixOS module** — declarative `services.skill-pool-capturer.enable`
   instead of the manual unit-copy step.
+- **Semantic search endpoint** — `GET /v1/skills?semantic=...` to use
+  the same embedding column for catalog search. The column is in place;
+  the endpoint is the next layer.
 
 The signal scorer plus the two-stage drafter together give the policy
 the master plan called for: precision over recall, deterministic gate

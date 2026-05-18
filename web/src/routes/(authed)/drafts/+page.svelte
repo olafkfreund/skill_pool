@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, CheckCircle2, Inbox, Trash2, Send } from '@lucide/svelte';
+  import { AlertTriangle, CheckCircle2, GitMerge, Inbox, Trash2, Send } from '@lucide/svelte';
   import type { Draft } from '$lib/server/api';
 
   let { data, form } = $props();
@@ -122,6 +122,22 @@
               </span>
             </div>
             <p class="mt-1 text-sm text-[var(--sp-fg)]">{d.description}</p>
+            {#if d.merge_proposal_slug}
+              <a
+                href={`/skills/${encodeURIComponent(d.merge_proposal_slug)}`}
+                class="mt-2 inline-flex items-center gap-1.5 rounded-[var(--sp-radius)] border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900 hover:bg-amber-100"
+                title="Embedding dedup flagged this draft as a near-duplicate"
+              >
+                <GitMerge size="12" />
+                Looks like
+                <code class="font-mono">{d.merge_proposal_slug}</code>
+                {#if d.merge_proposal_similarity != null}
+                  <span class="text-amber-700">
+                    ({(d.merge_proposal_similarity * 100).toFixed(0)}% match)
+                  </span>
+                {/if}
+              </a>
+            {/if}
             {#if d.when_to_use}
               <p class="mt-1 text-xs text-[var(--sp-muted-fg)]">
                 <span class="font-medium">When:</span>

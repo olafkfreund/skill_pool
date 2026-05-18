@@ -43,6 +43,13 @@ pub struct Draft {
     pub published_version: Option<String>,
     pub created_at: DateTime<Utc>,
     pub reviewed_at: Option<DateTime<Utc>>,
+    /// When embedding-dedup flagged this draft as a near-duplicate of an
+    /// existing skill, this is the target slug. NULL otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_proposal_slug: Option<String>,
+    /// Cosine similarity to the proposed target. NULL when no proposal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_proposal_similarity: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -61,11 +68,13 @@ pub async fn list(
     let status_filter = q.status.as_deref().unwrap_or("pending");
     let drafts: Vec<Draft> = if status_filter == "all" {
         sqlx::query_as(
-            "SELECT id, slug, description, when_to_use, tags, origin, notes, status, \
-                    published_version, created_at, reviewed_at \
-             FROM skill_drafts \
-             WHERE tenant_id = $1 \
-             ORDER BY status = 'pending' DESC, created_at DESC \
+            "SELECT d.id, d.slug, d.description, d.when_to_use, d.tags, d.origin, \
+                    d.notes, d.status, d.published_version, d.created_at, d.reviewed_at, \
+                    s.slug AS merge_proposal_slug, d.merge_proposal_similarity \
+             FROM skill_drafts d \
+             LEFT JOIN skills s ON s.id = d.merge_proposal_skill_id \
+             WHERE d.tenant_id = $1 \
+             ORDER BY d.status = 'pending' DESC, d.created_at DESC \
              LIMIT 200",
         )
         .bind(caller.tenant.tenant_id)
@@ -78,11 +87,13 @@ pub async fn list(
             )));
         }
         sqlx::query_as(
-            "SELECT id, slug, description, when_to_use, tags, origin, notes, status, \
-                    published_version, created_at, reviewed_at \
-             FROM skill_drafts \
-             WHERE tenant_id = $1 AND status = $2 \
-             ORDER BY created_at DESC \
+            "SELECT d.id, d.slug, d.description, d.when_to_use, d.tags, d.origin, \
+                    d.notes, d.status, d.published_version, d.created_at, d.reviewed_at, \
+                    s.slug AS merge_proposal_slug, d.merge_proposal_similarity \
+             FROM skill_drafts d \
+             LEFT JOIN skills s ON s.id = d.merge_proposal_skill_id \
+             WHERE d.tenant_id = $1 AND d.status = $2 \
+             ORDER BY d.created_at DESC \
              LIMIT 200",
         )
         .bind(caller.tenant.tenant_id)
@@ -240,13 +251,46 @@ pub async fn create(
         .as_deref()
         .or(validated.frontmatter.when_to_use.as_deref());
 
+    // Embedding-dedup (Phase 5). When no embedder is configured the
+    // embedding stays NULL and the dedup query returns no row — schema
+    // and code both degrade to the pre-Phase-5 behaviour.
+    let embedding_vec = state
+        .embedder()
+        .embed(&validated.frontmatter.description)
+        .map_err(AppError::Anyhow)?;
+    let embedding_literal = embedding_vec
+        .as_ref()
+        .map(|v| crate::embedding::vector_to_pg_literal(v));
+
+    let merge_proposal: Option<(Uuid, f32)> = if let Some(lit) = &embedding_literal {
+        sqlx::query_as(
+            "SELECT id, (1 - (description_embedding <=> $2::text::vector))::real AS similarity \
+             FROM skills \
+             WHERE tenant_id = $1 \
+               AND status = 'published' \
+               AND description_embedding IS NOT NULL \
+             ORDER BY description_embedding <=> $2::text::vector ASC \
+             LIMIT 1",
+        )
+        .bind(caller.tenant.tenant_id)
+        .bind(lit)
+        .fetch_optional(state.db())
+        .await?
+        .filter(|(_id, sim): &(Uuid, f32)| *sim >= crate::embedding::DEDUP_SIMILARITY_THRESHOLD)
+    } else {
+        None
+    };
+
     let row: Draft = sqlx::query_as(
         "INSERT INTO skill_drafts \
            (id, tenant_id, slug, description, when_to_use, tags, origin, notes, \
-            bundle_uri, bundle_sha256, created_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+            bundle_uri, bundle_sha256, created_by, description_embedding, \
+            merge_proposal_skill_id, merge_proposal_similarity) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text::vector, $13, $14) \
          RETURNING id, slug, description, when_to_use, tags, origin, notes, status, \
-                   published_version, created_at, reviewed_at",
+                   published_version, created_at, reviewed_at, \
+                   (SELECT slug FROM skills WHERE id = $13) AS merge_proposal_slug, \
+                   merge_proposal_similarity",
     )
     .bind(draft_id)
     .bind(caller.tenant.tenant_id)
@@ -259,6 +303,9 @@ pub async fn create(
     .bind(&key)
     .bind(&validated.sha256_hex)
     .bind(caller.user_id)
+    .bind(embedding_literal.as_deref())
+    .bind(merge_proposal.map(|(id, _)| id))
+    .bind(merge_proposal.map(|(_, sim)| sim))
     .fetch_one(state.db())
     .await?;
 
@@ -481,10 +528,12 @@ pub async fn discard(
 
 async fn load_draft(state: &AppState, tenant_id: Uuid, id: Uuid) -> AppResult<Draft> {
     let draft: Option<Draft> = sqlx::query_as(
-        "SELECT id, slug, description, when_to_use, tags, origin, notes, status, \
-                published_version, created_at, reviewed_at \
-         FROM skill_drafts \
-         WHERE tenant_id = $1 AND id = $2",
+        "SELECT d.id, d.slug, d.description, d.when_to_use, d.tags, d.origin, \
+                d.notes, d.status, d.published_version, d.created_at, d.reviewed_at, \
+                s.slug AS merge_proposal_slug, d.merge_proposal_similarity \
+         FROM skill_drafts d \
+         LEFT JOIN skills s ON s.id = d.merge_proposal_skill_id \
+         WHERE d.tenant_id = $1 AND d.id = $2",
     )
     .bind(tenant_id)
     .bind(id)

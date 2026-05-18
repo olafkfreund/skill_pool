@@ -239,6 +239,9 @@ export interface Draft {
   published_version: string | null;
   created_at: string;
   reviewed_at: string | null;
+  /** When set, this draft's description was within DEDUP_THRESHOLD of the named skill. */
+  merge_proposal_slug?: string | null;
+  merge_proposal_similarity?: number | null;
 }
 
 export async function listDrafts(

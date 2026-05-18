@@ -9,6 +9,7 @@ pub mod audit;
 pub mod auth;
 pub mod bundle;
 pub mod config;
+pub mod embedding;
 pub mod error;
 pub mod routes;
 pub mod state;

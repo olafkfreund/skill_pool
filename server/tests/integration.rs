@@ -20,6 +20,7 @@ use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use std::io::Write;
 use testcontainers::runners::AsyncRunner;
+use testcontainers::ImageExt;
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
@@ -37,8 +38,12 @@ struct Harness {
 }
 
 async fn boot() -> Result<Harness> {
-    // 1. Postgres
-    let pg = Postgres::default().start().await?;
+    // 1. Postgres — pgvector image for the 0009 migration.
+    let pg = Postgres::default()
+        .with_name("pgvector/pgvector")
+        .with_tag("pg16")
+        .start()
+        .await?;
     let pg_port = pg.get_host_port_ipv4(5432).await?;
     let db_url = format!("postgres://postgres:postgres@127.0.0.1:{pg_port}/postgres");
 
@@ -70,6 +75,7 @@ async fn boot() -> Result<Harness> {
         database_url: db_url,
         storage_uri,
         origin_pattern: "http://{tenant}.localhost".into(),
+        embedding: config::EmbeddingConfig::default(),
     };
     let state = state::AppState::new(&cfg).await?;
     let app = routes::router(state);

@@ -67,6 +67,15 @@ quick-xml = "0.36"
 config = { version = "0.15", default-features = false, features = ["toml", "json"] }
 figment = { version = "0.10", features = ["env", "toml"] }
 
+# Phase 5 — embedding-based dedup. Off by default so default builds and CI
+# don't pull in ONNX Runtime or HuggingFace network access. Operators that
+# want dedup build with `--features fastembed`.
+fastembed = { version = "4", optional = true }
+
+[features]
+default = []
+fastembed = ["dep:fastembed"]
+
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
 testcontainers = "0.23"

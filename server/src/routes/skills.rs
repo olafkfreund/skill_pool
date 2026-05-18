@@ -273,10 +273,18 @@ pub async fn publish(
         t
     };
 
+    // Compute the description embedding so semantic search and dedup
+    // can find this skill later. None when no embedder is configured.
+    let embedding_literal = state
+        .embedder()
+        .embed(&validated.frontmatter.description)
+        .map_err(AppError::Anyhow)?
+        .map(|v| crate::embedding::vector_to_pg_literal(&v));
+
     let row: Result<SkillRow, sqlx::Error> = sqlx::query_as(
         "INSERT INTO skills \
-           (tenant_id, slug, version, description, when_to_use, tags, bundle_uri, bundle_sha256, created_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL) \
+           (tenant_id, slug, version, description, when_to_use, tags, bundle_uri, bundle_sha256, created_by, description_embedding) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9::text::vector) \
          RETURNING slug, version, description, when_to_use, tags, status, created_at",
     )
     .bind(caller.tenant.tenant_id)
@@ -287,6 +295,7 @@ pub async fn publish(
     .bind(&merged_tags)
     .bind(&key)
     .bind(&validated.sha256_hex)
+    .bind(embedding_literal)
     .fetch_one(state.db())
     .await;
 
