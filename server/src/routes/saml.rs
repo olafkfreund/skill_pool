@@ -139,6 +139,7 @@ pub struct AcsForm {
 }
 
 struct SamlConfig {
+    idp_entity_id: String,
     idp_x509_cert: String,
     sp_entity_id: String,
     default_role: String,
@@ -200,18 +201,19 @@ async fn load_saml_config(
     tenant_id: Uuid,
     tenant_slug: &str,
 ) -> AppResult<SamlConfig> {
-    let row: Option<(String, Option<String>, String)> = sqlx::query_as(
-        "SELECT idp_x509_cert, sp_entity_id, default_role \
+    let row: Option<(String, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT idp_entity_id, idp_x509_cert, sp_entity_id, default_role \
          FROM tenant_saml WHERE tenant_id = $1",
     )
     .bind(tenant_id)
     .fetch_optional(state.db())
     .await?;
 
-    let (idp_x509_cert, sp_entity_id, default_role) =
+    let (idp_entity_id, idp_x509_cert, sp_entity_id, default_role) =
         row.ok_or_else(|| AppError::BadRequest("SAML not configured for this tenant".into()))?;
 
     Ok(SamlConfig {
+        idp_entity_id,
         idp_x509_cert,
         sp_entity_id: sp_entity_id.unwrap_or_else(|| default_sp_entity_id(tenant_slug)),
         default_role,
@@ -230,7 +232,7 @@ fn validate_response(
     cfg: &SamlConfig,
     tenant_slug: &str,
 ) -> Result<ValidatedAssertion, String> {
-    let idp_descriptor = build_idp_descriptor(&cfg.idp_x509_cert)?;
+    let idp_descriptor = build_idp_descriptor(&cfg.idp_entity_id, &cfg.idp_x509_cert)?;
 
     let sp = ServiceProviderBuilder::default()
         .entity_id(cfg.sp_entity_id.clone())
@@ -242,6 +244,13 @@ fn validate_response(
     let xml_str = std::str::from_utf8(xml).map_err(|e| format!("non-utf8 XML: {e}"))?;
     // samael's parse_xml_response validates the signature (against the IdP cert
     // in the descriptor we built) and returns the verified Assertion.
+    //
+    // We support both IdP-initiated and SP-initiated flows in the same code
+    // path by passing `None` for `possible_request_ids`. samael then doesn't
+    // enforce InResponseTo *presence*. If the IdP set InResponseTo anyway,
+    // samael validates it's structurally a valid ID format but doesn't
+    // require it to match anything from our side (we never generate
+    // AuthnRequest ourselves in v1).
     let assertion = sp
         .parse_xml_response(xml_str, None)
         .map_err(|e| format!("parse / validate: {e}"))?;
@@ -326,7 +335,7 @@ fn first_attribute(assertion: &samael::schema::Assertion, name: &str) -> Option<
         .and_then(|v| v.value.clone())
 }
 
-fn build_idp_descriptor(cert_pem: &str) -> Result<EntityDescriptor, String> {
+fn build_idp_descriptor(entity_id: &str, cert_pem: &str) -> Result<EntityDescriptor, String> {
     let body: String = cert_pem
         .lines()
         .filter(|l| !l.starts_with("-----"))
@@ -337,7 +346,7 @@ fn build_idp_descriptor(cert_pem: &str) -> Result<EntityDescriptor, String> {
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata"
                   xmlns:ds="http://www.w3.org/2000/09/xmldsig#"
-                  entityID="placeholder">
+                  entityID="{entity_id}">
   <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"
                    WantAuthnRequestsSigned="false">
     <KeyDescriptor use="signing">
@@ -351,7 +360,8 @@ fn build_idp_descriptor(cert_pem: &str) -> Result<EntityDescriptor, String> {
                         Location="https://placeholder.invalid/sso"/>
   </IDPSSODescriptor>
 </EntityDescriptor>
-"#
+"#,
+        entity_id = xml_escape(entity_id),
     );
 
     EntityDescriptor::from_str(&descriptor_xml).map_err(|e| format!("parse IdP descriptor: {e}"))
