@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.claude.com/_schemas/claude-code-managed-settings.json",
+  "_note": "Example tenant-tailored managed-settings.json. Generated for tenant `acme`. Drop into /etc/claude-code/managed-settings.json on Linux, /Library/Application Support/ClaudeCode/managed-settings.json on macOS, or C:\\Program Files\\ClaudeCode\\managed-settings.json on Windows. This sits ALONGSIDE Anthropic's own managed-settings — fields here merge with theirs.",
+  "env": {
+    "SKILL_POOL_REGISTRY": "https://acme.skill-pool.example.com",
+    "SKILL_POOL_TENANT": "acme",
+    "SKILL_POOL_TOKEN_FILE": "/etc/skill-pool/token"
+  },
+  "additionalDirectories": [
+    "/var/lib/skill-pool/skills"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(skill-pool *)",
+      "Bash(skill-pool-server admin *)",
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf /)"
+    ]
+  }
+}

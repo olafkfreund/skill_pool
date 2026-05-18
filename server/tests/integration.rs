@@ -798,6 +798,52 @@ async fn full_publish_install_and_isolation() -> Result<()> {
         .await?;
     assert_eq!(resp.status().as_u16(), 204);
 
+    // -------- Enterprise managed-settings.json template --------
+    let resp = c
+        .get(format!("{}/v1/enterprise/managed-settings", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&h.acme_token)
+        .send()
+        .await?;
+    assert_eq!(
+        resp.status().as_u16(),
+        403,
+        "default scope must not download"
+    );
+
+    let resp = c
+        .get(format!("{}/v1/enterprise/managed-settings", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_for_members)
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-disposition")
+            .and_then(|h| h.to_str().ok()),
+        Some("attachment; filename=\"managed-settings.json\"")
+    );
+    let body: Value = resp.json().await?;
+    assert_eq!(body["_tenant"], "acme");
+    assert_eq!(body["env"]["SKILL_POOL_TENANT"], "acme");
+    let registry = body["env"]["SKILL_POOL_REGISTRY"]
+        .as_str()
+        .expect("registry url");
+    assert!(
+        registry.contains("acme"),
+        "registry should mention tenant: {registry}"
+    );
+    let allow = body["permissions"]["allow"]
+        .as_array()
+        .expect("permissions.allow array");
+    assert!(
+        allow
+            .iter()
+            .any(|v| v.as_str() == Some("Bash(skill-pool *)")),
+        "expected `Bash(skill-pool *)` in allow list"
+    );
+
     // -------- audit row written for the publish --------
     let audit: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM audit_events \
