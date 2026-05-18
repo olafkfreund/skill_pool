@@ -823,6 +823,79 @@ async fn full_publish_install_and_isolation() -> Result<()> {
         .await?;
     assert_eq!(resp.status().as_u16(), 204);
 
+    // -------- Bootstrap (Phase 3 — curated stack → skills mapping) --------
+    admin::set_stack_mapping(&h.db, "acme", "rust", "rust-axum-handler").await?;
+    admin::set_stack_mapping(&h.db, "acme", "rust", "sqlx-migrations").await?;
+    admin::set_stack_mapping(&h.db, "acme", "nix", "nix-flake-tips").await?;
+    admin::set_stack_mapping(&h.db, "acme", "react", "react-server-components").await?;
+
+    // Bare bootstrap call returns rust + nix skills (NOT react).
+    let body: Value = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/bootstrap?stack=rust,nix,kubernetes",
+            "acme",
+        ),
+        &h.acme_token,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
+    let skills: Vec<String> = body["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        skills,
+        vec![
+            "nix-flake-tips".to_string(),
+            "rust-axum-handler".to_string(),
+            "sqlx-migrations".to_string()
+        ],
+        "expected rust+nix skills alphabetical, no react: {skills:?}"
+    );
+
+    // Empty stack param → 400.
+    let resp = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/bootstrap?stack=",
+            "acme",
+        ),
+        &h.acme_token,
+    )
+    .send()
+    .await?;
+    assert_eq!(resp.status().as_u16(), 400);
+
+    // Tenant isolation: globex's same query returns no mappings.
+    let body: Value = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/bootstrap?stack=rust,nix",
+            "globex",
+        ),
+        &h.globex_token,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
+    assert!(body["skills"].as_array().unwrap().is_empty());
+
+    // remove_stack_mapping returns row-deleted-or-not status cleanly.
+    admin::remove_stack_mapping(&h.db, "acme", "rust", "rust-axum-handler").await?;
+    admin::remove_stack_mapping(&h.db, "acme", "rust", "non-existent").await?;
+
     // -------- IdP group → role mappings --------
     // Configure mappings.
     admin::set_role_mapping(&h.db, "acme", "Engineering-Admins", "admin").await?;

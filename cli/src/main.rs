@@ -5,6 +5,7 @@ use tracing_subscriber::EnvFilter;
 mod client;
 mod cmd;
 mod config;
+mod detect;
 mod install;
 mod manifest;
 
@@ -69,6 +70,12 @@ enum Cmd {
     },
     /// Diagnose: list loaded skills, dangling symlinks, drift.
     Doctor,
+    /// Detect the current project's stack from filesystem fingerprints.
+    Detect {
+        /// Emit JSON instead of a human-friendly summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -98,5 +105,6 @@ async fn main() -> Result<()> {
             cmd::publish::run(&cfg, &dir, slug.as_deref(), &version).await
         }
         Cmd::Doctor => cmd::doctor::run(&cfg),
+        Cmd::Detect { json } => cmd::detect::run(json),
     }
 }

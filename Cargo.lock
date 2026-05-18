@@ -3462,6 +3462,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tar",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",

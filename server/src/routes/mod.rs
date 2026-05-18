@@ -5,6 +5,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
 
+mod bootstrap;
 mod enterprise;
 mod health;
 mod members;
@@ -25,6 +26,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills/{slug}/bundle.tar.gz", get(skills::get_bundle))
         .route("/v1/skills/{slug}/skill-md", get(skills::get_skill_md))
         .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
+        // Bootstrap (Phase 3)
+        .route("/v1/bootstrap", get(bootstrap::bootstrap))
         // Enterprise
         .route(
             "/v1/enterprise/managed-settings",

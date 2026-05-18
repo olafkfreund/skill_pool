@@ -103,6 +103,29 @@ enum AdminAction {
         #[arg(long)]
         group: String,
     },
+    /// Map a stack tag (e.g. "rust") to a skill slug. Phase-3 bootstrap.
+    StackMapSet {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        stack: String,
+        #[arg(long)]
+        skill: String,
+    },
+    /// List stack-tag → skill mappings for a tenant.
+    StackMapList {
+        #[arg(long)]
+        tenant: String,
+    },
+    /// Remove a stack-tag → skill mapping.
+    StackMapRemove {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        stack: String,
+        #[arg(long)]
+        skill: String,
+    },
 }
 
 #[tokio::main]
@@ -198,6 +221,26 @@ async fn main() -> Result<()> {
                 AdminAction::GroupMapRemove { tenant, group } => {
                     let db = admin::connect(&cfg).await?;
                     admin::remove_role_mapping(&db, &tenant, &group).await
+                }
+                AdminAction::StackMapSet {
+                    tenant,
+                    stack,
+                    skill,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::set_stack_mapping(&db, &tenant, &stack, &skill).await
+                }
+                AdminAction::StackMapList { tenant } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::list_stack_mappings(&db, &tenant).await
+                }
+                AdminAction::StackMapRemove {
+                    tenant,
+                    stack,
+                    skill,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::remove_stack_mapping(&db, &tenant, &stack, &skill).await
                 }
             }
         }

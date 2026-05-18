@@ -87,6 +87,96 @@ pub async fn create_token(
     })
 }
 
+pub async fn set_stack_mapping(
+    db: &PgPool,
+    tenant_slug: &str,
+    stack_tag: &str,
+    skill_slug: &str,
+) -> Result<()> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    sqlx::query(
+        "INSERT INTO tenant_stack_mappings (tenant_id, stack_tag, skill_slug) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (tenant_id, stack_tag, skill_slug) DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(stack_tag)
+    .bind(skill_slug)
+    .execute(db)
+    .await
+    .context("insert tenant_stack_mappings")?;
+
+    println!("mapping set for tenant `{tenant_slug}`:");
+    println!("  stack tag: {stack_tag}");
+    println!("  skill:     {skill_slug}");
+    Ok(())
+}
+
+pub async fn list_stack_mappings(db: &PgPool, tenant_slug: &str) -> Result<()> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT stack_tag, skill_slug FROM tenant_stack_mappings \
+         WHERE tenant_id = $1 ORDER BY stack_tag, skill_slug",
+    )
+    .bind(tenant_id)
+    .fetch_all(db)
+    .await?;
+
+    if rows.is_empty() {
+        println!("(no stack mappings for tenant `{tenant_slug}`)");
+    } else {
+        println!("stack mappings for tenant `{tenant_slug}`:");
+        for (tag, slug) in rows {
+            println!("  {tag:<24} -> {slug}");
+        }
+    }
+    Ok(())
+}
+
+pub async fn remove_stack_mapping(
+    db: &PgPool,
+    tenant_slug: &str,
+    stack_tag: &str,
+    skill_slug: &str,
+) -> Result<()> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    let result = sqlx::query(
+        "DELETE FROM tenant_stack_mappings \
+         WHERE tenant_id = $1 AND stack_tag = $2 AND skill_slug = $3",
+    )
+    .bind(tenant_id)
+    .bind(stack_tag)
+    .bind(skill_slug)
+    .execute(db)
+    .await
+    .context("delete tenant_stack_mappings")?;
+
+    if result.rows_affected() == 0 {
+        println!("(no mapping found for `{stack_tag}` -> `{skill_slug}`)");
+    } else {
+        println!("removed mapping `{stack_tag}` -> `{skill_slug}`");
+    }
+    Ok(())
+}
+
 pub async fn set_role_mapping(
     db: &PgPool,
     tenant_slug: &str,
