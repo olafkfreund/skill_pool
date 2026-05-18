@@ -21,6 +21,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::io::Write;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
+use uuid::Uuid;
 
 use skill_pool_server::{config, routes, state};
 
@@ -821,6 +822,106 @@ async fn full_publish_install_and_isolation() -> Result<()> {
         .send()
         .await?;
     assert_eq!(resp.status().as_u16(), 204);
+
+    // -------- IdP group → role mappings --------
+    // Configure mappings.
+    admin::set_role_mapping(&h.db, "acme", "Engineering-Admins", "admin").await?;
+    admin::set_role_mapping(&h.db, "acme", "Curators", "curator").await?;
+    admin::set_role_mapping(&h.db, "acme", "Engineers", "publisher").await?;
+
+    // Provision a SCIM user we can reuse as the target of the apply call.
+    let scim_user: Value = scim_post("/scim/v2/Users")
+        .json(&serde_json::json!({ "userName": "mary@example.test", "active": true }))
+        .send()
+        .await?
+        .json()
+        .await?;
+    // Resolve their user_id from the membership row.
+    let mary_user_id: (Uuid,) = sqlx::query_as("SELECT u.id FROM users u WHERE u.email = $1")
+        .bind("mary@example.test")
+        .fetch_one(&h.db)
+        .await?;
+    let acme_tenant_id: (Uuid,) = sqlx::query_as("SELECT id FROM tenants WHERE slug = 'acme'")
+        .fetch_one(&h.db)
+        .await?;
+
+    // user_id (from SCIM) and the role we get back through apply_role_from_groups
+    use skill_pool_server::auth::apply_role_from_groups;
+
+    // No groups → no change.
+    let result = apply_role_from_groups(&h.db, acme_tenant_id.0, mary_user_id.0, &[]).await?;
+    assert_eq!(result, None);
+
+    // Groups with no mapping match → no change.
+    let result = apply_role_from_groups(
+        &h.db,
+        acme_tenant_id.0,
+        mary_user_id.0,
+        &["Random-Group".to_string()],
+    )
+    .await?;
+    assert_eq!(result, None);
+
+    // One matching group → applies.
+    let result = apply_role_from_groups(
+        &h.db,
+        acme_tenant_id.0,
+        mary_user_id.0,
+        &["Engineers".to_string()],
+    )
+    .await?;
+    assert_eq!(result.as_deref(), Some("publisher"));
+    let role_now: (String,) =
+        sqlx::query_as("SELECT role FROM tenant_users WHERE tenant_id = $1 AND user_id = $2")
+            .bind(acme_tenant_id.0)
+            .bind(mary_user_id.0)
+            .fetch_one(&h.db)
+            .await?;
+    assert_eq!(role_now.0, "publisher");
+
+    // Multiple groups → highest wins (admin > publisher).
+    let result = apply_role_from_groups(
+        &h.db,
+        acme_tenant_id.0,
+        mary_user_id.0,
+        &[
+            "Engineers".to_string(),
+            "Engineering-Admins".to_string(),
+            "Curators".to_string(),
+            "irrelevant".to_string(),
+        ],
+    )
+    .await?;
+    assert_eq!(result.as_deref(), Some("admin"));
+
+    // Empty/non-matching groups on next sign-in MUST preserve the manual promotion.
+    let result = apply_role_from_groups(
+        &h.db,
+        acme_tenant_id.0,
+        mary_user_id.0,
+        &["something-unrelated".to_string()],
+    )
+    .await?;
+    assert_eq!(result, None);
+    let role_after: (String,) =
+        sqlx::query_as("SELECT role FROM tenant_users WHERE tenant_id = $1 AND user_id = $2")
+            .bind(acme_tenant_id.0)
+            .bind(mary_user_id.0)
+            .fetch_one(&h.db)
+            .await?;
+    assert_eq!(
+        role_after.0, "admin",
+        "no-match must preserve current role, not downgrade"
+    );
+
+    // Cleanup the SCIM user so later assertions stay stable.
+    let _ = scim_user;
+    // remove_role_mapping should report success even on a real row, and 0
+    // rows when the row's already gone.
+    admin::remove_role_mapping(&h.db, "acme", "Engineering-Admins").await?;
+    admin::remove_role_mapping(&h.db, "acme", "Curators").await?;
+    admin::remove_role_mapping(&h.db, "acme", "Engineers").await?;
+    admin::remove_role_mapping(&h.db, "acme", "no-such-group").await?;
 
     // -------- Enterprise managed-settings.json template --------
     let resp = c

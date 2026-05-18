@@ -82,6 +82,27 @@ enum AdminAction {
         #[arg(long, default_value = "viewer")]
         default_role: String,
     },
+    /// Map an IdP group to a tenant role. Re-evaluated on every sign-in.
+    GroupMapSet {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        group: String,
+        #[arg(long)]
+        role: String,
+    },
+    /// List configured IdP group → role mappings for a tenant.
+    GroupMapList {
+        #[arg(long)]
+        tenant: String,
+    },
+    /// Remove an IdP group → role mapping.
+    GroupMapRemove {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        group: String,
+    },
 }
 
 #[tokio::main]
@@ -161,6 +182,22 @@ async fn main() -> Result<()> {
                         &default_role,
                     )
                     .await
+                }
+                AdminAction::GroupMapSet {
+                    tenant,
+                    group,
+                    role,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::set_role_mapping(&db, &tenant, &group, &role).await
+                }
+                AdminAction::GroupMapList { tenant } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::list_role_mappings(&db, &tenant).await
+                }
+                AdminAction::GroupMapRemove { tenant, group } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::remove_role_mapping(&db, &tenant, &group).await
                 }
             }
         }

@@ -163,8 +163,16 @@ pub async fn callback(
         .and_then(|n| n.get(None).map(|s| s.to_string()))
         .or_else(|| claims.preferred_username().map(|s| s.to_string()));
 
+    // Pull groups from the verified id_token JWT payload. openidconnect's
+    // typed claims don't expose `groups` natively (it's a non-standard claim
+    // commonly emitted by Okta/Authentik/Azure); we already verified the
+    // token's signature above, so it's safe to re-parse the payload.
+    let groups = extract_groups_from_jwt(&id_token.to_string());
+
     let user_id = upsert_user(&state, &email, &sub, display_name.as_deref()).await?;
     ensure_membership(&state, tenant.tenant_id, user_id, &sso.default_role).await?;
+    let _ =
+        crate::auth::apply_role_from_groups(state.db(), tenant.tenant_id, user_id, &groups).await?;
 
     let session_token = mint_session(&state, tenant.tenant_id, user_id).await?;
 
@@ -236,6 +244,37 @@ async fn build_client(sso: &SsoConfig, tenant_slug: &str) -> AppResult<CoreClien
         Some(ClientSecret::new(sso.client_secret.clone())),
     )
     .set_redirect_uri(RedirectUrl::new(redirect).map_err(|e| AppError::BadRequest(e.to_string()))?))
+}
+
+fn extract_groups_from_jwt(jwt: &str) -> Vec<String> {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return vec![];
+    }
+    let Ok(payload_bytes) =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1].as_bytes())
+    else {
+        return vec![];
+    };
+    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&payload_bytes) else {
+        return vec![];
+    };
+    extract_groups_from_json(&payload)
+}
+
+fn extract_groups_from_json(claims: &serde_json::Value) -> Vec<String> {
+    // Common claim names. `groups` covers Okta/Authentik/Keycloak; `roles`
+    // is Azure AD when an app role mapping is configured; `memberOf` shows
+    // up in some custom mappers (esp. legacy LDAP bridges).
+    for key in ["groups", "roles", "memberOf"] {
+        if let Some(arr) = claims.get(key).and_then(|v| v.as_array()) {
+            return arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+        }
+    }
+    vec![]
 }
 
 async fn upsert_user(

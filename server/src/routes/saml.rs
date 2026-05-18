@@ -169,6 +169,13 @@ pub async fn acs(
     )
     .await?;
     ensure_membership(&state, tenant.tenant_id, user_id, &cfg.default_role).await?;
+    let _ = crate::auth::apply_role_from_groups(
+        state.db(),
+        tenant.tenant_id,
+        user_id,
+        &assertion.groups,
+    )
+    .await?;
     let session_token = mint_session(&state, tenant.tenant_id, user_id).await?;
 
     let return_to = form
@@ -215,6 +222,7 @@ struct ValidatedAssertion {
     email: String,
     subject: String,
     display_name: Option<String>,
+    groups: Vec<String>,
 }
 
 fn validate_response(
@@ -280,11 +288,31 @@ fn validate_response(
             }
         });
 
+    let groups = all_attributes(&assertion, "groups")
+        .into_iter()
+        .chain(all_attributes(&assertion, "memberOf"))
+        .chain(all_attributes(&assertion, "Role"))
+        .collect();
+
     Ok(ValidatedAssertion {
         email: email.to_lowercase(),
         subject: subject_value,
         display_name,
+        groups,
     })
+}
+
+/// Collect every `<AttributeValue>` for an attribute name.
+fn all_attributes(assertion: &samael::schema::Assertion, name: &str) -> Vec<String> {
+    assertion
+        .attribute_statements
+        .iter()
+        .flatten()
+        .flat_map(|s| s.attributes.iter())
+        .filter(|a| a.name.as_deref() == Some(name))
+        .flat_map(|a| a.values.iter())
+        .filter_map(|v| v.value.clone())
+        .collect()
 }
 
 fn first_attribute(assertion: &samael::schema::Assertion, name: &str) -> Option<String> {

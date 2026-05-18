@@ -113,6 +113,58 @@ async fn lookup_api_token(
     Ok(row)
 }
 
+/// Role precedence: higher number wins. Used when an IdP-provided group set
+/// matches multiple mappings (e.g. user is in both "Curators" and "Admins").
+fn role_rank(role: &str) -> u8 {
+    match role {
+        "admin" => 3,
+        "curator" => 2,
+        "publisher" => 1,
+        _ => 0, // viewer + anything unknown
+    }
+}
+
+/// Apply IdP groups to a tenant_users row.
+///
+/// Returns `Ok(Some(role))` if a mapped group matched and the row was updated
+/// to that role, `Ok(None)` if no groups matched (caller decides whether to
+/// fall back to a default). Never downgrades a manual promotion when no
+/// group claims match — preserves the existing role row.
+pub async fn apply_role_from_groups(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    groups: &[String],
+) -> Result<Option<String>, AppError> {
+    if groups.is_empty() {
+        return Ok(None);
+    }
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT role FROM tenant_role_mappings \
+         WHERE tenant_id = $1 AND idp_group = ANY($2)",
+    )
+    .bind(tenant_id)
+    .bind(groups)
+    .fetch_all(db)
+    .await?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let best = rows
+        .into_iter()
+        .map(|(r,)| r)
+        .max_by_key(|r| role_rank(r))
+        .expect("non-empty after early return");
+
+    sqlx::query("UPDATE tenant_users SET role = $1 WHERE tenant_id = $2 AND user_id = $3")
+        .bind(&best)
+        .bind(tenant_id)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(Some(best))
+}
+
 async fn lookup_session(
     state: &AppState,
     tenant_id: Uuid,
@@ -132,4 +184,17 @@ async fn lookup_session(
     .fetch_optional(state.db())
     .await?;
     Ok(row)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::role_rank;
+
+    #[test]
+    fn precedence_admin_beats_others() {
+        assert!(role_rank("admin") > role_rank("curator"));
+        assert!(role_rank("curator") > role_rank("publisher"));
+        assert!(role_rank("publisher") > role_rank("viewer"));
+        assert_eq!(role_rank("unknown"), role_rank("viewer"));
+    }
 }

@@ -87,6 +87,91 @@ pub async fn create_token(
     })
 }
 
+pub async fn set_role_mapping(
+    db: &PgPool,
+    tenant_slug: &str,
+    idp_group: &str,
+    role: &str,
+) -> Result<()> {
+    if !matches!(role, "viewer" | "publisher" | "curator" | "admin") {
+        return Err(anyhow!("role must be viewer / publisher / curator / admin"));
+    }
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    sqlx::query(
+        "INSERT INTO tenant_role_mappings (tenant_id, idp_group, role) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (tenant_id, idp_group) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(tenant_id)
+    .bind(idp_group)
+    .bind(role)
+    .execute(db)
+    .await
+    .context("upsert tenant_role_mappings")?;
+
+    println!("mapping set for tenant `{tenant_slug}`:");
+    println!("  IdP group: {idp_group}");
+    println!("  role:      {role}");
+    Ok(())
+}
+
+pub async fn list_role_mappings(db: &PgPool, tenant_slug: &str) -> Result<()> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT idp_group, role FROM tenant_role_mappings \
+         WHERE tenant_id = $1 ORDER BY idp_group",
+    )
+    .bind(tenant_id)
+    .fetch_all(db)
+    .await?;
+
+    if rows.is_empty() {
+        println!("(no role mappings for tenant `{tenant_slug}`)");
+    } else {
+        println!("role mappings for tenant `{tenant_slug}`:");
+        for (group, role) in rows {
+            println!("  {group:<40} -> {role}");
+        }
+    }
+    Ok(())
+}
+
+pub async fn remove_role_mapping(db: &PgPool, tenant_slug: &str, idp_group: &str) -> Result<()> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    let result =
+        sqlx::query("DELETE FROM tenant_role_mappings WHERE tenant_id = $1 AND idp_group = $2")
+            .bind(tenant_id)
+            .bind(idp_group)
+            .execute(db)
+            .await
+            .context("delete tenant_role_mappings")?;
+
+    if result.rows_affected() == 0 {
+        println!("(no mapping found for group `{idp_group}` on tenant `{tenant_slug}`)");
+    } else {
+        println!("removed mapping for `{idp_group}` on tenant `{tenant_slug}`");
+    }
+    Ok(())
+}
+
 fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
