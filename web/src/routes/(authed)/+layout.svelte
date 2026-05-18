@@ -9,6 +9,7 @@
     Inbox,
     Bell,
     Skull,
+    BookOpen,
     LogOut,
   } from '@lucide/svelte';
 
@@ -35,6 +36,10 @@
         { href: '/admin/notifications', icon: Bell, label: 'Notifications' },
         { href: '/admin/domain', icon: Globe2, label: 'Domain' },
       ],
+    },
+    {
+      label: 'Help',
+      items: [{ href: '/help', icon: BookOpen, label: 'Help & Docs' }],
     },
   ];
 
