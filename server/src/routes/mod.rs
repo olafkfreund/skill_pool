@@ -18,6 +18,7 @@ mod saml;
 mod scim;
 mod skills;
 mod theme;
+mod usage;
 
 const MAX_BUNDLE_BYTES: usize = 5 * 1024 * 1024;
 
@@ -65,6 +66,9 @@ pub fn router(state: AppState) -> Router {
         // Decay / archive (Phase 5)
         .route("/v1/tenant/skills/decay", get(decay::list_candidates))
         .route("/v1/skills/{slug}/archive", post(decay::archive))
+        // Telemetry dashboards (Phase 5)
+        .route("/v1/tenant/usage/timeline", get(usage::timeline))
+        .route("/v1/tenant/usage/top", get(usage::top))
         // MCP transport (Phase 5) — JSON-RPC adapter for skill search
         .route("/v1/mcp", post(mcp::handle))
         // OIDC

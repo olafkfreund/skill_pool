@@ -10,6 +10,7 @@
     Bell,
     Skull,
     BookOpen,
+    BarChart3,
     LogOut,
   } from '@lucide/svelte';
 
@@ -26,6 +27,10 @@
         { href: '/drafts', icon: Inbox, label: 'Drafts' },
         { href: '/admin/decay', icon: Skull, label: 'Graveyard' },
       ],
+    },
+    {
+      label: 'Insights',
+      items: [{ href: '/admin/usage', icon: BarChart3, label: 'Usage' }],
     },
     {
       label: 'Settings',

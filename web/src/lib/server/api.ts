@@ -390,6 +390,32 @@ export async function archiveSkill(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+export interface TimelineBucket {
+  day: string;
+  downloads: number;
+  views: number;
+  unique_skills: number;
+}
+
+export interface TopSkillRow {
+  slug: string;
+  downloads: number;
+  views: number;
+  total: number;
+}
+
+export async function getUsageTimeline(auth: Auth, days: number): Promise<TimelineBucket[]> {
+  const resp = await call('GET', `/v1/tenant/usage/timeline?days=${days}`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function getUsageTop(auth: Auth, days: number, limit = 10): Promise<TopSkillRow[]> {
+  const resp = await call('GET', `/v1/tenant/usage/top?days=${days}&limit=${limit}`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
 export async function pendingDraftsCount(auth: Auth): Promise<number> {
   const resp = await call('GET', '/v1/tenant/notifications/pending-count', auth);
   if (!resp.ok) return 0;

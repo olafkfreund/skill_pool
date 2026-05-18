@@ -169,22 +169,32 @@ pub async fn get_one(
 
 pub async fn get_skill_md(
     State(state): State<AppState>,
-    tenant: TenantCtx,
+    caller: AuthedCaller,
     Path(slug): Path<String>,
 ) -> AppResult<String> {
     use flate2::read::GzDecoder;
     use std::io::Read;
 
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT bundle_uri FROM skills \
+    let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT id, bundle_uri FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
-    .bind(tenant.tenant_id)
+    .bind(caller.tenant.tenant_id)
     .bind(&slug)
     .fetch_optional(state.db())
     .await?;
-    let (key,) = row.ok_or(AppError::NotFound)?;
+    let (skill_id, key) = row.ok_or(AppError::NotFound)?;
+
+    // View event — same telemetry pipeline as download.
+    record_usage(
+        state.db(),
+        caller.tenant.tenant_id,
+        skill_id,
+        "view",
+        &caller,
+    )
+    .await;
 
     let bytes = state
         .storage()
@@ -216,7 +226,7 @@ pub async fn get_skill_md(
 
 pub async fn get_bundle(
     State(state): State<AppState>,
-    tenant: TenantCtx,
+    caller: AuthedCaller,
     Path(slug): Path<String>,
 ) -> AppResult<Response> {
     let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
@@ -224,17 +234,24 @@ pub async fn get_bundle(
          WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
-    .bind(tenant.tenant_id)
+    .bind(caller.tenant.tenant_id)
     .bind(&slug)
     .fetch_optional(state.db())
     .await?;
 
     let (skill_id, key) = row.ok_or(AppError::NotFound)?;
 
-    // Best-effort usage bump for the Phase 5 decay heuristic. Failure
-    // here is logged but never blocks the response — a DB blip during
-    // a download shouldn't fail the user's `skill-pool ensure`.
-    bump_usage(state.db(), skill_id).await;
+    // Best-effort usage record: bumps the per-row counter for decay AND
+    // appends an event row for the timeline aggregations. A DB blip here
+    // is logged but never blocks the user's `skill-pool ensure`.
+    record_usage(
+        state.db(),
+        caller.tenant.tenant_id,
+        skill_id,
+        "download",
+        &caller,
+    )
+    .await;
 
     if let Ok(Some(url)) = state.storage().presign_read(&key).await {
         return Ok(Redirect::temporary(&url).into_response());
@@ -259,9 +276,16 @@ pub async fn get_bundle(
     Ok(resp)
 }
 
-/// Bump `use_count` + `last_used_at` for one skill. Best-effort: errors
-/// are logged at warn level but never propagate.
-async fn bump_usage(db: &sqlx::PgPool, skill_id: uuid::Uuid) {
+/// Record one usage event: bumps the per-row counter on `skills` and
+/// appends a row to `skill_usage_events` for the timeline aggregations.
+/// Best-effort: errors are logged but never propagate.
+async fn record_usage(
+    db: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    skill_id: uuid::Uuid,
+    event_kind: &'static str,
+    caller: &AuthedCaller,
+) {
     let r = sqlx::query(
         "UPDATE skills SET use_count = use_count + 1, last_used_at = now() WHERE id = $1",
     )
@@ -269,7 +293,22 @@ async fn bump_usage(db: &sqlx::PgPool, skill_id: uuid::Uuid) {
     .execute(db)
     .await;
     if let Err(e) = r {
-        tracing::warn!(error = ?e, skill_id = %skill_id, "bump_usage failed");
+        tracing::warn!(error = ?e, skill_id = %skill_id, "use_count bump failed");
+    }
+
+    let r = sqlx::query(
+        "INSERT INTO skill_usage_events (tenant_id, skill_id, event_kind, user_id, token_id) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(tenant_id)
+    .bind(skill_id)
+    .bind(event_kind)
+    .bind(caller.user_id)
+    .bind(caller.token_id)
+    .execute(db)
+    .await;
+    if let Err(e) = r {
+        tracing::warn!(error = ?e, skill_id = %skill_id, "usage event insert failed");
     }
 }
 

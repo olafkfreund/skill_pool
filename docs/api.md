@@ -89,6 +89,47 @@ Response: `[ { slug, version, description, use_count, last_used_at, created_at }
 
 Skill usage tracking: `GET /v1/skills/{slug}/bundle.tar.gz` (both the redirect path and the streamed-bytes path) bumps `use_count` and refreshes `last_used_at` server-side. Failure here is logged but never fails the response.
 
+## `GET /v1/tenant/usage/timeline` — daily activity (Phase 5)
+
+`tenant:admin` scope required.
+
+| Param  | Type | Description                                  |
+|--------|------|----------------------------------------------|
+| `days` | int  | Window. Default 30, clamped to 1..365.       |
+
+Response: per-day buckets, missing days zero-filled.
+
+```json
+[
+  { "day": "2026-05-12T00:00:00Z", "downloads": 0, "views": 0, "unique_skills": 0 },
+  { "day": "2026-05-13T00:00:00Z", "downloads": 5, "views": 2, "unique_skills": 2 }
+]
+```
+
+## `GET /v1/tenant/usage/top` — top skills in window (Phase 5)
+
+`tenant:admin` scope required.
+
+| Param   | Type | Description                            |
+|---------|------|----------------------------------------|
+| `days`  | int  | Window. Default 30, clamped to 1..365. |
+| `limit` | int  | Default 10, clamped to 1..100.         |
+
+Response: skills sorted by total events desc.
+
+```json
+[
+  { "slug": "axum-handler", "downloads": 5, "views": 2, "total": 7 },
+  { "slug": "kafka-consumer", "downloads": 3, "views": 0, "total": 3 }
+]
+```
+
+Events:
+- `download` — `GET /v1/skills/{slug}/bundle.tar.gz` (both bytes + redirect paths bump)
+- `view` — `GET /v1/skills/{slug}/skill-md`
+
+Writes are best-effort: a DB blip on the events insert is logged but never blocks the response. Both `get_bundle` and `get_skill_md` now require an authenticated caller (Bearer token); existing clients already send one, but the contract is now strict.
+
 ## `GET /v1/skills/{slug}/deps` — dependency closure (Phase 5)
 
 Returns the transitive dependency closure of a published skill.
