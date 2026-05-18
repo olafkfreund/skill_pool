@@ -75,6 +75,20 @@ pub struct WebhookConfig {
     pub secret: Option<String>,
 }
 
+/// Per-tenant SMTP delivery configuration.
+pub struct EmailConfig {
+    pub smtp_url: String,
+    pub from_addr: String,
+    pub to_addr: String,
+}
+
+/// Loaded together so the spawned task makes one DB query and then runs
+/// the two delivery paths in parallel.
+pub struct NotificationConfig {
+    pub webhook: Option<WebhookConfig>,
+    pub email: Option<EmailConfig>,
+}
+
 impl WebhookConfig {
     /// Loads from `tenants.notifications_webhook_url` /
     /// `notifications_webhook_secret`. Returns `None` when the tenant has
@@ -88,6 +102,57 @@ impl WebhookConfig {
         .fetch_optional(db)
         .await?;
         Ok(row.and_then(|(url, secret)| url.map(|u| Self { url: u, secret })))
+    }
+}
+
+/// Row tuple returned by the combined webhook + email config query.
+/// Aliased to silence `clippy::type_complexity` without losing the
+/// inline type info.
+type NotificationConfigRow = (
+    Option<String>, // webhook url
+    Option<String>, // webhook secret
+    Option<String>, // smtp url
+    Option<String>, // smtp from
+    Option<String>, // smtp to
+);
+
+impl NotificationConfig {
+    /// Single DB round trip that loads both webhook + email configs.
+    /// `None` for either side means "skip that delivery channel."
+    pub async fn load(db: &PgPool, tenant_id: Uuid) -> sqlx::Result<Self> {
+        let row: Option<NotificationConfigRow> = sqlx::query_as(
+            "SELECT notifications_webhook_url, notifications_webhook_secret, \
+                    notification_smtp_url, notification_smtp_from, notification_smtp_to \
+             FROM tenants WHERE id = $1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(db)
+        .await?;
+        let Some((wh_url, wh_secret, smtp_url, from, to)) = row else {
+            return Ok(Self {
+                webhook: None,
+                email: None,
+            });
+        };
+        let webhook = wh_url.map(|url| WebhookConfig {
+            url,
+            secret: wh_secret,
+        });
+        let email = match (smtp_url, from, to) {
+            (Some(smtp_url), Some(from_addr), Some(to_addr))
+                if !smtp_url.trim().is_empty()
+                    && !from_addr.trim().is_empty()
+                    && !to_addr.trim().is_empty() =>
+            {
+                Some(EmailConfig {
+                    smtp_url,
+                    from_addr,
+                    to_addr,
+                })
+            }
+            _ => None,
+        };
+        Ok(Self { webhook, email })
     }
 }
 
@@ -113,7 +178,8 @@ pub struct DraftCreatedEvent {
 }
 
 /// Fire-and-forget delivery. Returns immediately; outcome is audit-logged
-/// from inside the spawned task.
+/// from inside the spawned task. Both webhook + email channels fan out
+/// from a single tokio task — neither blocks the other.
 pub fn draft_created(db: PgPool, ev: DraftCreatedEvent) {
     let DraftCreatedEvent {
         tenant_id,
@@ -125,14 +191,16 @@ pub fn draft_created(db: PgPool, ev: DraftCreatedEvent) {
         merge_proposal_slug,
     } = ev;
     tokio::spawn(async move {
-        let cfg = match WebhookConfig::load(&db, tenant_id).await {
-            Ok(Some(c)) => c,
-            Ok(None) => return, // no webhook configured
+        let cfg = match NotificationConfig::load(&db, tenant_id).await {
+            Ok(c) => c,
             Err(e) => {
-                tracing::warn!(error = ?e, "load webhook config failed");
+                tracing::warn!(error = ?e, "load notification config failed");
                 return;
             }
         };
+        if cfg.webhook.is_none() && cfg.email.is_none() {
+            return; // nothing configured — silent skip
+        }
 
         let text = if let Some(target) = &merge_proposal_slug {
             format!(
@@ -143,44 +211,159 @@ pub fn draft_created(db: PgPool, ev: DraftCreatedEvent) {
             format!("New draft `{}` ready for review in `{}`", draft_slug, tenant_slug)
         };
 
-        let envelope = Envelope {
-            text,
-            event: "draft.created",
-            tenant: TenantField { slug: &tenant_slug },
-            draft: Some(DraftField {
-                id: draft_id,
-                slug: &draft_slug,
-                description: &description,
-                origin: &origin,
-                merge_proposal_slug: merge_proposal_slug.as_deref(),
-            }),
-        };
-
-        let body = match serde_json::to_vec(&envelope) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::error!(error = ?e, "serialise notification envelope");
-                return;
+        // ---- Webhook fanout ----
+        if let Some(wh) = &cfg.webhook {
+            let envelope = Envelope {
+                text: text.clone(),
+                event: "draft.created",
+                tenant: TenantField { slug: &tenant_slug },
+                draft: Some(DraftField {
+                    id: draft_id,
+                    slug: &draft_slug,
+                    description: &description,
+                    origin: &origin,
+                    merge_proposal_slug: merge_proposal_slug.as_deref(),
+                }),
+            };
+            match serde_json::to_vec(&envelope) {
+                Ok(body) => {
+                    let outcome = deliver(wh, &body).await;
+                    audit::record_best_effort(
+                        &db,
+                        audit::Event {
+                            tenant_id,
+                            actor_user: None,
+                            actor_token: None,
+                            action: "notification.deliver",
+                            target_kind: "webhook",
+                            target_id: Some(&draft_id.to_string()),
+                            metadata: outcome.to_audit_metadata(&wh.url, envelope.event),
+                            ip_addr: None,
+                            user_agent: None,
+                        },
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "serialise notification envelope")
+                }
             }
+        }
+
+        // ---- Email fanout ----
+        if let Some(em) = &cfg.email {
+            let subject = format!("[skill-pool] New draft \"{}\" in {}", draft_slug, tenant_slug);
+            let body = build_email_body(
+                &tenant_slug,
+                &draft_slug,
+                &description,
+                &origin,
+                merge_proposal_slug.as_deref(),
+            );
+            let outcome = send_email(em, &subject, &body).await;
+            audit::record_best_effort(
+                &db,
+                audit::Event {
+                    tenant_id,
+                    actor_user: None,
+                    actor_token: None,
+                    action: "notification.deliver",
+                    target_kind: "email",
+                    target_id: Some(&draft_id.to_string()),
+                    metadata: outcome.to_email_audit_metadata(&em.to_addr),
+                    ip_addr: None,
+                    user_agent: None,
+                },
+            )
+            .await;
+        }
+    });
+}
+
+/// Plain-text email body. Mirrors the webhook envelope's `text` field
+/// but with full structured info so a curator reading the email has
+/// everything they need without opening the portal.
+pub(crate) fn build_email_body(
+    tenant_slug: &str,
+    draft_slug: &str,
+    description: &str,
+    origin: &str,
+    merge_proposal_slug: Option<&str>,
+) -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "A new skill draft is ready for review in `{tenant_slug}`.\n\n",
+    ));
+    s.push_str(&format!("Slug:        {draft_slug}\n"));
+    s.push_str(&format!("Description: {description}\n"));
+    s.push_str(&format!("Origin:      {origin}\n"));
+    if let Some(target) = merge_proposal_slug {
+        s.push_str(&format!(
+            "Merge candidate: looks similar to existing skill `{target}`.\n",
+        ));
+    }
+    s.push_str("\nReview in the portal: /drafts\n");
+    s.push_str("\n--\nskill-pool (do not reply)\n");
+    s
+}
+
+#[derive(Debug)]
+enum EmailOutcome {
+    Success,
+    Failed(String),
+}
+
+impl EmailOutcome {
+    fn to_email_audit_metadata(&self, to_addr: &str) -> serde_json::Value {
+        match self {
+            EmailOutcome::Success => serde_json::json!({
+                "result": "success",
+                "to": to_addr,
+            }),
+            EmailOutcome::Failed(msg) => serde_json::json!({
+                "result": "failed",
+                "to": to_addr,
+                "error": msg,
+            }),
+        }
+    }
+}
+
+async fn send_email(cfg: &EmailConfig, subject: &str, body: &str) -> EmailOutcome {
+    use lettre::message::Mailbox;
+    use lettre::transport::smtp::AsyncSmtpTransport;
+    use lettre::{AsyncTransport, Message, Tokio1Executor};
+
+    // Parse from + to as `Name <addr@host>` or bare `addr@host`.
+    let from: Mailbox = match cfg.from_addr.parse() {
+        Ok(m) => m,
+        Err(e) => return EmailOutcome::Failed(format!("invalid from address: {e}")),
+    };
+    let to: Mailbox = match cfg.to_addr.parse() {
+        Ok(m) => m,
+        Err(e) => return EmailOutcome::Failed(format!("invalid to address: {e}")),
+    };
+
+    let msg = match Message::builder()
+        .from(from)
+        .to(to)
+        .subject(subject)
+        .body(body.to_string())
+    {
+        Ok(m) => m,
+        Err(e) => return EmailOutcome::Failed(format!("build message: {e}")),
+    };
+
+    let mailer: AsyncSmtpTransport<Tokio1Executor> =
+        match AsyncSmtpTransport::<Tokio1Executor>::from_url(&cfg.smtp_url) {
+            Ok(t) => t.build(),
+            Err(e) => return EmailOutcome::Failed(format!("parse smtp url: {e}")),
         };
 
-        let outcome = deliver(&cfg, &body).await;
-        audit::record_best_effort(
-            &db,
-            audit::Event {
-                tenant_id,
-                actor_user: None,
-                actor_token: None,
-                action: "notification.deliver",
-                target_kind: "webhook",
-                target_id: Some(&draft_id.to_string()),
-                metadata: outcome.to_audit_metadata(&cfg.url, envelope.event),
-                ip_addr: None,
-                user_agent: None,
-            },
-        )
-        .await;
-    });
+    match mailer.send(msg).await {
+        Ok(_) => EmailOutcome::Success,
+        Err(e) => EmailOutcome::Failed(e.to_string()),
+    }
 }
 
 /// One HTTP attempt + a single retry on transient error. Returns a

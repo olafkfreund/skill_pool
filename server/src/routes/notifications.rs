@@ -26,24 +26,51 @@ pub struct NotificationsConfig {
     /// never returned over the wire — we surface a boolean so the UI
     /// can render "secret is set" without leaking it.
     pub signing_enabled: bool,
+    /// SMTP URL (`smtp://...` or `smtps://...`). Returned to admins so
+    /// they can see what's configured; the password embedded in the
+    /// userinfo segment is left in place — operators wanting to hide
+    /// it should mint a token-scoped SMTP credential.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_url: Option<String>,
+    /// `Name <addr@host>` or bare `addr@host`. Used as the From header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_from: Option<String>,
+    /// To address — a single mailbox or distribution-list address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub smtp_to: Option<String>,
 }
+
+/// Row tuple returned by the combined config query (webhook + SMTP).
+/// Aliased to keep clippy's `type_complexity` quiet.
+type ConfigRow = (
+    Option<String>, // webhook url
+    Option<String>, // webhook secret
+    Option<String>, // smtp url
+    Option<String>, // smtp from
+    Option<String>, // smtp to
+);
 
 pub async fn get_config(
     State(state): State<AppState>,
     caller: AuthedCaller,
 ) -> AppResult<Json<NotificationsConfig>> {
     require_scope(&caller.scope, "tenant:admin")?;
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT notifications_webhook_url, notifications_webhook_secret \
+    let row: Option<ConfigRow> = sqlx::query_as(
+        "SELECT notifications_webhook_url, notifications_webhook_secret, \
+                notification_smtp_url, notification_smtp_from, notification_smtp_to \
          FROM tenants WHERE id = $1",
     )
     .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
-    let (url, secret) = row.unwrap_or((None, None));
+    let (wh_url, wh_secret, smtp_url, smtp_from, smtp_to) =
+        row.unwrap_or((None, None, None, None, None));
     Ok(Json(NotificationsConfig {
-        webhook_url: url,
-        signing_enabled: secret.is_some(),
+        webhook_url: wh_url,
+        signing_enabled: wh_secret.is_some(),
+        smtp_url,
+        smtp_from,
+        smtp_to,
     }))
 }
 
@@ -56,6 +83,14 @@ pub struct PutBody {
     /// A non-empty string replaces it.
     #[serde(default)]
     pub webhook_secret: Option<String>,
+    /// Email SMTP delivery. `None` keys leave the existing value
+    /// untouched; empty strings clear; non-empty strings replace.
+    #[serde(default)]
+    pub smtp_url: Option<String>,
+    #[serde(default)]
+    pub smtp_from: Option<String>,
+    #[serde(default)]
+    pub smtp_to: Option<String>,
 }
 
 pub async fn put_config(
@@ -65,53 +100,58 @@ pub async fn put_config(
 ) -> AppResult<Json<NotificationsConfig>> {
     require_scope(&caller.scope, "tenant:admin")?;
 
-    // Normalise empty string → NULL so the SQL stays clean.
-    let url = body
-        .webhook_url
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    if let Some(u) = &url {
+    // Each field is partial-update: `None` leaves it alone, `Some("")`
+    // clears, `Some("…")` replaces. Validate URL shape when set.
+    let normalize = |o: Option<String>| -> Option<Option<String>> {
+        o.map(|s| {
+            let t = s.trim().to_string();
+            if t.is_empty() { None } else { Some(t) }
+        })
+    };
+    let wh_url = normalize(body.webhook_url);
+    if let Some(Some(u)) = &wh_url {
         if !is_acceptable_url(u) {
             return Err(AppError::BadRequest(
                 "webhook_url must be an http(s) URL".into(),
             ));
         }
     }
-
-    let secret_changed = body.webhook_secret.is_some();
-    match body.webhook_secret {
-        None => {
-            // Leave secret untouched.
-            sqlx::query(
-                "UPDATE tenants SET notifications_webhook_url = $1, updated_at = now() \
-                 WHERE id = $2",
-            )
-            .bind(url.as_ref())
-            .bind(caller.tenant.tenant_id)
-            .execute(state.db())
-            .await?;
-        }
-        Some(s) => {
-            // Empty string clears; non-empty replaces.
-            let new_secret = if s.trim().is_empty() {
-                None
-            } else {
-                Some(s.trim().to_string())
-            };
-            sqlx::query(
-                "UPDATE tenants SET notifications_webhook_url = $1, \
-                                    notifications_webhook_secret = $2, \
-                                    updated_at = now() \
-                 WHERE id = $3",
-            )
-            .bind(url.as_ref())
-            .bind(new_secret.as_ref())
-            .bind(caller.tenant.tenant_id)
-            .execute(state.db())
-            .await?;
+    let wh_secret = normalize(body.webhook_secret);
+    let smtp_url = normalize(body.smtp_url);
+    if let Some(Some(u)) = &smtp_url {
+        if !(u.starts_with("smtp://") || u.starts_with("smtps://")) {
+            return Err(AppError::BadRequest(
+                "smtp_url must start with smtp:// or smtps://".into(),
+            ));
         }
     }
+    let smtp_from = normalize(body.smtp_from);
+    let smtp_to = normalize(body.smtp_to);
+
+    // CASE pattern: $N::int = 0 means "leave alone", else write the bind.
+    sqlx::query(
+        "UPDATE tenants SET \
+            notifications_webhook_url    = CASE WHEN $2::int = 0 THEN notifications_webhook_url    ELSE $3 END, \
+            notifications_webhook_secret = CASE WHEN $4::int = 0 THEN notifications_webhook_secret ELSE $5 END, \
+            notification_smtp_url        = CASE WHEN $6::int = 0 THEN notification_smtp_url        ELSE $7 END, \
+            notification_smtp_from       = CASE WHEN $8::int = 0 THEN notification_smtp_from       ELSE $9 END, \
+            notification_smtp_to         = CASE WHEN $10::int = 0 THEN notification_smtp_to        ELSE $11 END, \
+            updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(if wh_url.is_some() { 1_i32 } else { 0 })
+    .bind(wh_url.clone().unwrap_or(None))
+    .bind(if wh_secret.is_some() { 1_i32 } else { 0 })
+    .bind(wh_secret.clone().unwrap_or(None))
+    .bind(if smtp_url.is_some() { 1_i32 } else { 0 })
+    .bind(smtp_url.clone().unwrap_or(None))
+    .bind(if smtp_from.is_some() { 1_i32 } else { 0 })
+    .bind(smtp_from.clone().unwrap_or(None))
+    .bind(if smtp_to.is_some() { 1_i32 } else { 0 })
+    .bind(smtp_to.clone().unwrap_or(None))
+    .execute(state.db())
+    .await?;
 
     audit::record_best_effort(
         state.db(),
@@ -123,8 +163,11 @@ pub async fn put_config(
             target_kind: "tenant",
             target_id: Some(caller.tenant.tenant_slug.as_str()),
             metadata: serde_json::json!({
-                "webhook_url_set": url.is_some(),
-                "secret_changed": secret_changed,
+                "webhook_url_changed": wh_url.is_some(),
+                "webhook_secret_changed": wh_secret.is_some(),
+                "smtp_url_changed": smtp_url.is_some(),
+                "smtp_from_changed": smtp_from.is_some(),
+                "smtp_to_changed": smtp_to.is_some(),
             }),
             ip_addr: None,
             user_agent: None,

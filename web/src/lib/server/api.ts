@@ -365,6 +365,9 @@ export async function patchDraft(
 export interface NotificationsConfig {
   webhook_url?: string | null;
   signing_enabled: boolean;
+  smtp_url?: string | null;
+  smtp_from?: string | null;
+  smtp_to?: string | null;
 }
 
 export async function getNotifications(auth: Auth): Promise<NotificationsConfig | null> {
@@ -373,9 +376,17 @@ export async function getNotifications(auth: Auth): Promise<NotificationsConfig 
   return resp.json();
 }
 
+export interface PutNotificationsBody {
+  webhook_url?: string | null;
+  webhook_secret?: string | null;
+  smtp_url?: string | null;
+  smtp_from?: string | null;
+  smtp_to?: string | null;
+}
+
 export async function putNotifications(
   auth: Auth,
-  body: { webhook_url?: string | null; webhook_secret?: string | null },
+  body: PutNotificationsBody,
 ): Promise<
   | { ok: true; config: NotificationsConfig }
   | { ok: false; status: number; error: string }
