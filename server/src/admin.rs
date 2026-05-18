@@ -92,3 +92,48 @@ fn generate_token() -> String {
     rand::thread_rng().fill_bytes(&mut bytes);
     format!("spk_{}", hex::encode(bytes))
 }
+
+pub async fn set_sso(
+    db: &PgPool,
+    tenant_slug: &str,
+    issuer_url: &str,
+    client_id: &str,
+    client_secret: &str,
+    default_role: &str,
+) -> Result<()> {
+    if !matches!(default_role, "viewer" | "publisher" | "curator" | "admin") {
+        return Err(anyhow!(
+            "default_role must be viewer / publisher / curator / admin"
+        ));
+    }
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    sqlx::query(
+        "INSERT INTO tenant_sso (tenant_id, issuer_url, client_id, client_secret, default_role) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (tenant_id) DO UPDATE SET \
+           issuer_url = EXCLUDED.issuer_url, \
+           client_id = EXCLUDED.client_id, \
+           client_secret = EXCLUDED.client_secret, \
+           default_role = EXCLUDED.default_role",
+    )
+    .bind(tenant_id)
+    .bind(issuer_url)
+    .bind(client_id)
+    .bind(client_secret)
+    .bind(default_role)
+    .execute(db)
+    .await
+    .context("upsert tenant_sso")?;
+
+    println!("sso configured for tenant `{tenant_slug}`");
+    println!("  issuer: {issuer_url}");
+    println!("  client: {client_id}");
+    println!("  role:   {default_role}");
+    Ok(())
+}

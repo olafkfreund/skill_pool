@@ -48,6 +48,21 @@ enum AdminAction {
         #[arg(long, default_value = "skills:read skills:publish")]
         scope: String,
     },
+    /// Configure (or update) OIDC SSO for a tenant.
+    SsoSet {
+        #[arg(long)]
+        tenant: String,
+        /// OIDC issuer URL, e.g. https://acme.okta.com/oauth2/default
+        #[arg(long)]
+        issuer: String,
+        #[arg(long)]
+        client_id: String,
+        #[arg(long)]
+        client_secret: String,
+        /// Role granted to first-time signers (viewer|publisher|curator|admin).
+        #[arg(long, default_value = "viewer")]
+        default_role: String,
+    },
 }
 
 #[tokio::main]
@@ -87,6 +102,24 @@ async fn main() -> Result<()> {
                     println!("RAW TOKEN (shown once — copy now):");
                     println!("  {}", created.raw_token);
                     Ok(())
+                }
+                AdminAction::SsoSet {
+                    tenant,
+                    issuer,
+                    client_id,
+                    client_secret,
+                    default_role,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::set_sso(
+                        &db,
+                        &tenant,
+                        &issuer,
+                        &client_id,
+                        &client_secret,
+                        &default_role,
+                    )
+                    .await
                 }
             }
         }

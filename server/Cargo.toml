@@ -56,6 +56,11 @@ bytes = "1"
 mime = "0.3"
 clap = { version = "4", features = ["derive", "env"] }
 regex = "1"
+openidconnect = "3"
+hmac = "0.12"
+base64 = "0.22"
+urlencoding = "2"
+async-trait = "0.1"
 
 config = { version = "0.15", default-features = false, features = ["toml", "json"] }
 figment = { version = "0.10", features = ["env", "toml"] }

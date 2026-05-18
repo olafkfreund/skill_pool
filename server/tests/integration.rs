@@ -437,6 +437,48 @@ async fn full_publish_install_and_isolation() -> Result<()> {
     assert_eq!(theme["brand_name"], "Acme Corp");
     assert_eq!(theme["primary"], "#7c3aed");
 
+    // -------- OIDC discover before any sso config --------
+    let resp: Value = c
+        .get(format!("{}/v1/auth/oidc/discover", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(resp["enabled"], false);
+
+    // -------- configure SSO + re-check discover --------
+    use skill_pool_server::admin;
+    admin::set_sso(
+        &h.db,
+        "acme",
+        "https://accounts.example.test",
+        "client-abc",
+        "secret-xyz",
+        "publisher",
+    )
+    .await?;
+
+    let resp: Value = c
+        .get(format!("{}/v1/auth/oidc/discover", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(resp["enabled"], true);
+
+    // -------- /v1/auth/oidc/{slug}/start without sso config (globex) --------
+    let resp = c
+        .get(format!(
+            "{}/v1/auth/oidc/globex/start?return_to=http://x/y",
+            h.base
+        ))
+        .header("x-skill-pool-tenant", "globex")
+        .send()
+        .await?;
+    assert_eq!(resp.status().as_u16(), 400, "start without SSO should 400");
+
     // -------- skill-md endpoint returns the SKILL.md body --------
     let md = authed(
         c.get(format!("{}/v1/skills/hello/skill-md", h.base))

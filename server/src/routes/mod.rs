@@ -6,6 +6,7 @@ use tower_http::trace::TraceLayer;
 use crate::state::AppState;
 
 mod health;
+mod oidc;
 mod skills;
 mod theme;
 
@@ -20,6 +21,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills/{slug}/bundle.tar.gz", get(skills::get_bundle))
         .route("/v1/skills/{slug}/skill-md", get(skills::get_skill_md))
         .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
+        // OIDC
+        .route("/v1/auth/oidc/discover", get(oidc::discover))
+        .route("/v1/auth/oidc/{slug}/start", get(oidc::start))
+        .route("/v1/auth/oidc/{slug}/callback", get(oidc::callback))
+        .route("/v1/auth/whoami", get(oidc::whoami))
+        .route("/v1/auth/logout", post(oidc::logout))
         .layer(RequestBodyLimitLayer::new(MAX_BUNDLE_BYTES + 64 * 1024))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

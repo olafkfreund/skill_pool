@@ -1,12 +1,18 @@
-import { redirect, fail } from '@sveltejs/kit';
-import { validateAuth } from '$lib/server/api';
+import { fail, redirect } from '@sveltejs/kit';
+import { discoverOidc, oidcStartUrl, validateAuth } from '$lib/server/api';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   if (locals.tenant.authed) {
     throw redirect(303, url.searchParams.get('next') ?? '/');
   }
-  return {};
+
+  const sso = await discoverOidc({ tenant: locals.tenant.slug });
+  const returnTo = `${url.origin}/oidc-return`;
+  return {
+    sso,
+    oidcStart: sso.enabled ? oidcStartUrl(locals.tenant.slug, returnTo) : null,
+  };
 };
 
 export const actions: Actions = {

@@ -191,6 +191,19 @@ export async function publishSkill(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+export async function discoverOidc(auth: Auth): Promise<{ enabled: boolean }> {
+  const resp = await call('GET', '/v1/auth/oidc/discover', auth);
+  if (!resp.ok) return { enabled: false };
+  return resp.json();
+}
+
+/** Build the `?return_to=` URL the server redirects back to once OIDC completes. */
+export function oidcStartUrl(tenant: string, returnTo: string): string {
+  const url = `${base()}/v1/auth/oidc/${encodeURIComponent(tenant)}/start`;
+  const params = new URLSearchParams({ return_to: returnTo });
+  return `${url}?${params}`;
+}
+
 /** Lightweight check: the token authenticates against /v1/skills for this tenant. */
 export async function validateAuth(auth: Auth): Promise<boolean> {
   try {
