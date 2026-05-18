@@ -1,0 +1,122 @@
+# Prometheus alert rules for the skill-pool registry server.
+#
+# Drop this file into your Prometheus rules directory (e.g.
+# `/etc/prometheus/rules/skill-pool.rules.yaml`) and reference it from
+# `prometheus.yml`:
+#
+#     rule_files:
+#       - /etc/prometheus/rules/skill-pool.rules.yaml
+#
+# Alerts:
+#   * SkillPoolHighErrorRate   — sustained 5xx >5% of traffic
+#   * SkillPoolHighLatency      — p95 > 1s for 10m
+#   * SkillPoolDBPoolExhausted  — pool size has been flat near its cap
+#   * SkillPoolHealthzDepDown   — /v1/healthz reports a dep down
+#                                  (requires a blackbox exporter probing healthz —
+#                                  see ops/README.md for setup)
+#   * SkillPoolNoTraffic         — server appears reachable but no requests in
+#                                  10m. Distinguishes "site down" from "quiet".
+#
+# Severity convention:
+#   critical — page someone
+#   warning  — ticket, look during business hours
+
+groups:
+  - name: skill-pool.server
+    interval: 30s
+    rules:
+      - alert: SkillPoolHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total[5m])), 1e-9)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: skill-pool
+        annotations:
+          summary: "skill-pool 5xx rate > 5% for 5m"
+          description: |
+            The fraction of HTTP responses with a 5xx status has been over 5%
+            for the last 5 minutes. Inspect `Errors by path` panel in the
+            skill-pool Grafana dashboard. Likely causes: DB unreachable
+            (check `db_pool_size` and `/healthz`), storage backend down,
+            or a recent deploy regression.
+
+      - alert: SkillPoolHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: skill-pool
+        annotations:
+          summary: "skill-pool p95 latency > 1s for 10m"
+          description: |
+            95th-percentile request latency has been above 1s for 10 minutes.
+            Check `Latency percentiles` and `Latency heatmap` panels. Common
+            culprits: slow DB queries (often `/v1/skills?semantic=...` when
+            pgvector index is missing), saturated DB pool, or a noisy
+            neighbour on the host.
+
+      - alert: SkillPoolDBPoolExhausted
+        expr: |
+          (db_pool_size <= 1) and on() rate(http_requests_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: skill-pool
+        annotations:
+          summary: "skill-pool sqlx pool down to last connection with active traffic"
+          description: |
+            `db_pool_size` has been at or below 1 while requests are arriving.
+            Either the pool max_size is too low for the request rate or
+            queries are holding connections (long-running, missing index,
+            or deadlock). Raise SKILL_POOL_DB_POOL_SIZE and check for
+            sustained query times in slow-query logs.
+
+      - alert: SkillPoolNoTraffic
+        expr: |
+          absent_over_time(http_requests_total[10m])
+            or
+          sum(rate(http_requests_total[10m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: skill-pool
+        annotations:
+          summary: "skill-pool has received zero requests in 10m"
+          description: |
+            The server is scraped (this alert is firing, so metrics endpoint
+            responds) but no client traffic has been seen for 10 minutes.
+            This could be a real outage downstream (LB / reverse proxy
+            dropping traffic) or a genuinely idle deployment. Verify by
+            curling a healthz-adjacent route from outside the cluster.
+
+  - name: skill-pool.healthz
+    interval: 60s
+    rules:
+      # Requires a blackbox_exporter probe of /v1/healthz configured to set a
+      # `probe_success` series with `instance="skill-pool"` and to write the
+      # parsed JSON `deps.db.status` into a `probe_http_content_status_db`
+      # gauge (1=up, 0=down). If you don't run blackbox-exporter against
+      # healthz, delete this group — http_requests_total + 5xx rate already
+      # tells you the box is unreachable.
+      - alert: SkillPoolHealthzDBDown
+        expr: probe_http_content_status_db{job="skill-pool-healthz"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: skill-pool
+        annotations:
+          summary: "skill-pool /v1/healthz reports db down"
+          description: |
+            The healthz probe to skill-pool returned `deps.db.status="down"`
+            for 2 consecutive minutes. The server is up enough to respond
+            to /v1/healthz (HTTP 200 by design — load balancers stay up),
+            but the database probe is failing. Inspect Postgres logs.
