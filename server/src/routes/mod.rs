@@ -7,6 +7,7 @@ use tower_http::trace::TraceLayer;
 use crate::metrics;
 use crate::state::AppState;
 
+mod audit_siem;
 mod bootstrap;
 mod decay;
 mod drafts;
@@ -68,6 +69,12 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/tenant/notifications/pending-count",
             get(notifications::pending_count),
+        )
+        // SIEM export (Phase 5) — fan out audit_events to Splunk HEC,
+        // Datadog Logs, or any generic JSON POST receiver.
+        .route(
+            "/v1/tenant/audit-siem",
+            get(audit_siem::get_config).put(audit_siem::put_config),
         )
         // Decay / archive (Phase 5)
         .route("/v1/tenant/skills/decay", get(decay::list_candidates))
