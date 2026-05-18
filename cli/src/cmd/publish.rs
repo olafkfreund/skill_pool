@@ -1,16 +1,56 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
+use crate::client::{Client, PublishMetadata};
 use crate::config::Config;
+use crate::install;
 
-pub async fn run(_cfg: &Config, dir: &Path) -> Result<()> {
+pub async fn run(
+    cfg: &Config,
+    dir: &Path,
+    slug_override: Option<&str>,
+    version: &str,
+) -> Result<()> {
     let skill_md = dir.join("SKILL.md");
     if !skill_md.exists() {
-        anyhow::bail!("no SKILL.md found in {}", dir.display());
+        bail!("no SKILL.md found in {}", dir.display());
     }
-    let _raw = std::fs::read_to_string(&skill_md)
-        .with_context(|| format!("read {}", skill_md.display()))?;
-    // TODO(#3): parse frontmatter, lint, tar+gzip directory, POST multipart.
-    anyhow::bail!("`publish` is scaffolded but not yet implemented (issue #3)");
+
+    let fm = install::read_frontmatter(dir).context("read SKILL.md frontmatter")?;
+    let slug = match slug_override {
+        Some(s) => s.to_string(),
+        None => fm
+            .name
+            .clone()
+            .or_else(|| dir.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .ok_or_else(|| anyhow::anyhow!("could not infer slug; pass --slug"))?,
+    };
+
+    let bundle = install::tar_gz_dir(dir).context("build bundle")?;
+    println!(
+        "  packing:  {} bytes ({} → {}@{})",
+        bundle.len(),
+        dir.display(),
+        slug,
+        version
+    );
+
+    let reg = cfg.require_registry()?;
+    let client = Client::new(reg)?;
+
+    let metadata = PublishMetadata {
+        slug: &slug,
+        version,
+        when_to_use: fm.when_to_use.as_deref(),
+        tags: &fm.tags,
+    };
+
+    let published = client.publish(metadata, bundle).await?;
+    println!("  published: {}@{}", published.slug, published.version);
+    println!("  status:    {}", published.status);
+    if !published.tags.is_empty() {
+        println!("  tags:      {}", published.tags.join(", "));
+    }
+    Ok(())
 }

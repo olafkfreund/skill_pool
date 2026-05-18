@@ -5,6 +5,7 @@ use tracing_subscriber::EnvFilter;
 mod client;
 mod cmd;
 mod config;
+mod install;
 mod manifest;
 
 #[derive(Parser)]
@@ -47,6 +48,12 @@ enum Cmd {
     Publish {
         #[arg(value_name = "DIR")]
         dir: std::path::PathBuf,
+        /// Override the slug. Defaults to the frontmatter `name`, then the directory name.
+        #[arg(long)]
+        slug: Option<String>,
+        /// Required. Semver string for this publish (e.g. 1.0.0).
+        #[arg(long)]
+        version: String,
     },
     /// Diagnose: list loaded skills, dangling symlinks, drift.
     Doctor,
@@ -70,7 +77,9 @@ async fn main() -> Result<()> {
         Cmd::Ensure => cmd::ensure::run(&cfg).await,
         Cmd::Add { slug } => cmd::add::run(&cfg, &slug).await,
         Cmd::Search { query } => cmd::search::run(&cfg, &query).await,
-        Cmd::Publish { dir } => cmd::publish::run(&cfg, &dir).await,
+        Cmd::Publish { dir, slug, version } => {
+            cmd::publish::run(&cfg, &dir, slug.as_deref(), &version).await
+        }
         Cmd::Doctor => cmd::doctor::run(&cfg),
     }
 }
