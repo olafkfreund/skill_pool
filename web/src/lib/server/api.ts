@@ -87,11 +87,7 @@ export async function listSkills(
 }
 
 export async function getSkill(auth: Auth, slug: string, kind?: CatalogKind): Promise<Skill> {
-  const resp = await call(
-    'GET',
-    `/v1/skills/${encodeURIComponent(slug)}${kindQuery(kind)}`,
-    auth,
-  );
+  const resp = await call('GET', `/v1/skills/${encodeURIComponent(slug)}${kindQuery(kind)}`, auth);
   if (!resp.ok) throw new ApiError(resp.status, await resp.text());
   return resp.json();
 }
@@ -538,10 +534,7 @@ export async function patchDraft(
   auth: Auth,
   id: string,
   body: PatchDraftBody,
-): Promise<
-  | { ok: true; draft: Draft }
-  | { ok: false; status: number; error: string }
-> {
+): Promise<{ ok: true; draft: Draft } | { ok: false; status: number; error: string }> {
   const resp = await call('PATCH', `/v1/drafts/${encodeURIComponent(id)}`, auth, {
     jsonBody: body,
   });
@@ -575,8 +568,7 @@ export async function putNotifications(
   auth: Auth,
   body: PutNotificationsBody,
 ): Promise<
-  | { ok: true; config: NotificationsConfig }
-  | { ok: false; status: number; error: string }
+  { ok: true; config: NotificationsConfig } | { ok: false; status: number; error: string }
 > {
   const resp = await call('PUT', '/v1/tenant/notifications', auth, { jsonBody: body });
   if (resp.ok) return { ok: true, config: (await resp.json()) as NotificationsConfig };
@@ -611,8 +603,7 @@ export async function archiveSkill(
   slug: string,
   kind?: CatalogKind,
 ): Promise<
-  | { ok: true; slug: string; version: string }
-  | { ok: false; status: number; error: string }
+  { ok: true; slug: string; version: string } | { ok: false; status: number; error: string }
 > {
   const resp = await call(
     'POST',
@@ -752,4 +743,78 @@ export async function getSessionMaxAge(tenant: string): Promise<number> {
   } catch {
     return FALLBACK_SESSION_MAX_AGE;
   }
+}
+
+/**
+ * One row in the custom-domain admin table. Wire shape mirrors
+ * `server/src/routes/custom_domains.rs::CustomDomain` — `verification_record`
+ * is the pre-formatted "host TXT value" string the tenant pastes into their
+ * DNS panel.
+ *
+ * `status` is one of `pending` | `verified` | `active` | `failed`. The server
+ * stores `verified` after DNS-TXT control is proven; `active` is set by the
+ * operator after the reverse proxy is wired up. From the UI's perspective both
+ * are "good"; `pending` and `failed` are "needs attention".
+ */
+export interface CustomDomain {
+  id: string;
+  hostname: string;
+  status: 'pending' | 'verified' | 'active' | 'failed' | string;
+  verification_record: string;
+  last_checked_at: string | null;
+  last_error: string | null;
+  activated_at: string | null;
+  created_at: string;
+}
+
+/** GET /v1/tenant/custom-domains — list this tenant's claims. */
+export async function listCustomDomains(auth: Auth): Promise<CustomDomain[]> {
+  const resp = await call('GET', '/v1/tenant/custom-domains', auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+/**
+ * POST /v1/tenant/custom-domains — claim a hostname. The server validates
+ * the hostname shape and returns the row plus a `verification_record` string
+ * the admin pastes into their DNS panel.
+ */
+export async function createCustomDomain(
+  auth: Auth,
+  hostname: string,
+): Promise<{ ok: true; domain: CustomDomain } | { ok: false; status: number; error: string }> {
+  const resp = await call('POST', '/v1/tenant/custom-domains', auth, {
+    jsonBody: { hostname },
+  });
+  if (resp.ok) return { ok: true, domain: (await resp.json()) as CustomDomain };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+/**
+ * POST /v1/tenant/custom-domains/{id}/verify — runs the upstream TXT lookup
+ * and flips the row to `verified` (on match) or `failed` (otherwise). The
+ * fresh row is returned in both cases; on failure `last_error` carries the
+ * resolver's message so the UI can surface it inline.
+ */
+export async function verifyCustomDomain(
+  auth: Auth,
+  id: string,
+): Promise<{ ok: true; domain: CustomDomain } | { ok: false; status: number; error: string }> {
+  const resp = await call(
+    'POST',
+    `/v1/tenant/custom-domains/${encodeURIComponent(id)}/verify`,
+    auth,
+  );
+  if (resp.ok) return { ok: true, domain: (await resp.json()) as CustomDomain };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+/** DELETE /v1/tenant/custom-domains/{id} — withdraw a claim. 204 on success. */
+export async function removeCustomDomain(
+  auth: Auth,
+  id: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', `/v1/tenant/custom-domains/${encodeURIComponent(id)}`, auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
 }
