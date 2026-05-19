@@ -19,6 +19,7 @@ mod health;
 mod mcp;
 mod members;
 mod notifications;
+mod og;
 mod oidc;
 mod profile;
 mod saml;
@@ -65,6 +66,10 @@ pub fn router(state: AppState) -> Router {
             post(theme::post_custom_css).delete(theme::delete_custom_css),
         )
         .route("/v1/theme/custom.css", get(theme::get_custom_css))
+        // Open Graph card generator (#9). Public, tenant-resolved —
+        // social-platform crawlers don't carry auth. Returns SVG with a
+        // 24h Cache-Control + ETag.
+        .route("/v1/og", get(og::og_image))
         .route(
             "/v1/tenant/session-policy",
             get(session_policy::get_session_policy),

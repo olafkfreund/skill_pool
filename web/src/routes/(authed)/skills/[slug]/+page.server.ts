@@ -22,7 +22,19 @@ export const load: PageServerLoad = async ({ locals, params, cookies, url }) => 
       getSkillDetail(auth, params.slug, kind),
       getSkillMd(auth, params.slug, kind).catch(() => ''),
     ]);
-    return { detail, body, kind };
+    // Compute the OG image + canonical page URL on the server so the
+    // browser-rendered <svelte:head> can emit absolute URLs. Social
+    // crawlers (Slack, Twitter, etc) require absolute URLs in
+    // og:image / og:url.
+    //
+    // We deliberately strip the `kind` query param off the canonical
+    // page URL when it's the default `skill`, matching the kindQuery
+    // logic in lib/server/api.ts — keeps shared links tidy.
+    const ogParams = new URLSearchParams({ slug: params.slug });
+    if (kind !== 'skill') ogParams.set('kind', kind);
+    const ogImageUrl = `${url.origin}/v1/og?${ogParams.toString()}`;
+    const pageUrl = `${url.origin}${url.pathname}`;
+    return { detail, body, kind, ogImageUrl, pageUrl };
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
       throw error(404, `${kind} "${params.slug}" not found`);
