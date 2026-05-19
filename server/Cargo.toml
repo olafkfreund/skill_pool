@@ -130,7 +130,7 @@ opentelemetry = { version = "0.31", optional = true }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["rt-tokio", "trace"], optional = true }
 # http-proto + reqwest-rustls: protobuf-over-HTTP transport with rustls — no OpenSSL required.
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-rustls", "trace"], optional = true }
-tracing-opentelemetry = { version = "0.32", optional = true }
+tracing-opentelemetry = { version = "0.33", optional = true }
 
 [features]
 default = []
