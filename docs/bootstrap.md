@@ -168,14 +168,36 @@ scope = "project"
 The manifest is what `skill-pool ensure` reads. Both `bootstrap` and
 `add` append to it.
 
+## Matching tiers
+
+`GET /v1/bootstrap?stack=tag1,tag2,…` unions three tiers and caps the
+response at eight slugs:
+
+1. **Curated** — `tenant_stack_mappings` rows the admin maintains.
+   Highest precision; this is the team's intentional shape.
+2. **Tag intersection** — published skills whose `tags` array overlaps
+   the stack tags. Ranks by overlap-count DESC, then `created_at` DESC
+   so freshest broad-matches surface first.
+3. **Semantic similarity** — embeds the joined stack string (e.g.
+   `"rust axum postgres"`) and ranks published skills by cosine
+   distance over their description embeddings. Skipped entirely when no
+   embedder is configured (`NullEmbedder` / default build); the catalog
+   degrades gracefully, no 5xx.
+
+Dedup priority is `curated > tagged > semantic`: a slug surfaced by a
+higher tier is removed from lower tiers before the union. Pass
+`?debug=1` to see per-tier attribution under `tier_breakdown` (omitted
+otherwise so the default response stays minimal).
+
 ## What's NOT yet wired (later iterations)
 
 - **Manifest deep-parse tier** — currently `detect` reads top-level
   `Cargo.toml`. Workspace member traversal + AST parsing for richer
   framework distinctions lands later.
-- **LLM fallback tier** — when fingerprints yield no useful tags
-  (a brand-new repo with just `README.md`), fall back to a one-shot
-  Haiku call. Off by default.
-- **Tag intersection + embedding matching** — Phase 5; broadens
-  recommendations beyond the curated map.
+- **LLM fallback tier** — deferred indefinitely. The master plan
+  reserved a fourth tier for a one-shot Haiku call when fingerprints
+  yield no useful tags, but in practice the three tiers above cover
+  the long tail at zero token-cost and without requiring an Anthropic
+  API key on the server. We may revisit if real telemetry shows
+  measurable zero-result requests we can't already cover.
 - **Web UI for stack mappings** — admins set them via CLI today.
