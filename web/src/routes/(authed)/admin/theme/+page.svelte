@@ -1,10 +1,28 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { CheckCircle2, AlertTriangle, RotateCcw, Save, Tag, Download } from '@lucide/svelte';
+  import {
+    CheckCircle2,
+    AlertTriangle,
+    RotateCcw,
+    Save,
+    Tag,
+    Download,
+    Image as ImageIcon,
+    Trash2,
+  } from '@lucide/svelte';
   import { contrastRatio, wcagBadge, checkThemeContrast } from '$lib/contrast';
   import type { Theme } from '$lib/theme';
 
   let { data, form } = $props();
+
+  // The form action returns `hasLogo: true|false`; the page load also supplies
+  // it. Prefer the latest form payload so the UI reflects the post-action
+  // state without an extra reload.
+  const hasLogo = $derived<boolean>(
+    typeof form?.hasLogo === 'boolean' ? form.hasLogo : data.hasLogo,
+  );
+  // Cache-bust the logo image after upload so the new bytes show immediately.
+  const logoBust = $derived(form?.savedLogo ? Date.now() : 0);
 
   // Editable copy. Intentionally non-reactive — `untrack` tells the compiler
   // we mean it. The `$effect` below re-syncs after a successful save.
@@ -97,6 +115,63 @@
     <span>Theme saved.</span>
   </div>
 {/if}
+
+<!-- Logo upload (server sanitizes SVG; raster formats are magic-checked).
+     This sits above the colour pickers because the logo is the most visible
+     bit of branding and admins will reach for it first. -->
+<section class="mb-6 rounded-[var(--sp-radius)] border border-[var(--sp-border)] p-4">
+  <header class="mb-3 flex items-center gap-2">
+    <ImageIcon size="16" aria-hidden="true" />
+    <h2 class="text-sm font-semibold">Brand logo</h2>
+  </header>
+  <p class="mb-3 text-xs text-[var(--sp-muted-fg)]">
+    SVG, PNG, JPEG, or WEBP. Max 256&nbsp;KiB. SVGs are sanitized server-side
+    — <code>&lt;script&gt;</code>, event handlers, off-origin
+    <code>xlink:href</code>, and CSS escapes are rejected.
+  </p>
+
+  {#if hasLogo}
+    <div class="mb-3 flex items-center gap-4">
+      <img
+        src="/admin/theme/logo{logoBust ? `?v=${logoBust}` : ''}"
+        alt="Current tenant logo"
+        class="h-12 w-12 rounded border border-[var(--sp-border)] bg-[var(--sp-bg)] object-contain p-1"
+      />
+      <form method="POST" action="?/removeLogo">
+        <button
+          type="submit"
+          class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50"
+        >
+          <Trash2 size="12" aria-hidden="true" /> Remove logo
+        </button>
+      </form>
+    </div>
+  {/if}
+
+  {#if form?.savedLogo}
+    <p class="mb-2 text-xs text-emerald-700">Logo uploaded.</p>
+  {/if}
+  {#if form?.removedLogo}
+    <p class="mb-2 text-xs text-emerald-700">Logo removed.</p>
+  {/if}
+
+  <form method="POST" action="?/logo" enctype="multipart/form-data" class="flex flex-wrap items-center gap-3">
+    <input
+      type="file"
+      name="logo"
+      accept="image/svg+xml,image/png,image/jpeg,image/webp"
+      required
+      class="text-xs"
+    />
+    <button
+      type="submit"
+      class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] px-3 py-1.5 text-xs font-medium"
+      style="background: var(--sp-primary); color: var(--sp-primary-fg);"
+    >
+      Upload
+    </button>
+  </form>
+</section>
 
 <div class="grid gap-8 lg:grid-cols-[1fr_1fr]">
   <!-- Form -->
