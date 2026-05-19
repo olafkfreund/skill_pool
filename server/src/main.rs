@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use skill_pool_server::{admin, config, routes, state, telemetry, tracing_setup};
+use skill_pool_server::{admin, config, notify, routes, state, telemetry, tracing_setup, worker};
 
 #[derive(Parser)]
 #[command(
@@ -592,6 +592,22 @@ async fn serve(cfg: config::Config) -> Result<()> {
     // server reloads. Detached: the JoinHandle is dropped, the task
     // ends when the runtime shuts down.
     let _refresher = state.spawn_custom_domain_refresher();
+
+    // Spawn the job-queue worker when Redis + queue are both
+    // available. The watch channel is shared between axum's graceful
+    // shutdown signal and the worker's loop so a SIGTERM drains both
+    // sides cleanly. When Redis isn't configured we skip the worker
+    // and all consumers fall back to inline behaviour (notify.rs
+    // branches on `state.queue()`).
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker_handle = if let Some(q) = state.queue() {
+        let mut w = worker::Worker::new(q.clone(), shutdown_rx.clone());
+        w.register("email", notify::EmailHandler::new(state.clone()));
+        Some(tokio::spawn(w.run()))
+    } else {
+        None
+    };
+
     let app = routes::router(state);
 
     let addr: SocketAddr = cfg.bind.parse()?;
@@ -601,6 +617,19 @@ async fn serve(cfg: config::Config) -> Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    // axum returned → user requested shutdown OR the listener died.
+    // Tell the worker to drain. We give it 30s to finish whatever it's
+    // doing; longer than that and we time out and log a warning rather
+    // than block the process from exiting.
+    if let Some(handle) = worker_handle {
+        let _ = shutdown_tx.send(true);
+        match tokio::time::timeout(std::time::Duration::from_secs(30), handle).await {
+            Ok(Ok(())) => tracing::info!("queue worker shut down cleanly"),
+            Ok(Err(e)) => tracing::warn!(error = %e, "queue worker task panicked during shutdown"),
+            Err(_) => tracing::warn!("queue worker shutdown timed out after 30s"),
+        }
+    }
 
     telemetry::shutdown();
     Ok(())

@@ -102,6 +102,7 @@ async fn per_tenant_storage_uri_overrides_global_default() -> Result<()> {
         storage_uri: default_uri.clone(),
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
+        queue_enabled: None,
     };
     let app_state = state::AppState::new(&cfg).await?;
     let app = routes::router(app_state);
