@@ -52,10 +52,51 @@
           buildInputs = commonBuildInputs;
           doCheck = false;
         };
+
+        skill-pool-web = pkgs.buildNpmPackage {
+          pname = "skill-pool-web";
+          version = "0.1.0";
+          src = ./web;
+          npmDepsHash = "sha256-9FsjCDuYuYemNIKaOZoOtGEZqAm/Nv4dUkC4aYxYRoU=";
+          npmBuildScript = "build";
+          # adapter-node emits build/ as the server bundle.  Copy everything
+          # the runtime needs: the compiled output, the production node_modules
+          # that adapter-node embeds, and the package.json manifest (used by
+          # Node to resolve the entry point and ESM type).
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            cp -r build/* $out/
+            cp package.json $out/package.json
+            runHook postInstall
+          '';
+          meta = with pkgs.lib; {
+            description = "skill-pool SvelteKit portal (adapter-node bundle)";
+            license = licenses.mit;
+            platforms = platforms.linux;
+          };
+        };
       in {
         packages = {
-          inherit skill-pool-server skill-pool-cli;
+          inherit skill-pool-server skill-pool-cli skill-pool-web;
           default = skill-pool-cli;
+        };
+
+        # `nix run .#skill-pool-web` — boot the adapter-node bundle.
+        # Set PORT / HOST / ORIGIN env vars as needed before running.
+        apps.skill-pool-web = {
+          type = "app";
+          program = "${pkgs.writeShellScript "skill-pool-web" ''
+            exec ${pkgs.nodejs_22}/bin/node ${skill-pool-web}/index.js "$@"
+          ''}";
+        };
+
+        # Build-smoke check: ensures the web derivation stays buildable in CI.
+        # Rust packages are not included here because the server requires
+        # additional native libraries (libxml2, xmlsec) not yet wired into
+        # commonBuildInputs — that is tracked separately.
+        checks = {
+          skill-pool-web-build = skill-pool-web;
         };
 
         devShells.default = pkgs.mkShell {

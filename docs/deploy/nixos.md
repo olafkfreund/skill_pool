@@ -106,6 +106,14 @@ SKILL_POOL_DATABASE_URL=postgres://skillpool:CHANGE@localhost/skillpool
 | `stateDir`            | path            | `/var/lib/skill-pool`                | Writable dir                     |
 | `openFirewall`        | bool            | `false`                              | Open `bind` port in firewall     |
 
+## Web bundle as a Nix derivation
+
+The flake also exposes `packages.skill-pool-web`, a `buildNpmPackage` derivation that
+produces the adapter-node SvelteKit bundle under `result/`.  Use it in production
+deployments with `nix build .#skill-pool-web && PORT=3000 node result/index.js`, or
+reference `skill-pool.packages.${pkgs.system}.skill-pool-web` from a NixOS module to
+serve the portal without a Docker image.
+
 ## Rebuild + verify
 
 ```bash
