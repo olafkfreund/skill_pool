@@ -7,9 +7,20 @@ license.workspace = true
 repository.workspace = true
 description = "skill-pool CLI — install, search, publish Claude Code skills"
 
+[lib]
+name = "skill_pool_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "skill-pool"
 path = "src/main.rs"
+
+# Long-lived daemon variant of `skill-pool capture-run`. Shares the same
+# pipeline code via the `skill_pool_cli` lib; the single-shot `capture-run`
+# subcommand keeps working for cron/timer drivers.
+[[bin]]
+name = "skill-pool-capturer"
+path = "src/bin/skill-pool-capturer.rs"
 
 [dependencies]
 anyhow.workspace = true
@@ -39,6 +50,11 @@ regex = "1"
 # client-side; the server doesn't try to reverse it.
 sha2 = "0.10"
 hex = "0.4"
+# Desktop notifications for the capturer pipeline. On Linux this goes
+# through libdbus / org.freedesktop.Notifications; on macOS through the
+# NSUserNotification API. Headless / no-DBUS environments degrade to a
+# no-op (see `notify::should_emit`).
+notify-rust = "4"
 
 [dev-dependencies]
 tempfile = "3"

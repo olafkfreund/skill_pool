@@ -1,0 +1,60 @@
+# skill-pool capturer daemon — Phase 4.6, long-lived variant.
+#
+# Opt-in alternative to the hourly `skill-pool-capturer.timer`. Runs the
+# Phase 4.6 LLM capture pipeline as a persistent process polling
+# ~/.skill-pool/queue and ~/.skill-pool/sessions every 30s. Lower latency
+# between session end and the desktop toast at the cost of a long-running
+# user-scope process.
+#
+# The single-shot timer and this daemon are mutually exclusive — pick
+# ONE per user. The Nix module enforces this; users wiring the units by
+# hand should disable the timer first.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user/
+#   cp skill-pool-capturer-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   # If the timer was previously enabled:
+#   systemctl --user disable --now skill-pool-capturer.timer
+#   systemctl --user enable --now skill-pool-capturer-daemon.service
+#
+# Required env: ANTHROPIC_API_KEY (and a registry configured via
+# `skill-pool login`). Optionally seed from /etc/skill-pool/capturer.env.
+#
+# Notifications: the daemon emits a desktop toast on each successful
+# draft, but only when DBUS_SESSION_BUS_ADDRESS is set in its env.
+# Under `Type=simple` user units that address is typically inherited
+# from the user manager (systemd --user), so notifications work without
+# extra plumbing on most distros. Set `SKILL_POOL_CAPTURE_NO_NOTIFY=1`
+# to silence.
+
+[Unit]
+Description=skill-pool capturer daemon (Phase 4.6, long-lived)
+After=network-online.target
+# Mutually exclusive with the single-shot timer-driven service to avoid
+# duplicate POST /v1/drafts calls on the same session.
+Conflicts=skill-pool-capturer.timer skill-pool-capturer.service
+
+[Service]
+Type=simple
+ExecStart=skill-pool-capturer
+Restart=on-failure
+RestartSec=10s
+
+# Surface env vars set in ~/.config/environment.d/*.conf (e.g.
+# ANTHROPIC_API_KEY) without requiring the user to inline them here.
+PassEnvironment=ANTHROPIC_API_KEY SKILL_POOL_REGISTRY SKILL_POOL_CONFIG SKILL_POOL_HOME XDG_DATA_HOME DBUS_SESSION_BUS_ADDRESS
+
+# Optional drop-in for org-managed env (api keys, registry URL, …).
+# The `-` prefix makes it non-fatal when the file doesn't exist.
+EnvironmentFile=-/etc/skill-pool/capturer.env
+
+# Soft memory cap — same rationale as the single-shot unit.
+MemoryMax=512M
+
+# A 30s poll loop holding a reqwest client + Anthropic SDK shouldn't
+# leak FDs, but bound it as a safety net.
+LimitNOFILE=1024
+
+[Install]
+WantedBy=default.target

@@ -25,6 +25,7 @@ use crate::capturer::{
 };
 use crate::client::{CaptureMetadata, CapturedDraft, Client};
 use crate::config::Config;
+use crate::notify;
 use crate::scorer::{
     self, CaptureStage, CaptureState, SessionScore,
 };
@@ -58,6 +59,7 @@ pub async fn run(
     stage1_model: Option<&str>,
     stage2_model: Option<&str>,
     allow_secret: bool,
+    no_notify: bool,
 ) -> Result<()> {
     let stage1 = stage1_model.unwrap_or(DEFAULT_STAGE1_MODEL);
     let stage2 = stage2_model.unwrap_or(DEFAULT_STAGE2_MODEL);
@@ -105,6 +107,8 @@ pub async fn run(
     };
     let reg = cfg.require_registry()?;
     let registry = Client::new(reg)?;
+    let notify_enabled = !no_notify;
+    let web_url = cfg.web_url.as_deref();
 
     let mut drafted = 0;
     let mut rejected = 0;
@@ -117,6 +121,8 @@ pub async fn run(
             &s,
             find_transcript_for_session,
             allow_secret,
+            notify_enabled,
+            web_url,
         )
         .await
         {
@@ -158,12 +164,23 @@ pub async fn run(
     Ok(())
 }
 
-async fn process_one<S, D, F>(
+/// Process a single session through the Phase 4.6 pipeline.
+///
+/// Returns the persisted `CaptureState` so the caller can record it in
+/// the session's score file. Fires a desktop notification on the
+/// `Drafted` outcome when `notify_enabled` is true and the host has a
+/// session bus (see `crate::notify::should_emit`).
+///
+/// Re-used by the long-lived daemon binary so the two drivers share one
+/// pipeline implementation.
+pub async fn process_one<S, D, F>(
     stages: &S,
     registry: &D,
     s: &SessionScore,
     resolve_transcript: F,
     allow_secret: bool,
+    notify_enabled: bool,
+    web_url: Option<&str>,
 ) -> Result<CaptureState>
 where
     S: Stages,
@@ -310,6 +327,10 @@ where
     match registry.submit_draft(metadata, bundle).await {
         Ok(draft) => {
             println!("    → drafted {} ({})", draft.slug, short(&draft.id));
+            // Desktop toast — gated on the caller's `--no-notify` and
+            // on the host actually having a session bus. Headless boxes
+            // (systemd daemon with no DBUS env, CI) silently skip.
+            notify::notify_draft_ready(notify_enabled, &draft.slug, &draft.id, web_url);
             Ok(CaptureState {
                 stage: CaptureStage::Drafted,
                 completed_at: Utc::now(),
@@ -375,7 +396,7 @@ pub(crate) fn find_transcript_in(home_root: &std::path::Path, session_id: &str) 
     ))
 }
 
-fn find_transcript_for_session(s: &SessionScore) -> Result<std::path::PathBuf> {
+pub fn find_transcript_for_session(s: &SessionScore) -> Result<std::path::PathBuf> {
     let home = std::env::var("HOME").context("HOME not set")?;
     find_transcript_in(std::path::Path::new(&home), &s.session_id)
 }
@@ -507,7 +528,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage1Rejected));
         assert!(state.reason.unwrap().contains("too specific"));
         assert!(submit.calls.lock().unwrap().is_empty(), "no draft POST expected");
@@ -525,7 +546,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage1ParseFailure));
         assert!(state.reason.unwrap().contains("malformed JSON"));
     }
@@ -546,7 +567,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage2Rejected));
         assert!(state.reason.unwrap().to_lowercase().contains("absolute path"));
         assert!(submit.calls.lock().unwrap().is_empty(), "no POST after Stage2 reject");
@@ -564,7 +585,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Drafted));
         assert_eq!(state.draft_id.as_deref(), Some("stub-draft-id"));
         assert_eq!(state.slug.as_deref(), Some("foo"));
@@ -585,7 +606,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: true,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::ServerRejected));
         assert!(state.reason.unwrap().contains("server rejected"));
     }
@@ -609,7 +630,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage1Rejected));
         let reason = state.reason.unwrap();
         assert!(reason.contains("secrets"), "reason: {reason}");
@@ -630,7 +651,7 @@ mod tests {
             fail: false,
         };
         // allow_secret = true → pipeline should proceed past the gate.
-        let state = process_one(&stages, &submit, &s, resolver, true).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, true, false, None).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Drafted));
     }
 
@@ -652,7 +673,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage2Rejected));
         let reason = state.reason.unwrap();
         assert!(reason.contains("bundle contained secrets"), "reason: {reason}");

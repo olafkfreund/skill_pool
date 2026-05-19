@@ -2,17 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-mod anthropic;
-mod banner;
-mod capturer;
-mod client;
-mod cmd;
-mod config;
-mod detect;
-mod install;
-mod manifest;
-mod scorer;
-mod secret_scan;
+use skill_pool_cli::{banner, cmd, config};
 
 #[derive(Parser)]
 #[command(
@@ -179,6 +169,11 @@ enum Cmd {
         /// regex false-positive — the server runs its own scan too.
         #[arg(long)]
         allow_secret: bool,
+        /// Suppress the per-draft desktop notification. Implied when
+        /// running headless (no DBUS_SESSION_BUS_ADDRESS). Also settable
+        /// via `SKILL_POOL_CAPTURE_NO_NOTIFY=1`.
+        #[arg(long, env = "SKILL_POOL_CAPTURE_NO_NOTIFY")]
+        no_notify: bool,
     },
     /// Diagnose: list loaded skills, dangling symlinks, drift.
     Doctor {
@@ -320,6 +315,7 @@ async fn main() -> Result<()> {
             stage1_model,
             stage2_model,
             allow_secret,
+            no_notify,
         } => {
             cmd::capture_run::run(
                 &cfg,
@@ -328,6 +324,7 @@ async fn main() -> Result<()> {
                 stage1_model.as_deref(),
                 stage2_model.as_deref(),
                 allow_secret,
+                no_notify,
             )
             .await
         }

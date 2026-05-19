@@ -249,7 +249,9 @@ already-processed sessions:
 
 ### Scheduling
 
-Install the systemd user unit + timer (hourly with jitter):
+Two modes ship today; pick one per host.
+
+**Mode A — hourly timer (default, low idle cost):**
 
 ```bash
 cp packaging/systemd/skill-pool-capturer.{service,timer} ~/.config/systemd/user/
@@ -257,7 +259,72 @@ systemctl --user daemon-reload
 systemctl --user enable --now skill-pool-capturer.timer
 ```
 
+The timer fires `skill-pool capture-run --limit 5` every hour with up
+to 10 min jitter. Latency from "session ended" to "draft on the server"
+is bounded by the timer cadence.
+
+**Mode B — long-lived daemon (lower latency, persistent process):**
+
+```bash
+cp packaging/systemd/skill-pool-capturer-daemon.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+# If Mode A was previously enabled, disable it first — the two are
+# mutually exclusive (and the daemon's [Unit] section declares the
+# conflict explicitly).
+systemctl --user disable --now skill-pool-capturer.timer
+systemctl --user enable --now skill-pool-capturer-daemon.service
+```
+
+The daemon (`skill-pool-capturer`) polls `~/.skill-pool/queue` and
+`~/.skill-pool/sessions` every 30 seconds (`SKILL_POOL_CAPTURER_POLL_SECS`
+to override). On a draft-worthy session it runs the same Haiku → Sonnet
+→ POST pipeline as Mode A; it just notices new work within a poll cycle
+instead of an hour. Graceful shutdown on SIGINT/SIGTERM.
+
+The Nix module exposes the same toggle declaratively:
+
+```nix
+services.skill-pool-capturer = {
+  enable = true;
+  daemon = true;           # opt into the long-lived variant
+  pollSecs = 30;           # default
+  environmentFile = config.age.secrets.skill-pool-anthropic.path;
+};
+```
+
 See `packaging/systemd/README.md` for full instructions.
+
+### Desktop notifications
+
+Each successful `POST /v1/drafts` fires a desktop toast:
+
+> **Skill draft ready**
+> Draft `my-skill` is waiting in the inbox.
+> https://your-portal/drafts/<id>
+
+The link target comes from the `web_url` field in
+`~/.config/skill-pool/config.toml`:
+
+```toml
+web_url = "https://skills.acme.example.com"
+
+[registry]
+url    = "https://skills.acme.example.com"
+tenant = "acme"
+```
+
+To silence notifications:
+
+- **Per-invocation:** `--no-notify` on `skill-pool capture-run` or
+  `skill-pool-capturer`.
+- **Env-wide:** `SKILL_POOL_CAPTURE_NO_NOTIFY=1`.
+- **Declarative (Nix):** `services.skill-pool-capturer.noNotify = true;`.
+
+Notifications are best-effort: a headless host (no
+`DBUS_SESSION_BUS_ADDRESS`) silently skips the toast — the daemon never
+crashes on a missing display server. Wayland sandboxed sessions need
+the user manager to forward the bus address into the unit; most distros
+do this automatically for `--user` services.
 
 ### Required environment
 
