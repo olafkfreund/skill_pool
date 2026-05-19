@@ -118,12 +118,18 @@ via the env-vars below — both can coexist.
   is set here so hooks (or a future `skill-pool audit-emit` subcommand)
   can post directly without needing additional config.
 
-> **Open gap, called out honestly:** there is no documented
-> Claude Code managed-settings key that POSTs audit events to an
-> arbitrary URL. The Stop-hook approach below is how skill-pool wires
-> telemetry today. If Anthropic later ships a first-class
-> `auditEndpoint` key, this template will gain it and the hook will
-> become redundant.
+> **Upstream limitation (worked around):** Claude Code has no documented
+> managed-settings key that POSTs audit events to an arbitrary URL — that
+> would let IT route per-session telemetry to skill-pool's `/v1/tenant/audit-siem`
+> directly. We work around it by wiring the **Stop hook** (`skill-pool
+> capture-score`, defined further down) which writes per-session JSON to
+> `~/.skill-pool/sessions/` and uploads to the registry on the next
+> capturer-daemon tick. The registry then fans those events into the
+> tenant's configured SIEM webhook (Splunk HEC, Datadog Logs, or generic
+> POST — configured via `PUT /v1/tenant/audit-siem`). No data is lost; the
+> path is just async rather than synchronous. If Anthropic later ships a
+> first-class `auditEndpoint` key in managed-settings, this template will
+> add it and the Stop-hook detour becomes redundant.
 
 ### `additionalDirectories`
 

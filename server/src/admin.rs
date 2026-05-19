@@ -15,6 +15,11 @@ pub struct CreatedTenant {
     pub id: Uuid,
 }
 
+pub struct DeletedTenant {
+    pub id: Uuid,
+    pub slug: String,
+}
+
 pub struct CreatedToken {
     pub id: Uuid,
     pub raw_token: String,
@@ -51,6 +56,50 @@ pub async fn create_tenant(
     println!("  slug: {slug}");
     println!("  plan: {plan}");
     Ok(CreatedTenant { id: row.0 })
+}
+
+/// Hard-delete a tenant by slug. Relies on `ON DELETE CASCADE` on every
+/// business table (audit_events, skills, skill_drafts, skill_usage_events,
+/// tenant_theme, tenant_api_tokens, tenant_users, tenant_oidc, tenant_saml,
+/// tenant_role_mappings, tenant_stack_mappings, skill_dependencies, …) to
+/// remove all child rows in a single transaction.
+///
+/// Bundle storage is NOT swept by this function — bundle keys live under
+/// `{tenant_id}/...` in the configured `SKILL_POOL_STORAGE_URI` and require
+/// a separate operator action (the CLI prints the prefix). This is deliberate:
+///
+///   - On `fs://` the operator can `rm -rf <storage_root>/<tenant_id>`.
+///   - On `s3://` they run `aws s3 rm s3://<bucket>/<tenant_id>/ --recursive`.
+///   - For forensic / compliance reasons you may want to retain the bundles.
+///
+/// **Audit caveat:** the cascade also removes the tenant's `audit_events`
+/// rows. Export to SIEM before calling this if your compliance regime
+/// requires retaining audit history beyond the tenant lifetime.
+pub async fn delete_tenant(db: &PgPool, slug: &str) -> Result<DeletedTenant> {
+    let tenant: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
+        .bind(slug)
+        .fetch_optional(db)
+        .await
+        .context("look up tenant by slug")?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found"))?;
+
+    let result = sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .execute(db)
+        .await
+        .context("delete tenant row (cascade removes children)")?;
+
+    if result.rows_affected() != 1 {
+        return Err(anyhow!(
+            "expected 1 row deleted for tenant `{slug}`, got {}",
+            result.rows_affected()
+        ));
+    }
+
+    Ok(DeletedTenant {
+        id: tenant_id,
+        slug: slug.to_string(),
+    })
 }
 
 pub async fn create_token(

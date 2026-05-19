@@ -38,6 +38,18 @@ enum AdminAction {
         #[arg(long, default_value = "team")]
         plan: String,
     },
+    /// Hard-delete a tenant and all its data via ON DELETE CASCADE.
+    /// Bundle storage is NOT swept — the command prints the storage prefix
+    /// for a separate operator sweep (or retention). Pair with SIEM export
+    /// before running if you need to preserve `audit_events`.
+    TenantDelete {
+        #[arg(long)]
+        slug: String,
+        /// Skip the typed-slug confirmation prompt. Use only in scripted /
+        /// migration contexts where the caller is sure.
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Mint a new API token for a tenant. Prints the raw token once.
     TokenCreate {
         #[arg(long)]
@@ -160,6 +172,34 @@ async fn main() -> Result<()> {
                     let db = admin::connect(&cfg).await?;
                     admin::create_tenant(&db, &slug, &name, &plan).await?;
                     println!("\nnext: skill-pool-server admin token-create --tenant {slug} --name bootstrap");
+                    Ok(())
+                }
+                AdminAction::TenantDelete { slug, confirm } => {
+                    if !confirm {
+                        use std::io::{BufRead, Write};
+                        print!(
+                            "This will DELETE tenant `{slug}` and ALL associated rows\n\
+                             (skills, drafts, tokens, audit_events, theme, sso config, …)\n\
+                             via ON DELETE CASCADE. Bundle storage is NOT touched.\n\
+                             Type the slug to confirm: "
+                        );
+                        std::io::stdout().flush().ok();
+                        let stdin = std::io::stdin();
+                        let mut line = String::new();
+                        stdin.lock().read_line(&mut line)?;
+                        if line.trim() != slug {
+                            return Err(anyhow::anyhow!("confirmation mismatch; nothing deleted"));
+                        }
+                    }
+                    let db = admin::connect(&cfg).await?;
+                    let deleted = admin::delete_tenant(&db, &slug).await?;
+                    println!("tenant deleted");
+                    println!("  id:   {}", deleted.id);
+                    println!("  slug: {}", deleted.slug);
+                    println!();
+                    println!("Bundle storage was NOT swept. To reclaim space, run:");
+                    println!("  # fs://    rm -rf <storage_root>/{}", deleted.id);
+                    println!("  # s3://    aws s3 rm s3://<bucket>/{}/ --recursive", deleted.id);
                     Ok(())
                 }
                 AdminAction::TokenCreate {

@@ -195,40 +195,46 @@ on `skills` after `skills`.
 
 ### 7. Decommission on the shared side
 
-**Gap: `skill-pool-server admin tenant-delete` does not currently exist
-as a subcommand** (the only admin actions implemented are `tenant-create`,
-`token-create`, the SSO/SAML/SCIM setters, the stack and group mappings,
-and the embedding backfill — see `server/src/main.rs`).
+```bash
+# Interactive (prompts you to retype the slug as confirmation)
+skill-pool-server admin tenant-delete --slug acme
 
-Until that command lands, manual cleanup is:
+# Scripted (skip prompt — only safe in automation that already validated input)
+skill-pool-server admin tenant-delete --slug acme --confirm
+```
+
+This issues a single `DELETE FROM tenants WHERE id = ...`; every business
+table references `tenants(id) ON DELETE CASCADE` so all rows
+(`skills`, `skill_drafts`, `skill_usage_events`, `tenant_api_tokens`,
+`tenant_users`, `tenant_theme`, `tenant_oidc`, `tenant_saml`,
+`tenant_role_mappings`, `tenant_stack_mappings`, `skill_dependencies`,
+`audit_events`, …) are removed in the same transaction.
+
+**Audit-event caveat:** `audit_events` cascades too. If your compliance
+regime requires retaining audit history past the tenant lifetime, run
+the SIEM export (`docs/enterprise/sso.md` covers the per-tenant SIEM
+webhook) *before* the delete.
+
+**Bundle storage is NOT swept** by the command — by design, since the
+sweep semantics differ per backend (and the bundles may have forensic
+value). The command prints the prefix you need to clean up:
+
+```text
+tenant deleted
+  id:   11111111-2222-3333-4444-555555555555
+  slug: acme
+
+Bundle storage was NOT swept. To reclaim space, run:
+  # fs://    rm -rf <storage_root>/11111111-2222-3333-4444-555555555555
+  # s3://    aws s3 rm s3://<bucket>/11111111-2222-3333-4444-555555555555/ --recursive
+```
+
+If you would rather mark the tenant suspended (reversible) than delete
+(irreversible), the manual SQL path is still available:
 
 ```sql
--- Run inside a transaction so you can ROLLBACK on a typo.
-BEGIN;
-
--- ON DELETE CASCADE on tenants(id) drops every dependent row. Verify
--- with EXPLAIN-ish dry run first if you're nervous: a SELECT COUNT(*)
--- on each child table for this tenant_id will tell you how many rows
--- the cascade will hit.
-
-DELETE FROM tenants WHERE id = '11111111-2222-3333-4444-555555555555';
-
--- Or, if you'd rather mark suspended instead of deleting:
--- UPDATE tenants SET status = 'suspended' WHERE id = '...';
-
-COMMIT;
+UPDATE tenants SET status = 'suspended' WHERE slug = 'acme';
 ```
-
-Then sweep the shared bundle store:
-
-```bash
-aws s3 rm s3://skill-pool-prod-shared/${TENANT_ID}/ --recursive
-```
-
-Track the gap: an `admin tenant-delete --slug <s>` subcommand that wraps
-the SQL `DELETE` + bundle-store cleanup in a single transaction is a
-candidate follow-up (see TODO at the bottom of `server/src/main.rs`'s
-`AdminAction` enum).
 
 ## Pitfalls
 

@@ -89,8 +89,10 @@ aws s3api put-bucket-policy \
 #    (duplicate AllowAppDedicated + AllowAppDedicatedListBucket per bucket)
 ```
 
-Run the app for this tenant in dedicated mode (`SKILL_POOL_TENANCY_MODE=dedicated`,
-`SKILL_POOL_TENANCY_MODE__TENANT_SLUG=acme`) pointed at the per-tenant
+Run the app for this tenant in dedicated mode
+(`SKILL_POOL_TENANCY_MODE__MODE=dedicated`,
+`SKILL_POOL_TENANCY_MODE__TENANT_SLUG=acme` — see
+`docs/enterprise/dedicated-mode.md`) pointed at the per-tenant
 bucket:
 
 ```
