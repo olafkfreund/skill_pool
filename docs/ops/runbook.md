@@ -375,6 +375,9 @@ The `tenant.slug`, `http.method`, and `http.path` attributes are set on the root
 
 ## 5. Disaster recovery
 
+> For *planned* deploys and the forward-only migration model, see
+> `docs/ops/rollback.md`. This section covers unplanned data loss only.
+
 ### Postgres lost, bundles survive
 
 The bundle objects on the storage backend (`SKILL_POOL_STORAGE_URI`, default `fs:///var/lib/skill-pool/storage`) are content-addressed by SHA-256 and are the source of truth for `SKILL.md` content.

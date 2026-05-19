@@ -43,7 +43,9 @@ sudo -u postgres psql <<'SQL'
 SQL
 ```
 
-The server runs migrations on startup. If you prefer to pre-run them:
+Run migrations against the new database. The server binary itself does
+**not** auto-migrate on startup — migrations are a separate step so a
+broken deploy can never run a migration as a side effect:
 
 ```bash
 sqlx migrate run --source server/migrations \
@@ -110,6 +112,10 @@ Two things to back up:
    slowly; bundles are immutable once published).
 
 For object-storage backends (S3/GCS), enable bucket versioning instead.
+
+The deploy / rollback workflow that uses these backups is documented
+in `docs/ops/rollback.md` (forward-only sqlx migrations + restore from
+snapshot — read it before your first production deploy).
 
 ## Where to go from here
 
