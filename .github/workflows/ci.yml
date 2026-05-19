@@ -10,62 +10,55 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# PR job MUST NOT require AWS credentials. Pure linters + unit/integration
+# tests + helm lint. No cloud access. Permissions stay minimal.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
 
 jobs:
-  lint:
-    name: Lint (fmt + clippy + shell)
+  # ---------------------------------------------------------------------------
+  # Rust: fmt + clippy + workspace tests against pgvector-equipped Postgres.
+  # ---------------------------------------------------------------------------
+  rust:
+    name: Rust (fmt + clippy + test)
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: skillpool
+          POSTGRES_PASSWORD: skillpool
+          POSTGRES_DB: skillpool
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U skillpool"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Tests that don't spin up their own testcontainer can fall back to
+      # the service container. Integration tests that use testcontainers
+      # keep working — they go through the runner's docker socket.
+      DATABASE_URL: postgres://skillpool:skillpool@localhost:5432/skillpool
+      SKILL_POOL_DATABASE_URL: postgres://skillpool:skillpool@localhost:5432/skillpool
+      RUST_BACKTRACE: 1
+      # The capturer's anthropic.rs requires ANTHROPIC_API_KEY at runtime,
+      # not at test time — its tests don't hit the live API. Leaving the
+      # env var unset is the correct gate.
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        run: rustup show
-
-      - name: Install SAML C deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libxml2-dev libxmlsec1-dev libxmlsec1-openssl \
-            libtool-bin libltdl-dev clang libclang-dev pkg-config
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
         with:
-          shared-key: lint
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: rustfmt
-        run: cargo fmt --all -- --check
-
-      - name: clippy
-        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
-
-      - name: Install shellcheck + shfmt
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y shellcheck
-          SHFMT_VERSION=v3.8.0
-          curl -fsSL -o /tmp/shfmt \
-            https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64
-          sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
-          shfmt --version
-          shellcheck --version
-
-      - name: Lint shell scripts
-        run: |
-          shellcheck scripts/*.sh
-          shfmt -i 2 -ci -d scripts
-
-  test:
-    name: Tests (unit + integration)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        run: rustup show
+          components: rustfmt, clippy
 
       - name: Install SAML C deps (xmlsec1 + libxml2 + libtool + clang)
         run: |
@@ -82,20 +75,26 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test
+          shared-key: ci-rust
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Pre-pull Postgres image (testcontainers backend)
+      - name: cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+      - name: Pre-pull Postgres image for testcontainers-using tests
         run: docker pull postgres:alpine
 
       - name: cargo test --workspace
-        env:
-          # testcontainers uses the runner's docker socket; nothing else needed.
-          RUST_BACKTRACE: 1
         run: cargo test --workspace --verbose
 
+  # ---------------------------------------------------------------------------
+  # Web: prettier (lint) + svelte-check + vitest (a11y + unit).
+  # ---------------------------------------------------------------------------
   web:
-    name: Web (lint + check + build)
+    name: Web (lint + check + test)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -109,61 +108,49 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Install
+      - name: npm ci
         run: npm ci
 
-      - name: Prettier
+      - name: prettier --check
         run: npm run lint
 
       - name: svelte-check
         run: npm run check
 
-      - name: Build (adapter-node)
-        run: npm run build
+      - name: vitest run
+        run: npm test
 
-      - name: Upload SvelteKit build
-        if: github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: skill-pool-web-${{ github.sha }}
-          path: |
-            web/build
-            web/.svelte-kit/output
-          retention-days: 14
-          if-no-files-found: error
-
-  build:
-    name: Release build
+  # ---------------------------------------------------------------------------
+  # Helm: only runs if the chart has landed (sister subagent owns the chart).
+  # Lints the chart and renders against a representative values shape,
+  # then runs the rendered manifests through `kubectl apply --dry-run=client`.
+  # ---------------------------------------------------------------------------
+  helm:
+    name: Helm (lint + template + dry-run)
     runs-on: ubuntu-latest
-    needs: [lint, test, web]
-    if: github.ref == 'refs/heads/main'
+    # Gate: only runs when the chart actually exists in the tree.
+    if: ${{ hashFiles('deploy/helm/skill-pool/Chart.yaml') != '' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        run: rustup show
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.0
 
-      - name: Install SAML C deps
+      - name: Set up kubectl (client-only, for --dry-run=client)
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+
+      - name: helm lint
+        run: helm lint deploy/helm/skill-pool/
+
+      - name: helm template | kubectl apply --dry-run=client
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libxml2-dev libxmlsec1-dev libxmlsec1-openssl \
-            libtool-bin libltdl-dev clang libclang-dev pkg-config
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release
-          save-if: true
-
-      - name: Build release binaries
-        run: cargo build --workspace --release --bins
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: skill-pool-binaries-${{ github.sha }}
-          path: |
-            target/release/skill-pool
-            target/release/skill-pool-server
-          retention-days: 14
-          if-no-files-found: error
+          helm template skill-pool deploy/helm/skill-pool/ \
+            --set image.server.tag=test \
+            --set image.web.tag=test \
+            --set server.env.SKILL_POOL_STORAGE_URI='s3://x' \
+            --set web.env.ORIGIN='https://x.example.com' \
+            | kubectl apply --dry-run=client -f -

@@ -1,0 +1,112 @@
+name: Build & push images
+
+# Triggered:
+#   - on every push to main → publish <sha> + latest tags
+#   - on every v* tag       → publish <sha> + latest + <tag> (e.g. v0.2.0)
+#
+# Authentication: GitHub OIDC → AWS IAM role (configured by the
+# Terraform sibling at deploy/terraform/aws/). No static AWS keys.
+#
+# Two parallel matrix legs — server (Rust binary) and web (Node SvelteKit).
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (defaults to current)"
+        required: false
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false  # don't cancel a tag build mid-push
+
+# OIDC requires id-token: write. contents: read is enough for checkout.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    name: build/push ${{ matrix.image.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: server
+            context: .
+            dockerfile: server/Dockerfile
+            repo_var: ECR_REPO_SERVER
+          - name: web
+            context: web
+            dockerfile: web/Dockerfile
+            repo_var: ECR_REPO_WEB
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-build-${{ matrix.image.name }}-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image tags
+        id: tags
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO_NAME: ${{ matrix.image.name == 'server' && vars.ECR_REPO_SERVER || vars.ECR_REPO_WEB }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${REPO_NAME}"
+          # Always: sha-tagged + latest.
+          TAGS="${IMAGE}:${{ github.sha }},${IMAGE}:latest"
+          # On a v* tag push, also add the tag itself (e.g. v0.2.0).
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAGS="${TAGS},${IMAGE}:${GITHUB_REF_NAME}"
+          fi
+          echo "tags=${TAGS}" >>"${GITHUB_OUTPUT}"
+          echo "image=${IMAGE}" >>"${GITHUB_OUTPUT}"
+          echo "Will push:"
+          echo "${TAGS}" | tr ',' '\n' | sed 's/^/  /'
+
+      - name: Build and push (${{ matrix.image.name }})
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          # GitHub Actions cache backend — fast on warm runners, falls
+          # back to a cold build on the first run in a new branch.
+          cache-from: type=gha,scope=${{ matrix.image.name }}
+          cache-to: type=gha,scope=${{ matrix.image.name }},mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed \`${{ matrix.image.name }}\`"
+            echo ""
+            echo '```'
+            echo "${{ steps.tags.outputs.tags }}" | tr ',' '\n'
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
