@@ -8,6 +8,7 @@ use sqlx::PgPool;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
+use crate::cache;
 use crate::config::{Config, TenancyMode};
 use crate::email_branding::TransportCache as EmailTransportCache;
 use crate::embedding::{self, SharedEmbedder};
@@ -59,6 +60,12 @@ struct Inner {
     pub embedder: SharedEmbedder,
     #[allow(dead_code)]
     pub origin_pattern: String,
+    /// Optional Redis handle. `None` when `SKILL_POOL_REDIS_URL` is unset
+    /// or the dial failed at startup — features that need Redis must
+    /// degrade gracefully (the rate-limiter fails open, etc.). Sister-agent
+    /// A owns the richer wrapper in `cache.rs`; this field is the shared
+    /// process-wide handle every consumer reaches through `redis()`.
+    pub redis: Option<Arc<cache::Redis>>,
 }
 
 async fn connect_pool(url: &str, max: u32) -> Result<PgPool> {
@@ -72,6 +79,27 @@ async fn connect_pool(url: &str, max: u32) -> Result<PgPool> {
 /// degrades to "no read pool" rather than killing startup — the replica
 /// being temporarily unreachable shouldn't take the primary deployment
 /// down.
+/// Build the Redis handle from `SKILL_POOL_REDIS_URL`. Returns `None`
+/// when the env is unset or the dial fails — every consumer must tolerate
+/// a missing Redis (the rate-limiter fails open). We log the failure so
+/// operators can spot a misconfigured URL without poring over metrics.
+async fn maybe_redis() -> Option<Arc<cache::Redis>> {
+    let url = std::env::var("SKILL_POOL_REDIS_URL").ok()?;
+    if url.trim().is_empty() {
+        return None;
+    }
+    match cache::connect(&url).await {
+        Ok(r) => {
+            tracing::info!("redis connected");
+            Some(Arc::new(r))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "redis connection failed; features needing Redis will degrade");
+            None
+        }
+    }
+}
+
 async fn maybe_read_pool(cfg: &Config) -> Option<PgPool> {
     let url = cfg.database_read_url.as_ref()?;
     match connect_pool(url, cfg.db_pool_size).await {
@@ -96,6 +124,7 @@ impl AppState {
 
         let storage = Storage::from_uri(&cfg.storage_uri)?;
         let embedder = embedding::from_config(&cfg.embedding)?;
+        let redis = maybe_redis().await;
 
         let state = Self {
             inner: Arc::new(Inner {
@@ -108,6 +137,7 @@ impl AppState {
                 custom_domains: RwLock::new(HashMap::new()),
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
+                redis,
             }),
         };
         // Warm the cache once synchronously so the first request after
@@ -127,6 +157,7 @@ impl AppState {
         let db = connect_pool(&cfg.database_url, cfg.db_pool_size).await?;
         let db_read = maybe_read_pool(cfg).await;
         let storage = Storage::from_uri(&cfg.storage_uri)?;
+        let redis = maybe_redis().await;
         let state = Self {
             inner: Arc::new(Inner {
                 db,
@@ -138,6 +169,7 @@ impl AppState {
                 custom_domains: RwLock::new(HashMap::new()),
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
+                redis,
             }),
         };
         if let Err(e) = state.refresh_custom_domains().await {
@@ -232,6 +264,42 @@ impl AppState {
 
     pub fn embedder(&self) -> &SharedEmbedder {
         &self.inner.embedder
+    }
+
+    /// Shared Redis handle for features that need a counter / cache
+    /// (rate-limiter, dedup hashes, etc.). Returns `None` when no
+    /// `SKILL_POOL_REDIS_URL` is configured or the dial failed at
+    /// startup — every caller must tolerate that path.
+    pub fn redis(&self) -> Option<&Arc<cache::Redis>> {
+        self.inner.redis.as_ref()
+    }
+
+    /// Test-only: build an `AppState` with an explicit Redis handle.
+    /// Used by `tests/rate_limits.rs` to point the limiter at a
+    /// testcontainer instead of relying on `SKILL_POOL_REDIS_URL`.
+    pub async fn new_with_redis(cfg: &Config, redis: Arc<cache::Redis>) -> Result<Self> {
+        let db = connect_pool(&cfg.database_url, cfg.db_pool_size).await?;
+        let db_read = maybe_read_pool(cfg).await;
+        let storage = Storage::from_uri(&cfg.storage_uri)?;
+        let embedder = embedding::from_config(&cfg.embedding)?;
+        let state = Self {
+            inner: Arc::new(Inner {
+                db,
+                db_read,
+                tenancy: cfg.resolved_tenancy(),
+                storage,
+                tenant_storage: Mutex::new(HashMap::new()),
+                email_transport: Arc::new(EmailTransportCache::new()),
+                custom_domains: RwLock::new(HashMap::new()),
+                embedder,
+                origin_pattern: cfg.origin_pattern.clone(),
+                redis: Some(redis),
+            }),
+        };
+        if let Err(e) = state.refresh_custom_domains().await {
+            tracing::warn!(error = ?e, "initial custom-domain cache load failed; will retry");
+        }
+        Ok(state)
     }
 
     /// Shared cache of per-tenant branded SMTP transports.

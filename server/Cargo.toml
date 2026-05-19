@@ -106,6 +106,13 @@ prometheus = { version = "0.13", default-features = false }
 # want dedup build with `--features fastembed`.
 fastembed = { version = "4", optional = true }
 
+# Redis client for the per-tenant rate-limiter (#8 §L20). Sister-agent A
+# owns the connection lifecycle in `cache.rs`; this dep is the underlying
+# wire protocol crate. `tokio-comp` for async + `connection-manager` for
+# auto-reconnect, no TLS feature (we run the server next to Redis in the
+# same private network — TLS is the proxy's job).
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager"] }
+
 # OTLP distributed tracing — opt-in via `--features otlp`.
 # Versions are pinned together because opentelemetry, opentelemetry_sdk,
 # opentelemetry-otlp, and tracing-opentelemetry must share the same
@@ -131,7 +138,7 @@ otlp = [
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
 testcontainers = "0.23"
-testcontainers-modules = { version = "0.11", features = ["postgres"] }
+testcontainers-modules = { version = "0.11", features = ["postgres", "redis"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full", "test-util"] }
 walkdir = "2"

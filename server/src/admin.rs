@@ -260,6 +260,108 @@ pub async fn set_tenant_banner(
     Ok(())
 }
 
+/// Set or clear a tenant's per-tenant rate-limit overrides (#8 §L20).
+///
+/// Semantics:
+///   * `clear = true` → both `rate_limit_rpm` and `rate_limit_burst`
+///     are set to NULL (revert to plan default). Mutually exclusive
+///     with `rpm`/`burst` in the CLI front-end.
+///   * `rpm = Some(n)` / `burst = Some(n)` → write the override. NULL on
+///     the omitted column is preserved (COALESCE).
+///   * `n = 0` → rejected with a clean error before hitting the DB
+///     CHECK so the operator gets a useful message.
+///
+/// Range validation is the DB's job (CHECK constraints on the
+/// migration); we just surface failures cleanly.
+pub async fn set_tenant_rate_limits(
+    db: &PgPool,
+    slug: &str,
+    rpm: Option<i32>,
+    burst: Option<i32>,
+    clear: bool,
+) -> Result<()> {
+    if let Some(0) = rpm {
+        return Err(anyhow!("--rpm must be > 0 (use --clear to revert to plan default)"));
+    }
+    if let Some(0) = burst {
+        return Err(anyhow!("--burst must be > 0 (use --clear to revert to plan default)"));
+    }
+    if !clear && rpm.is_none() && burst.is_none() {
+        return Err(anyhow!("pass --rpm, --burst, or --clear (at least one required)"));
+    }
+
+    let tenant: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, plan_tier FROM tenants WHERE slug = $1 AND status = 'active'",
+    )
+    .bind(slug)
+    .fetch_optional(db)
+    .await?;
+    let (tenant_id, plan) =
+        tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+
+    // Encode "leave alone" as -1 sentinel; CHECK constraint rejects
+    // negatives so the column can never hold the sentinel. `--clear`
+    // wins over individual values regardless of what was passed.
+    const KEEP: i32 = -1;
+    let result = sqlx::query(
+        "UPDATE tenants \
+           SET rate_limit_rpm = CASE \
+                   WHEN $4 THEN NULL \
+                   WHEN $2 = $5 THEN rate_limit_rpm \
+                   ELSE $2 \
+               END, \
+               rate_limit_burst = CASE \
+                   WHEN $4 THEN NULL \
+                   WHEN $3 = $5 THEN rate_limit_burst \
+                   ELSE $3 \
+               END \
+         WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .bind(rpm.unwrap_or(KEEP))
+    .bind(burst.unwrap_or(KEEP))
+    .bind(clear)
+    .bind(KEEP)
+    .execute(db)
+    .await
+    .with_context(|| {
+        format!(
+            "set rate limits for `{slug}` (rpm in 1..=100000, burst in 1..=10000)"
+        )
+    })?;
+    if result.rows_affected() != 1 {
+        return Err(anyhow!(
+            "expected 1 row updated, got {}",
+            result.rows_affected()
+        ));
+    }
+
+    // Read back so we can print the *effective* limits (plan default
+    // when both columns are NULL).
+    let (rpm_override, burst_override): (Option<i32>, Option<i32>) = sqlx::query_as(
+        "SELECT rate_limit_rpm, rate_limit_burst FROM tenants WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_one(db)
+    .await?;
+    let effective =
+        crate::rate_limit::resolve_for_tenant(&plan, rpm_override, burst_override);
+
+    if clear {
+        println!("rate limits cleared for `{slug}` (reverted to `{plan}` plan defaults)");
+    } else {
+        println!("rate limits updated for `{slug}` (plan: {plan})");
+    }
+    println!("  rpm:   {}  ({})", effective.rpm,
+        if rpm_override.is_some() { "override" } else { "plan default" });
+    println!("  burst: {}  ({})", effective.burst,
+        if burst_override.is_some() { "override" } else { "plan default" });
+    println!(
+        "\n→ applies immediately to new requests (no per-process cache TTL in v1)."
+    );
+    Ok(())
+}
+
 /// Hard-delete a tenant by slug. Relies on `ON DELETE CASCADE` on every
 /// business table (audit_events, skills, skill_drafts, skill_usage_events,
 /// tenant_theme, tenant_api_tokens, tenant_users, tenant_oidc, tenant_saml,
