@@ -8,6 +8,13 @@
 //! - DELETE /v1/theme/logo — removes the stored logo blob + clears columns.
 //! - GET /v1/theme/logo — public (matches `/v1/theme`'s auth model). Streams
 //!   the sanitized bytes back with the stored content-type.
+//! - POST /v1/theme/favicon — multipart upload, requires `tenant:admin`. Same
+//!   sanitizer as the logo plus `image/x-icon`. 64 KiB cap.
+//! - DELETE /v1/theme/favicon — clears the favicon blob + columns.
+//! - GET /v1/theme/favicon — public. Falls back to the logo bytes when no
+//!   favicon is uploaded but a logo is. 404 only when neither exists.
+//! - GET /v1/theme/fonts — public; returns the curated font allowlist so the
+//!   admin UI can populate the picker without hard-coding the list twice.
 
 use axum::extract::{Multipart, State};
 use axum::http::{header, HeaderValue, StatusCode};
@@ -44,7 +51,49 @@ pub struct Theme {
     /// page. Default true (Free tier). Enterprise tenants may turn this off.
     #[serde(default = "default_true")]
     pub footer_branding: bool,
+    /// Optional font family selection. `None` (or absent) means inherit the
+    /// system stack. Must be a value from `ALLOWED_FONTS` — server-side
+    /// validation guards against typos and arbitrary CSS injection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
 }
+
+/// Curated allowlist of web-safe, permissively-licenced font families. Every
+/// entry below is licenced for both web embedding via Google Fonts AND
+/// self-hosting via downloaded files (OFL or Apache 2.0). The list is kept
+/// deliberately short — picking one of twelve good fonts is a friendlier
+/// experience than scrolling through Google's full 1500+ catalog, and it
+/// keeps the loaded-stylesheet weight predictable.
+///
+/// Rationale per font (line-by-line so anyone adding a new option has to
+/// document the choice):
+///   - `system` — the OS-native stack. Zero network cost; the safe default.
+///   - `Inter` — Rasmus Andersson's neo-grotesque, the de-facto standard for
+///     dashboard / SaaS UIs.
+///   - `IBM Plex Sans` — IBM's open identity face, excellent for dense data.
+///   - `JetBrains Mono` — high-readability monospace for code-heavy UIs.
+///   - `Source Sans 3` — Adobe's open sans-serif, very neutral.
+///   - `Source Serif 4` — its serif counterpart for editorial layouts.
+///   - `Merriweather` — proven body-text serif, optimized for screens.
+///   - `Roboto` — Google's flagship sans-serif, near-universal recognition.
+///   - `Fira Sans` — Mozilla's open humanist sans, friendly tone.
+///   - `Atkinson Hyperlegible` — Braille Institute's accessibility-first face.
+///   - `Work Sans` — Wei Huang's open grotesque, optimized for screen.
+///   - `Lora` — well-balanced contemporary serif for long-form content.
+pub const ALLOWED_FONTS: &[&str] = &[
+    "system",
+    "Inter",
+    "IBM Plex Sans",
+    "JetBrains Mono",
+    "Source Sans 3",
+    "Source Serif 4",
+    "Merriweather",
+    "Roboto",
+    "Fira Sans",
+    "Atkinson Hyperlegible",
+    "Work Sans",
+    "Lora",
+];
 
 fn default_true() -> bool {
     true
@@ -65,6 +114,7 @@ impl Theme {
             radius: "0.5rem".into(),
             logo_uri: None,
             footer_branding: true,
+            font_family: None,
         }
     }
 }
@@ -72,7 +122,7 @@ impl Theme {
 pub async fn get_theme(State(state): State<AppState>, tenant: TenantCtx) -> AppResult<Json<Theme>> {
     let row: Option<ThemeRow> = sqlx::query_as(
         "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
-                border, radius, logo_uri, footer_branding \
+                border, radius, logo_uri, footer_branding, font_family \
          FROM tenant_theme WHERE tenant_id = $1",
     )
     .bind(tenant.tenant_id)
@@ -85,6 +135,12 @@ pub async fn get_theme(State(state): State<AppState>, tenant: TenantCtx) -> AppR
     Ok(Json(theme))
 }
 
+/// `GET /v1/theme/fonts` — public; returns the curated allowlist so the admin
+/// UI can populate the picker without hard-coding the list a second time.
+pub async fn get_fonts() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "allowed": ALLOWED_FONTS }))
+}
+
 pub async fn put_theme(
     State(state): State<AppState>,
     caller: AuthedCaller,
@@ -95,8 +151,8 @@ pub async fn put_theme(
 
     sqlx::query(
         "INSERT INTO tenant_theme \
-           (tenant_id, brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, border, radius, logo_uri, footer_branding) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+           (tenant_id, brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, border, radius, logo_uri, footer_branding, font_family) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
          ON CONFLICT (tenant_id) DO UPDATE SET \
            brand_name = EXCLUDED.brand_name, \
            primary_ = EXCLUDED.primary_, \
@@ -109,7 +165,8 @@ pub async fn put_theme(
            border = EXCLUDED.border, \
            radius = EXCLUDED.radius, \
            logo_uri = EXCLUDED.logo_uri, \
-           footer_branding = EXCLUDED.footer_branding",
+           footer_branding = EXCLUDED.footer_branding, \
+           font_family = EXCLUDED.font_family",
     )
     .bind(caller.tenant.tenant_id)
     .bind(&body.brand_name)
@@ -124,6 +181,7 @@ pub async fn put_theme(
     .bind(&body.radius)
     .bind(body.logo_uri.as_deref())
     .bind(body.footer_branding)
+    .bind(body.font_family.as_deref())
     .execute(state.db())
     .await?;
 
@@ -188,6 +246,19 @@ fn validate(t: &Theme) -> AppResult<()> {
         return Err(AppError::BadRequest(format!(
             "body text contrast (fg vs bg) is {contrast:.2}:1; WCAG AA requires 4.5:1"
         )));
+    }
+
+    // Font family must be one of the curated allowlist. We do an
+    // exact match: "Inter" yes, "inter" or "inter," no. Keeping the
+    // comparison strict means a tenant cannot smuggle CSS shenanigans
+    // through the column.
+    if let Some(font) = t.font_family.as_deref() {
+        if !ALLOWED_FONTS.contains(&font) {
+            return Err(AppError::BadRequest(format!(
+                "font_family {font:?} is not in the allowlist; allowed values: {}",
+                ALLOWED_FONTS.join(", ")
+            )));
+        }
     }
 
     Ok(())
@@ -256,6 +327,7 @@ struct ThemeRow {
     radius: String,
     logo_uri: Option<String>,
     footer_branding: bool,
+    font_family: Option<String>,
 }
 
 impl From<ThemeRow> for Theme {
@@ -273,6 +345,7 @@ impl From<ThemeRow> for Theme {
             radius: r.radius,
             logo_uri: r.logo_uri,
             footer_branding: r.footer_branding,
+            font_family: r.font_family,
         }
     }
 }
@@ -493,13 +566,250 @@ pub async fn get_logo(State(state): State<AppState>, tenant: TenantCtx) -> AppRe
     Ok(resp)
 }
 
+// --- favicon upload / serve ----------------------------------------------
+
+/// 64 KiB. Favicons should be tiny; a smaller cap than the logo's 256 KiB
+/// nudges admins toward sensibly-sized assets and matches the DB CHECK in
+/// migration 0023.
+pub const MAX_FAVICON_BYTES: usize = 64 * 1024;
+
+/// Row shape for `get_favicon`'s combined favicon-OR-logo lookup. Named so
+/// clippy doesn't trip on the tuple-of-options type complexity.
+#[derive(sqlx::FromRow)]
+struct FaviconLookupRow {
+    favicon_storage_key: Option<String>,
+    favicon_content_type: Option<String>,
+    logo_storage_key: Option<String>,
+    logo_content_type: Option<String>,
+}
+
+/// `POST /v1/theme/favicon` — multipart upload, single field `file`.
+///
+/// Mirrors `post_logo` with three deltas:
+///   1. 64 KiB cap rather than 256 KiB.
+///   2. `image/x-icon` is accepted in addition to the four logo formats.
+///   3. The sanitizer ICO branch only does a magic-byte check — ICO is
+///      not script-bearing, so a structural validate is enough.
+pub async fn post_favicon(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    mut multipart: Multipart,
+) -> AppResult<(StatusCode, Json<Theme>)> {
+    require_scope(&caller.scope, "tenant:admin")?;
+
+    let mut content_type: Option<String> = None;
+    let mut bytes: Option<Bytes> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("multipart: {e}")))?
+    {
+        if field.name() == Some("file") {
+            content_type = field.content_type().map(|s| s.to_string());
+            let body = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(format!("file: {e}")))?;
+            bytes = Some(body);
+        }
+    }
+
+    let ct = content_type
+        .ok_or_else(|| AppError::BadRequest("multipart `file` part missing Content-Type".into()))?;
+    let raw = bytes.ok_or_else(|| AppError::BadRequest("missing `file` field".into()))?;
+
+    if raw.len() > MAX_FAVICON_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "favicon too large: {} bytes (max {})",
+            raw.len(),
+            MAX_FAVICON_BYTES
+        )));
+    }
+
+    let sanitized = logo_sanitize::sanitize(&ct, raw.as_ref())
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    let key = Storage::favicon_key(caller.tenant.tenant_id, sanitized.kind.extension());
+    let storage = state
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    // Best-effort cleanup of any previously-stored favicon under a different
+    // extension. Identical pattern to logo upload.
+    let prev: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT favicon_storage_key FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .fetch_optional(state.db())
+    .await?;
+    if let Some((Some(prev_key),)) = prev {
+        if prev_key != key {
+            let _ = storage.delete_object(&prev_key).await;
+        }
+    }
+
+    storage
+        .put_object(&key, Bytes::from(sanitized.bytes.clone()))
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    let size: i32 = sanitized.bytes.len() as i32;
+    sqlx::query(
+        "INSERT INTO tenant_theme (tenant_id, brand_name, favicon_storage_key, favicon_content_type, favicon_bytes_size) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (tenant_id) DO UPDATE SET \
+            favicon_storage_key  = EXCLUDED.favicon_storage_key, \
+            favicon_content_type = EXCLUDED.favicon_content_type, \
+            favicon_bytes_size   = EXCLUDED.favicon_bytes_size",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(&caller.tenant.tenant_slug)
+    .bind(&key)
+    .bind(sanitized.kind.content_type())
+    .bind(size)
+    .execute(state.db())
+    .await?;
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: None,
+            actor_token: Some(caller.token_id),
+            action: "theme.favicon.upload",
+            target_kind: "theme",
+            target_id: None,
+            metadata: serde_json::json!({
+                "content_type": sanitized.kind.content_type(),
+                "size_bytes": size,
+            }),
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    let theme = read_theme(state.db(), &caller.tenant).await?;
+    Ok((StatusCode::OK, Json(theme)))
+}
+
+/// `DELETE /v1/theme/favicon` — clear the stored favicon + remove the blob.
+pub async fn delete_favicon(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+) -> AppResult<StatusCode> {
+    require_scope(&caller.scope, "tenant:admin")?;
+
+    let prev: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT favicon_storage_key FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .fetch_optional(state.db())
+    .await?;
+
+    if let Some((Some(key),)) = prev {
+        let storage = state
+            .storage_for(&caller.tenant)
+            .await
+            .map_err(AppError::Anyhow)?;
+        storage
+            .delete_object(&key)
+            .await
+            .map_err(AppError::Anyhow)?;
+    }
+
+    sqlx::query(
+        "UPDATE tenant_theme \
+            SET favicon_storage_key = NULL, favicon_content_type = NULL, favicon_bytes_size = NULL \
+          WHERE tenant_id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .execute(state.db())
+    .await?;
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: None,
+            actor_token: Some(caller.token_id),
+            action: "theme.favicon.delete",
+            target_kind: "theme",
+            target_id: None,
+            metadata: serde_json::Value::Null,
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /v1/theme/favicon` — public; serves bytes. If no favicon row, falls
+/// back to the logo bytes. 404 only when neither exists. Same 5-minute cache.
+///
+/// The fallback is intentional: every browser hits `/favicon.ico` (or the
+/// `<link rel="icon">` target) regardless of whether the tenant has uploaded
+/// one. Serving the logo at favicon size is a sensible default — browsers
+/// scale SVG/PNG to whatever box the chrome needs, and the logo is the
+/// closest thing we have to "the brand mark".
+pub async fn get_favicon(State(state): State<AppState>, tenant: TenantCtx) -> AppResult<Response> {
+    // Try favicon first; fall back to logo when favicon row is empty.
+    let row: Option<FaviconLookupRow> = sqlx::query_as(
+        "SELECT favicon_storage_key, favicon_content_type, logo_storage_key, logo_content_type \
+         FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(tenant.tenant_id)
+    .fetch_optional(state.db_read())
+    .await?;
+
+    let (key, ct) = match row {
+        Some(FaviconLookupRow {
+            favicon_storage_key: Some(fk),
+            favicon_content_type: Some(fc),
+            ..
+        }) => (fk, fc),
+        Some(FaviconLookupRow {
+            favicon_storage_key: None,
+            logo_storage_key: Some(lk),
+            logo_content_type: Some(lc),
+            ..
+        }) => (lk, lc), // fallback: logo bytes serve as favicon
+        _ => return Err(AppError::NotFound),
+    };
+
+    let storage = state
+        .storage_for(&tenant)
+        .await
+        .map_err(AppError::Anyhow)?;
+    let bytes = storage
+        .read_object(&key)
+        .await
+        .map_err(AppError::Anyhow)?
+        .ok_or(AppError::NotFound)?;
+
+    let mut resp = (StatusCode::OK, bytes).into_response();
+    let headers = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&ct) {
+        headers.insert(header::CONTENT_TYPE, v);
+    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    Ok(resp)
+}
+
 /// Helper for `post_logo` to re-fetch the theme after writing. Mirrors
 /// `get_theme` but takes a `TenantCtx` directly so we don't have to thread
 /// the extractor through.
 async fn read_theme(db: &sqlx::PgPool, tenant: &TenantCtx) -> AppResult<Theme> {
     let row: Option<ThemeRow> = sqlx::query_as(
         "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
-                border, radius, logo_uri, footer_branding \
+                border, radius, logo_uri, footer_branding, font_family \
          FROM tenant_theme WHERE tenant_id = $1",
     )
     .bind(tenant.tenant_id)
@@ -521,6 +831,7 @@ const _: () = {
             LogoKind::Png => "image/png",
             LogoKind::Jpeg => "image/jpeg",
             LogoKind::Webp => "image/webp",
+            LogoKind::Ico => "image/x-icon",
         }
     }
     let _ = _exhaustive;
@@ -557,5 +868,41 @@ mod tests {
         t.primary = "blue".into();
         let err = validate(&t).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn accepts_allowed_font() {
+        let mut t = Theme::default_for("acme");
+        t.font_family = Some("Inter".into());
+        validate(&t).unwrap();
+    }
+
+    #[test]
+    fn accepts_no_font() {
+        let mut t = Theme::default_for("acme");
+        t.font_family = None;
+        validate(&t).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_font() {
+        let mut t = Theme::default_for("acme");
+        t.font_family = Some("Comic Sans MS".into());
+        let err = validate(&t).unwrap_err();
+        match err {
+            AppError::BadRequest(msg) => {
+                assert!(msg.contains("Comic Sans MS"), "msg = {msg}");
+                assert!(msg.to_lowercase().contains("allowlist"), "msg = {msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn allowlist_has_twelve_entries() {
+        // Surface a hard test failure if anyone tweaks the list without
+        // updating the docs.
+        assert_eq!(ALLOWED_FONTS.len(), 12, "ALLOWED_FONTS = {ALLOWED_FONTS:?}");
+        assert_eq!(ALLOWED_FONTS[0], "system");
     }
 }

@@ -1,10 +1,13 @@
 import { fail } from '@sveltejs/kit';
 import {
+  deleteFavicon,
   deleteLogo,
   fromClientTheme,
+  getFonts,
   getTheme,
   putTheme,
   toClientTheme,
+  uploadFavicon,
   uploadLogo,
 } from '$lib/server/api';
 import { DEFAULT_THEME, type Theme } from '$lib/theme';
@@ -19,8 +22,45 @@ const ALLOWED_LOGO_MIME = new Set([
   'image/webp',
 ]);
 
+/**
+ * Favicons accept everything a logo does plus `image/x-icon`. Same allow-list
+ * the server enforces — we mirror it here to bail before sending bytes over
+ * the wire when the user picks a `.bmp`.
+ */
+const ALLOWED_FAVICON_MIME = new Set([
+  'image/svg+xml',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+]);
+
 /** Same as the server `MAX_LOGO_BYTES` (256 KiB). Mirrored to bail early. */
 const MAX_LOGO_BYTES = 256 * 1024;
+
+/** Server-side favicon cap is 64 KiB; mirror it for an early friendly error. */
+const MAX_FAVICON_BYTES = 64 * 1024;
+
+/**
+ * Fallback allowlist used when /v1/theme/fonts is unreachable at load. Kept
+ * in sync with `ALLOWED_FONTS` in `server/src/routes/theme.rs` — the server
+ * is authoritative, this is purely a degraded-mode UI affordance.
+ */
+const FALLBACK_FONT_ALLOWLIST = [
+  'system',
+  'Inter',
+  'IBM Plex Sans',
+  'JetBrains Mono',
+  'Source Sans 3',
+  'Source Serif 4',
+  'Merriweather',
+  'Roboto',
+  'Fira Sans',
+  'Atkinson Hyperlegible',
+  'Work Sans',
+  'Lora',
+];
 
 export const load: PageServerLoad = async ({ locals, cookies }) => {
   const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
@@ -28,19 +68,27 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
   const theme = server
     ? toClientTheme(server)
     : { ...DEFAULT_THEME, brandName: locals.tenant.slug };
-  // Logo presence is encoded as a boolean — the bytes are streamed by the
-  // `/admin/theme/logo` SvelteKit proxy route, not embedded inline.
-  const hasLogo = await checkLogoExists(locals.tenant.slug);
-  return { theme, hasLogo };
+  // Logo + favicon presence are encoded as booleans — the bytes are streamed
+  // by the `/admin/theme/logo` (and analogous favicon) proxy routes.
+  const hasLogo = await checkAssetExists(locals.tenant.slug, 'logo');
+  const hasFavicon = await checkAssetExists(locals.tenant.slug, 'favicon');
+  // Fetch the curated font allowlist from the server so the picker stays
+  // honest about which families are accepted. Fall back to a hard-coded
+  // mirror when the server is unreachable.
+  const fonts = (await getFonts(auth)) ?? FALLBACK_FONT_ALLOWLIST;
+  return { theme, hasLogo, hasFavicon, fonts };
 };
 
-async function checkLogoExists(tenantSlug: string): Promise<boolean> {
-  // Lightweight HEAD-equivalent against the API server. We use GET because
+async function checkAssetExists(
+  tenantSlug: string,
+  kind: 'logo' | 'favicon',
+): Promise<boolean> {
+  // Lightweight presence check against the API server. We use GET because
   // the server doesn't currently expose HEAD; the response is tiny so the
   // overhead is acceptable for a single admin page load.
   const base = process.env.SKILL_POOL_API_BASE?.replace(/\/$/, '') ?? 'http://127.0.0.1:8080';
   try {
-    const resp = await fetch(`${base}/v1/theme/logo`, {
+    const resp = await fetch(`${base}/v1/theme/${kind}`, {
       method: 'GET',
       headers: { 'X-Skill-Pool-Tenant': tenantSlug },
     });
@@ -55,6 +103,13 @@ export const actions: Actions = {
     const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
     const data = await request.formData();
 
+    // Font family: the picker submits `"system"` for the OS stack — we
+    // canonicalise that into `undefined` so the server stores NULL and the
+    // CSS resolver picks the same default everywhere. Any other value is
+    // forwarded as-is; the server validates against `ALLOWED_FONTS`.
+    const rawFont = String(data.get('fontFamily') ?? '').trim();
+    const fontFamily = rawFont && rawFont !== 'system' ? rawFont : undefined;
+
     const theme: Theme = {
       brandName: String(data.get('brandName') ?? '').trim(),
       primary: String(data.get('primary') ?? '').trim(),
@@ -68,6 +123,7 @@ export const actions: Actions = {
       radius: String(data.get('radius') ?? '0.5rem').trim(),
       // Checkbox: present = true, absent = false.
       footerBranding: data.has('footerBranding'),
+      fontFamily,
     };
 
     // WCAG AA contrast validation — refuse to save before touching the API.
@@ -142,5 +198,42 @@ export const actions: Actions = {
       return fail(result.status, { error: result.error || 'logo delete failed' });
     }
     return { removedLogo: true, hasLogo: false };
+  },
+
+  /**
+   * Favicon upload. Mirrors the logo action with a smaller cap (64 KiB)
+   * and an extended MIME allow-list (`image/x-icon`).
+   */
+  favicon: async ({ request, locals, cookies }) => {
+    const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
+    const data = await request.formData();
+    const file = data.get('favicon');
+    if (!(file instanceof File) || file.size === 0) {
+      return fail(400, { error: 'choose a favicon file before uploading' });
+    }
+    if (file.size > MAX_FAVICON_BYTES) {
+      return fail(400, {
+        error: `favicon is ${file.size} bytes; the limit is ${MAX_FAVICON_BYTES} bytes (64 KiB)`,
+      });
+    }
+    if (!ALLOWED_FAVICON_MIME.has(file.type)) {
+      return fail(400, {
+        error: `unsupported content type "${file.type}" (allowed: SVG, PNG, JPEG, WEBP, ICO)`,
+      });
+    }
+    const result = await uploadFavicon(auth, file);
+    if (!result.ok) {
+      return fail(result.status, { error: result.error || 'favicon upload failed' });
+    }
+    return { savedFavicon: true, theme: toClientTheme(result.theme), hasFavicon: true };
+  },
+
+  removeFavicon: async ({ locals, cookies }) => {
+    const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
+    const result = await deleteFavicon(auth);
+    if (!result.ok) {
+      return fail(result.status, { error: result.error || 'favicon delete failed' });
+    }
+    return { removedFavicon: true, hasFavicon: false };
   },
 };

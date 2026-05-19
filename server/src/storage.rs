@@ -74,6 +74,13 @@ impl Storage {
         format!("{tenant_id}/theme/logo.{ext}")
     }
 
+    /// Object key for a tenant's uploaded favicon. Sibling to `logo_key` —
+    /// same per-tenant directory, one key, overwritten on every upload.
+    /// `ext` is the canonical extension (`svg`, `png`, `jpg`, `webp`, `ico`).
+    pub fn favicon_key(tenant_id: Uuid, ext: &str) -> String {
+        format!("{tenant_id}/theme/favicon.{ext}")
+    }
+
     pub async fn put_bundle(&self, key: &str, bytes: Bytes) -> Result<()> {
         self.op
             .write(key, bytes)

@@ -9,6 +9,7 @@
     Download,
     Image as ImageIcon,
     Trash2,
+    Type as TypeIcon,
   } from '@lucide/svelte';
   import { contrastRatio, wcagBadge, checkThemeContrast } from '$lib/contrast';
   import type { Theme } from '$lib/theme';
@@ -21,12 +22,36 @@
   const hasLogo = $derived<boolean>(
     typeof form?.hasLogo === 'boolean' ? form.hasLogo : data.hasLogo,
   );
-  // Cache-bust the logo image after upload so the new bytes show immediately.
+  const hasFavicon = $derived<boolean>(
+    typeof form?.hasFavicon === 'boolean' ? form.hasFavicon : data.hasFavicon,
+  );
+  // Cache-bust the logo / favicon images after upload so new bytes show.
   const logoBust = $derived(form?.savedLogo ? Date.now() : 0);
+  const faviconBust = $derived(form?.savedFavicon ? Date.now() : 0);
 
   // Editable copy. Intentionally non-reactive — `untrack` tells the compiler
   // we mean it. The `$effect` below re-syncs after a successful save.
   let theme = $state<Theme>(untrack(() => ({ ...(form?.draft ?? form?.theme ?? data.theme) })));
+
+  // The font-picker value is bound separately because the form encodes
+  // `"system"` for the OS stack but the Theme object stores `undefined` in
+  // that case (so themeToCss produces the correct fallback stack).
+  let fontChoice = $state<string>(untrack(() => theme.fontFamily ?? 'system'));
+  $effect(() => {
+    // Keep the Theme.fontFamily in sync with the picker so the live preview
+    // updates without a save round-trip.
+    theme.fontFamily = fontChoice === 'system' ? undefined : fontChoice;
+  });
+
+  /**
+   * URL of the Google Fonts stylesheet for the picked family. `null` for the
+   * system stack — we never inject `<link>` tags for the OS default.
+   */
+  const fontStylesheetUrl = $derived(
+    fontChoice && fontChoice !== 'system'
+      ? `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fontChoice).replace(/%20/g, '+')}:wght@400;500;600;700&display=swap`
+      : null,
+  );
 
   $effect(() => {
     if (form?.theme && form?.saved) {
@@ -73,6 +98,25 @@
           : 'bg-red-100 text-red-800';
   }
 </script>
+
+<!-- When the user picks a Google Fonts family, drop a stylesheet `<link>` in
+     the document head so the admin preview renders with the real face. The
+     server-rendered portal does the same for the picked family at runtime;
+     this `<svelte:head>` makes the picker live-update before save. -->
+<svelte:head>
+  {#if fontStylesheetUrl}
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+    />
+    <link
+      rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href={fontStylesheetUrl} />
+  {/if}
+</svelte:head>
 
 <header class="mb-6">
   <h1 class="text-2xl font-semibold">Theme</h1>
@@ -173,6 +217,67 @@
   </form>
 </section>
 
+<!-- Favicon upload. Same sanitization pipeline as the logo plus `image/x-icon`.
+     Smaller 64 KiB cap to nudge admins toward sensibly-sized assets. When no
+     favicon is uploaded the public GET /v1/theme/favicon transparently serves
+     the logo bytes, so this section is optional. -->
+<section class="mb-6 rounded-[var(--sp-radius)] border border-[var(--sp-border)] p-4">
+  <header class="mb-3 flex items-center gap-2">
+    <ImageIcon size="16" aria-hidden="true" />
+    <h2 class="text-sm font-semibold">Favicon</h2>
+  </header>
+  <p class="mb-3 text-xs text-[var(--sp-muted-fg)]">
+    SVG, PNG, JPEG, WEBP, or ICO. Max 64&nbsp;KiB. If you don't upload one,
+    the brand logo is served at the favicon URL as a fallback.
+  </p>
+
+  {#if hasFavicon}
+    <div class="mb-3 flex items-center gap-4">
+      <img
+        src="/admin/theme/favicon{faviconBust ? `?v=${faviconBust}` : ''}"
+        alt="Current tenant favicon"
+        class="h-8 w-8 rounded border border-[var(--sp-border)] bg-[var(--sp-bg)] object-contain p-0.5"
+      />
+      <form method="POST" action="?/removeFavicon">
+        <button
+          type="submit"
+          class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50"
+        >
+          <Trash2 size="12" aria-hidden="true" /> Remove favicon
+        </button>
+      </form>
+    </div>
+  {:else if hasLogo}
+    <p class="mb-3 text-xs text-[var(--sp-muted-fg)]">
+      No favicon uploaded — the logo is served at the favicon URL.
+    </p>
+  {/if}
+
+  {#if form?.savedFavicon}
+    <p class="mb-2 text-xs text-emerald-700">Favicon uploaded.</p>
+  {/if}
+  {#if form?.removedFavicon}
+    <p class="mb-2 text-xs text-emerald-700">Favicon removed.</p>
+  {/if}
+
+  <form method="POST" action="?/favicon" enctype="multipart/form-data" class="flex flex-wrap items-center gap-3">
+    <input
+      type="file"
+      name="favicon"
+      accept="image/svg+xml,image/png,image/jpeg,image/webp,image/x-icon,image/vnd.microsoft.icon,.ico"
+      required
+      class="text-xs"
+    />
+    <button
+      type="submit"
+      class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] px-3 py-1.5 text-xs font-medium"
+      style="background: var(--sp-primary); color: var(--sp-primary-fg);"
+    >
+      Upload
+    </button>
+  </form>
+</section>
+
 <div class="grid gap-8 lg:grid-cols-[1fr_1fr]">
   <!-- Form -->
   <form method="POST" action="?/save" class="space-y-3">
@@ -217,6 +322,39 @@
         class="w-48 rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-2 py-1 text-sm"
       />
     </label>
+
+    <!-- Font picker — populated from /v1/theme/fonts so the client list is
+         never out of sync with the server's `ALLOWED_FONTS`. The `"system"`
+         choice is stored server-side as NULL and resolved by `themeToCss`
+         into the OS-native font stack. -->
+    <label class="flex items-start justify-between gap-3 pt-1">
+      <span class="text-sm text-[var(--sp-fg)]">
+        <span class="inline-flex items-center gap-2">
+          <TypeIcon size="14" aria-hidden="true" /> Font family
+        </span>
+        <span class="mt-1 block text-xs text-[var(--sp-muted-fg)]">
+          Curated for performance + permissive licences. Pick <code>system</code>
+          to inherit the OS stack and keep the page weight zero.
+        </span>
+      </span>
+      <select
+        name="fontFamily"
+        bind:value={fontChoice}
+        class="w-48 rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-2 py-1 text-sm"
+      >
+        {#each data.fonts as font (font)}
+          <option value={font}>{font}</option>
+        {/each}
+      </select>
+    </label>
+
+    {#if fontChoice && fontChoice !== 'system'}
+      <p class="-mt-1 text-xs text-[var(--sp-muted-fg)]">
+        The portal loads <strong>{fontChoice}</strong> from Google Fonts on every
+        page. Want to self-host? Pick <code>system</code> here and add your own
+        <code>@font-face</code> declarations in a custom-CSS layer.
+      </p>
+    {/if}
 
     <label class="flex items-center justify-between gap-3">
       <span class="text-sm text-[var(--sp-fg)]">
