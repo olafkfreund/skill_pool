@@ -50,6 +50,13 @@ pub fn router(state: AppState) -> Router {
                 .delete(theme::delete_logo),
         )
         .route(
+            "/v1/theme/favicon",
+            get(theme::get_favicon)
+                .post(theme::post_favicon)
+                .delete(theme::delete_favicon),
+        )
+        .route("/v1/theme/fonts", get(theme::get_fonts))
+        .route(
             "/v1/tenant/session-policy",
             get(session_policy::get_session_policy),
         )

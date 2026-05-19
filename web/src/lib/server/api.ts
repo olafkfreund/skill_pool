@@ -197,6 +197,8 @@ export interface ServerTheme {
   logo_uri?: string | null;
   /** Whether the "Powered by skill-pool" footer credit is shown. Defaults to true. */
   footer_branding: boolean;
+  /** Selected font from the server-side allowlist, or absent for system. */
+  font_family?: string | null;
 }
 
 export async function getTheme(auth: Auth): Promise<ServerTheme | null> {
@@ -276,6 +278,7 @@ export function toClientTheme(s: ServerTheme): Theme {
     radius: s.radius,
     logoUrl: s.logo_uri ?? undefined,
     footerBranding: s.footer_branding ?? true,
+    fontFamily: s.font_family ?? undefined,
   };
 }
 
@@ -294,7 +297,53 @@ export function fromClientTheme(t: Theme): ServerTheme {
     radius: t.radius,
     logo_uri: t.logoUrl,
     footer_branding: t.footerBranding,
+    font_family: t.fontFamily,
   };
+}
+
+/**
+ * Fetch the curated font allowlist from the API. Returns `null` when the
+ * call fails so callers can fall back to a hard-coded list rather than
+ * blocking page load.
+ */
+export async function getFonts(auth: Auth): Promise<string[] | null> {
+  const resp = await call('GET', '/v1/theme/fonts', auth);
+  if (!resp.ok) return null;
+  const body = (await resp.json()) as { allowed?: string[] };
+  return body.allowed ?? null;
+}
+
+/**
+ * Upload a tenant favicon. Same sanitizer pipeline as the logo plus
+ * `image/x-icon`. 64 KiB cap (smaller than the logo's 256 KiB).
+ */
+export async function uploadFavicon(
+  auth: Auth,
+  file: File,
+): Promise<{ ok: true; theme: ServerTheme } | { ok: false; status: number; error: string }> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+
+  const headers = new Headers();
+  headers.set('X-Skill-Pool-Tenant', auth.tenant);
+  if (auth.token) headers.set('Authorization', `Bearer ${auth.token}`);
+
+  const resp = await fetch(`${base()}/v1/theme/favicon`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+  if (resp.ok) return { ok: true, theme: (await resp.json()) as ServerTheme };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+/** Delete the tenant's uploaded favicon. 204 on success. */
+export async function deleteFavicon(
+  auth: Auth,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', '/v1/theme/favicon', auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
 }
 
 export interface PublishMetadata {

@@ -46,6 +46,11 @@ pub enum LogoKind {
     Png,
     Jpeg,
     Webp,
+    /// `image/x-icon` — the classic Windows ICO container, still very common
+    /// for favicons shipped from brand kits. Only enabled by the favicon
+    /// pipeline; the logo pipeline rejects it through its size cap and
+    /// content-type allow-list at the route layer.
+    Ico,
 }
 
 impl LogoKind {
@@ -55,6 +60,7 @@ impl LogoKind {
             LogoKind::Png => "image/png",
             LogoKind::Jpeg => "image/jpeg",
             LogoKind::Webp => "image/webp",
+            LogoKind::Ico => "image/x-icon",
         }
     }
 
@@ -64,6 +70,7 @@ impl LogoKind {
             LogoKind::Png => "png",
             LogoKind::Jpeg => "jpg",
             LogoKind::Webp => "webp",
+            LogoKind::Ico => "ico",
         }
     }
 
@@ -75,6 +82,7 @@ impl LogoKind {
             "image/png" => Some(LogoKind::Png),
             "image/jpeg" | "image/jpg" => Some(LogoKind::Jpeg),
             "image/webp" => Some(LogoKind::Webp),
+            "image/x-icon" | "image/vnd.microsoft.icon" => Some(LogoKind::Ico),
             _ => None,
         }
     }
@@ -131,6 +139,10 @@ pub fn sanitize(content_type: &str, raw: &[u8]) -> Result<SanitizedLogo, Sanitiz
             check_webp(raw)?;
             raw.to_vec()
         }
+        LogoKind::Ico => {
+            check_ico(raw)?;
+            raw.to_vec()
+        }
     };
 
     Ok(SanitizedLogo { bytes, kind })
@@ -154,6 +166,19 @@ fn check_magic(raw: &[u8], magic: &[u8], ct: &'static str) -> Result<(), Sanitiz
 fn check_webp(raw: &[u8]) -> Result<(), SanitizeError> {
     if raw.len() < 12 || &raw[..4] != b"RIFF" || &raw[8..12] != b"WEBP" {
         return Err(SanitizeError::MagicMismatch("image/webp"));
+    }
+    Ok(())
+}
+
+/// ICO files start with a 6-byte ICONDIR header: reserved (0x0000),
+/// type (0x0001 for icon, 0x0002 for cursor — we accept only icon),
+/// then a 16-bit count of images. The first 4 bytes are the load-bearing
+/// "is this an ICO" signal; we don't validate every directory entry to keep
+/// the sanitizer simple — a malformed ICO will fail to render in the browser
+/// without causing harm (it's not script-bearing like SVG).
+fn check_ico(raw: &[u8]) -> Result<(), SanitizeError> {
+    if raw.len() < 6 || raw[0] != 0x00 || raw[1] != 0x00 || raw[2] != 0x01 || raw[3] != 0x00 {
+        return Err(SanitizeError::MagicMismatch("image/x-icon"));
     }
     Ok(())
 }
@@ -577,5 +602,39 @@ mod tests {
     fn content_type_with_charset_is_accepted() {
         let r = sanitize("image/svg+xml; charset=utf-8", GOOD_SVG).unwrap();
         assert_eq!(r.kind, LogoKind::Svg);
+    }
+
+    #[test]
+    fn accepts_minimal_ico() {
+        // ICONDIR + one 16-byte ICONDIRENTRY pointing at a tiny "bitmap".
+        let mut ico = vec![
+            0x00, 0x00, 0x01, 0x00, // reserved + type=1 (icon)
+            0x01, 0x00, // count = 1
+            0x10, 0x10, 0x00, 0x00, // 16x16, no palette, reserved
+            0x01, 0x00, 0x20, 0x00, // 1 plane, 32 bpp
+            0x10, 0x00, 0x00, 0x00, // image size = 16 bytes
+            0x16, 0x00, 0x00, 0x00, // offset = 22
+        ];
+        ico.extend_from_slice(&[0u8; 16]);
+        let r = sanitize("image/x-icon", &ico).unwrap();
+        assert_eq!(r.kind, LogoKind::Ico);
+    }
+
+    #[test]
+    fn rejects_ico_with_wrong_magic() {
+        let err = sanitize("image/x-icon", b"\x00\x00\x02\x00").unwrap_err();
+        assert!(matches!(err, SanitizeError::MagicMismatch(_)));
+    }
+
+    #[test]
+    fn accepts_microsoft_icon_alias() {
+        // Same bytes as accepts_minimal_ico above — just exercising the alias.
+        let mut ico = vec![
+            0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10, 0x00, 0x00, 0x01, 0x00, 0x20, 0x00,
+            0x10, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00,
+        ];
+        ico.extend_from_slice(&[0u8; 16]);
+        let r = sanitize("image/vnd.microsoft.icon", &ico).unwrap();
+        assert_eq!(r.kind, LogoKind::Ico);
     }
 }
