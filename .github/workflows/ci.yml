@@ -139,7 +139,7 @@ jobs:
           version: v3.15.0
 
       - name: Set up kubectl (client-only, for --dry-run=client)
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
         with:
           version: v1.30.0
 
