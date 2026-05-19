@@ -1,5 +1,5 @@
 use axum::middleware;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -81,6 +81,14 @@ pub fn router(state: AppState) -> Router {
         // same model as `/v1/theme`. CLI fetches this once per shell
         // session and prints `text` + optional `url` to stderr.
         .route("/v1/tenant/profile/banner", get(profile::get_banner))
+        // Personal API tokens (#4). Session-authenticated callers only —
+        // bare API tokens cannot manage other tokens. POST returns the
+        // raw token *once*; subsequent listings only carry the prefix.
+        .route(
+            "/v1/profile/tokens",
+            get(profile::list_tokens).post(profile::create_token),
+        )
+        .route("/v1/profile/tokens/{id}", delete(profile::revoke_token))
         // Bootstrap (Phase 3)
         .route("/v1/bootstrap", get(bootstrap::bootstrap))
         // Drafts (Phase 4 — retrospective capture)

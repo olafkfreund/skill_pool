@@ -922,3 +922,74 @@ export async function removeCustomDomain(
   if (resp.ok) return { ok: true };
   return { ok: false, status: resp.status, error: await resp.text() };
 }
+
+// --- Profile / personal API tokens (#4) ----------------------------------
+
+export interface WhoAmI {
+  user_id: string;
+  email: string;
+  role: 'viewer' | 'publisher' | 'curator' | 'admin';
+  tenant: string;
+}
+
+/** Identity of the calling user. Returns null when the caller isn't a
+ *  session-authenticated user (e.g. plain CLI token). */
+export async function whoami(auth: Auth): Promise<WhoAmI | null> {
+  const resp = await call('GET', '/v1/auth/whoami', auth);
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export interface ApiToken {
+  id: string;
+  label: string;
+  /** First ~12 chars of the raw token. `null` for tokens minted before
+   *  the prefix was tracked. */
+  prefix: string | null;
+  /** Space-separated scope string, e.g. `"skills:read skills:publish"`. */
+  scopes: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+/** Shown ONCE, only in the response to `createToken`. Never appears in
+ *  `listTokens`. The web layer is responsible for surfacing it to the user
+ *  immediately and then dropping it on the floor. */
+export interface CreatedApiToken {
+  id: string;
+  raw_token: string;
+  prefix: string;
+  scopes: string;
+  created_at: string;
+  label: string;
+}
+
+export async function listMyTokens(auth: Auth): Promise<ApiToken[]> {
+  const resp = await call('GET', '/v1/profile/tokens', auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function createMyToken(
+  auth: Auth,
+  label: string,
+  scopes: string[],
+): Promise<
+  { ok: true; token: CreatedApiToken } | { ok: false; status: number; error: string }
+> {
+  const resp = await call('POST', '/v1/profile/tokens', auth, {
+    jsonBody: { label, scopes },
+  });
+  if (resp.ok) return { ok: true, token: (await resp.json()) as CreatedApiToken };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function revokeMyToken(
+  auth: Auth,
+  id: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', `/v1/profile/tokens/${encodeURIComponent(id)}`, auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}

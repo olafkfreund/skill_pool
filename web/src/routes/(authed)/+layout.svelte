@@ -12,6 +12,7 @@
     BookOpen,
     BarChart3,
     Layers,
+    UserCircle,
     ChevronDown,
     ChevronRight,
     LogOut,
@@ -43,6 +44,7 @@
       label: 'Settings',
       defaultOpen: false,
       items: [
+        { href: '/profile', icon: UserCircle, label: 'Profile' },
         { href: '/admin/theme', icon: Palette, label: 'Theme' },
         { href: '/admin/members', icon: Users, label: 'Members' },
         { href: '/admin/sso', icon: ShieldCheck, label: 'SSO' },

@@ -3,6 +3,7 @@
 //! talks directly to Postgres.
 
 use anyhow::{anyhow, Context, Result};
+use chrono::{DateTime, Utc};
 use rand::RngCore;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -23,6 +24,24 @@ pub struct DeletedTenant {
 pub struct CreatedToken {
     pub id: Uuid,
     pub raw_token: String,
+    /// Display prefix (first ~12 chars of `raw_token`). Stored on the row
+    /// so the management UI can identify a token without needing the
+    /// secret. Not unique, not used for auth.
+    pub prefix: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Listable view of an API token row. Excludes `hashed_token` — that column
+/// must never leak past the auth fast-path.
+#[derive(Debug, Clone)]
+pub struct TokenSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub prefix: Option<String>,
+    pub scope: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
 }
 
 pub async fn connect(cfg: &Config) -> Result<PgPool> {
@@ -412,6 +431,28 @@ pub async fn create_token(
     name: &str,
     scope: &str,
 ) -> Result<CreatedToken> {
+    create_token_inner(db, tenant_slug, name, scope, None).await
+}
+
+/// User-scoped variant: records `created_by` so `list_user_tokens` can scope
+/// to the calling principal. Used by the personal token-management UI.
+pub async fn create_user_token(
+    db: &PgPool,
+    tenant_slug: &str,
+    name: &str,
+    scope: &str,
+    created_by: Uuid,
+) -> Result<CreatedToken> {
+    create_token_inner(db, tenant_slug, name, scope, Some(created_by)).await
+}
+
+async fn create_token_inner(
+    db: &PgPool,
+    tenant_slug: &str,
+    name: &str,
+    scope: &str,
+    created_by: Option<Uuid>,
+) -> Result<CreatedToken> {
     let tenant: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
             .bind(tenant_slug)
@@ -421,15 +462,22 @@ pub async fn create_token(
 
     let raw = generate_token();
     let hashed = hash_token(&raw);
+    // First 12 chars: `spk_` + 8 hex chars. Non-secret display affordance —
+    // pairs a UI row to whatever copy the caller pasted into a script.
+    let prefix = raw.chars().take(12).collect::<String>();
 
-    let row: (Uuid,) = sqlx::query_as(
-        "INSERT INTO tenant_api_tokens (tenant_id, hashed_token, name, scope) \
-         VALUES ($1, $2, $3, $4) RETURNING id",
+    let row: (Uuid, DateTime<Utc>) = sqlx::query_as(
+        "INSERT INTO tenant_api_tokens \
+            (tenant_id, hashed_token, name, scope, token_prefix, created_by) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         RETURNING id, created_at",
     )
     .bind(tenant_id)
     .bind(&hashed)
     .bind(name)
     .bind(scope)
+    .bind(&prefix)
+    .bind(created_by)
     .fetch_one(db)
     .await
     .context("insert token")?;
@@ -437,7 +485,108 @@ pub async fn create_token(
     Ok(CreatedToken {
         id: row.0,
         raw_token: raw,
+        prefix,
+        created_at: row.1,
     })
+}
+
+/// List API tokens minted by `user_id` in `tenant_slug`. Includes both
+/// active and revoked rows so the UI can render history. The `hashed_token`
+/// column is intentionally excluded from the projection — see `TokenSummary`.
+pub async fn list_user_tokens(
+    db: &PgPool,
+    tenant_slug: &str,
+    user_id: Uuid,
+) -> Result<Vec<TokenSummary>> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    let rows: Vec<(
+        Uuid,
+        String,
+        Option<String>,
+        String,
+        DateTime<Utc>,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+    )> = sqlx::query_as(
+        "SELECT id, name, token_prefix, scope, created_at, last_used_at, revoked_at \
+         FROM tenant_api_tokens \
+         WHERE tenant_id = $1 AND created_by = $2 \
+         ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    .context("list user tokens")?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, name, prefix, scope, created_at, last_used_at, revoked_at)| TokenSummary {
+                id,
+                name,
+                prefix,
+                scope,
+                created_at,
+                last_used_at,
+                revoked_at,
+            },
+        )
+        .collect())
+}
+
+/// Revoke a token owned by `user_id`. Idempotent — calling twice is a no-op
+/// (the second call updates 0 rows because `revoked_at IS NOT NULL` short-
+/// circuits the WHERE). Returns `Ok(false)` if no row matches (wrong tenant,
+/// wrong owner, or never existed) so the route can map that to a 404 without
+/// peeking at the row first.
+pub async fn revoke_user_token(
+    db: &PgPool,
+    tenant_slug: &str,
+    user_id: Uuid,
+    token_id: Uuid,
+) -> Result<bool> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    // Two-step: first check the row exists at all (so we can distinguish
+    // 404 from "already revoked is fine"), then update. The UPDATE is a
+    // no-op for already-revoked rows, which is the idempotency contract.
+    let exists: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM tenant_api_tokens \
+         WHERE tenant_id = $1 AND id = $2 AND created_by = $3",
+    )
+    .bind(tenant_id)
+    .bind(token_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+
+    sqlx::query(
+        "UPDATE tenant_api_tokens SET revoked_at = now() \
+         WHERE tenant_id = $1 AND id = $2 AND created_by = $3 AND revoked_at IS NULL",
+    )
+    .bind(tenant_id)
+    .bind(token_id)
+    .bind(user_id)
+    .execute(db)
+    .await
+    .context("revoke user token")?;
+
+    Ok(true)
 }
 
 pub async fn set_stack_mapping(
