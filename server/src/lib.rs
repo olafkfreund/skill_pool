@@ -14,6 +14,7 @@ pub mod css_sanitize;
 pub mod email_branding;
 pub mod embedding;
 pub mod error;
+pub mod git_sync;
 pub mod logo_sanitize;
 pub mod metrics;
 pub mod notify;

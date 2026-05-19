@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -74,6 +75,13 @@ struct Inner {
     /// `state.queue()` and fall back to inline behaviour when this is
     /// `None`, preserving the pre-queue contract for Redis-off deploys.
     pub queue: Option<Arc<queue::Queue>>,
+    /// Optional path to a Git repo mirroring every catalog publish
+    /// (#6 Phase 4 two-way sync). `Some(path)` when
+    /// `SKILL_POOL_GIT_REPO_PATH` is set in config; publish handlers
+    /// kick off a detached `git_sync::commit_skill` task. Best-effort:
+    /// a missing repo or unavailable `git` logs a warning and lets
+    /// the publish succeed regardless.
+    pub git_repo_path: Option<PathBuf>,
 }
 
 async fn connect_pool(url: &str, max: u32) -> Result<PgPool> {
@@ -160,6 +168,7 @@ impl AppState {
                 origin_pattern: cfg.origin_pattern.clone(),
                 redis,
                 queue,
+                git_repo_path: cfg.git_repo_path.clone(),
             }),
         };
         // Warm the cache once synchronously so the first request after
@@ -194,6 +203,7 @@ impl AppState {
                 origin_pattern: cfg.origin_pattern.clone(),
                 redis,
                 queue,
+                git_repo_path: cfg.git_repo_path.clone(),
             }),
         };
         if let Err(e) = state.refresh_custom_domains().await {
@@ -310,6 +320,15 @@ impl AppState {
         self.inner.queue.as_ref()
     }
 
+    /// Path of the optional Git mirror repo. `Some` when
+    /// `SKILL_POOL_GIT_REPO_PATH` is set; callers spawn a detached
+    /// `git_sync::commit_skill` after a successful publish so the
+    /// catalog has a human-readable history on disk. Failure is logged
+    /// and swallowed — Postgres remains the source of truth.
+    pub fn git_repo_path(&self) -> Option<&Path> {
+        self.inner.git_repo_path.as_deref()
+    }
+
     /// Test-only: build an `AppState` with an explicit Redis handle.
     /// Used by `tests/rate_limits.rs` to point the limiter at a
     /// testcontainer instead of relying on `SKILL_POOL_REDIS_URL`.
@@ -334,6 +353,7 @@ impl AppState {
                 origin_pattern: cfg.origin_pattern.clone(),
                 redis: some_redis,
                 queue,
+                git_repo_path: cfg.git_repo_path.clone(),
             }),
         };
         if let Err(e) = state.refresh_custom_domains().await {

@@ -27,6 +27,7 @@ use crate::audit;
 use crate::auth::AuthedCaller;
 use crate::bundle::{self, BundleError};
 use crate::error::{AppError, AppResult};
+use crate::git_sync;
 use crate::state::AppState;
 use crate::storage::Storage;
 
@@ -423,6 +424,10 @@ pub async fn publish(
         .read_bundle(&draft.bundle_uri)
         .await
         .map_err(AppError::Anyhow)?;
+    // Cheap clone (Bytes is ref-counted) — we need a copy for the
+    // optional git-sync hook below; the original is moved into
+    // `put_bundle`.
+    let bundle_for_git = bundle_bytes.clone();
     let skill_key = Storage::bundle_key(caller.tenant.tenant_id, &final_slug, body.version.trim());
     storage
         .put_bundle(&skill_key, bundle_bytes)
@@ -496,6 +501,46 @@ pub async fn publish(
         },
     )
     .await;
+
+    // Best-effort Git mirror (#6 Phase 4). Detached; never blocks the
+    // response. Disabled unless `SKILL_POOL_GIT_REPO_PATH` is set.
+    // Drafts have no explicit `kind` column today — they all promote
+    // to skills, so we hardcode `"skill"` here. Direct publishes via
+    // `routes::skills::publish` use `meta.kind` and may write under
+    // `agent/` or `command/` instead.
+    if let Some(repo) = state.git_repo_path().map(std::path::Path::to_path_buf) {
+        let tenant_slug = caller.tenant.tenant_slug.clone();
+        let slug_for_git = final_slug.clone();
+        let version_for_git = body.version.trim().to_string();
+        // Re-extract SKILL.md from the bundle for the canonical write.
+        // The bundle was just validated at create time, so this should
+        // always succeed; on failure we log and skip git entirely.
+        let skill_md = bundle::extract_skill_md(&bundle_for_git).ok();
+        let bytes_clone = bundle_for_git;
+        tokio::spawn(async move {
+            let md = skill_md.unwrap_or_default();
+            match git_sync::commit_skill(
+                &repo,
+                &tenant_slug,
+                "skill",
+                &slug_for_git,
+                &version_for_git,
+                &md,
+                &bytes_clone,
+            )
+            .await
+            {
+                Ok(Some(sha)) => tracing::info!(
+                    sha = %sha,
+                    slug = %slug_for_git,
+                    version = %version_for_git,
+                    "git_sync: draft publish committed",
+                ),
+                Ok(None) => tracing::debug!("git_sync: skipped (disabled or best-effort fail)"),
+                Err(e) => tracing::warn!(error = %e, "git_sync: commit_skill returned Err"),
+            }
+        });
+    }
 
     Ok(Json(PublishResponse {
         draft_id: id,
