@@ -17,6 +17,7 @@ pub mod error;
 pub mod logo_sanitize;
 pub mod metrics;
 pub mod notify;
+pub mod rate_limit;
 pub mod routes;
 pub mod state;
 pub mod storage;

@@ -118,6 +118,8 @@ prometheus = { version = "0.13", default-features = false }
 # want dedup build with `--features fastembed`.
 fastembed = { version = "4", optional = true }
 
+# Redis client for the per-tenant rate-limiter (#8 §L20). Sister-agent A
+# owns the connection lifecycle in `cache.rs`; this dep is the underlying
 # OTLP distributed tracing — opt-in via `--features otlp`.
 # Versions are pinned together because opentelemetry, opentelemetry_sdk,
 # opentelemetry-otlp, and tracing-opentelemetry must share the same

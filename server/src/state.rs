@@ -61,10 +61,11 @@ struct Inner {
     #[allow(dead_code)]
     pub origin_pattern: String,
     /// Optional Redis client for read-through caches (theme, auth) and
-    /// the rate limiter (#10 §A). `None` when `SKILL_POOL_REDIS_URL` is
-    /// unset or the initial connect failed — callers fall back to the
-    /// direct-DB path. Cloning the inner `Arc` is the cheap way to
-    /// move the handle across `.await` points.
+    /// the rate limiter (#9 §L36, #10 §A, #8 §L20). `None` when
+    /// `SKILL_POOL_REDIS_URL` is unset or the initial connect failed —
+    /// callers fall back to the direct-DB path / fail-open behaviour.
+    /// `cache::Redis` is already `Arc<ConnectionManager>`, so cloning
+    /// the inner value across `.await` points is cheap.
     pub redis: Option<cache::Redis>,
 }
 
@@ -270,12 +271,39 @@ impl AppState {
     /// is set and the initial connect succeeded; `None` otherwise.
     /// Callers `.clone()` the inner `Arc` cheaply when they need to move
     /// the handle across an `.await`.
-    ///
-    /// Signature pinned for the sister rate-limiter subagent — do not
-    /// change without coordinating.
     pub fn redis(&self) -> Option<&cache::Redis> {
         self.inner.redis.as_ref()
     }
+
+    /// Test-only: build an `AppState` with an explicit Redis handle.
+    /// Used by `tests/rate_limits.rs` to point the limiter at a
+    /// testcontainer instead of relying on `SKILL_POOL_REDIS_URL`.
+    #[allow(dead_code)]
+    pub async fn new_with_redis(cfg: &Config, redis: cache::Redis) -> Result<Self> {
+        let db = connect_pool(&cfg.database_url, cfg.db_pool_size).await?;
+        let db_read = maybe_read_pool(cfg).await;
+        let storage = Storage::from_uri(&cfg.storage_uri)?;
+        let embedder = embedding::from_config(&cfg.embedding)?;
+        let state = Self {
+            inner: Arc::new(Inner {
+                db,
+                db_read,
+                tenancy: cfg.resolved_tenancy(),
+                storage,
+                tenant_storage: Mutex::new(HashMap::new()),
+                email_transport: Arc::new(EmailTransportCache::new()),
+                custom_domains: RwLock::new(HashMap::new()),
+                embedder,
+                origin_pattern: cfg.origin_pattern.clone(),
+                redis: Some(redis),
+            }),
+        };
+        if let Err(e) = state.refresh_custom_domains().await {
+            tracing::warn!(error = ?e, "initial custom-domain cache load failed; will retry");
+        }
+        Ok(state)
+    }
+
 
     /// Shared cache of per-tenant branded SMTP transports.
     pub fn email_transport(&self) -> &Arc<EmailTransportCache> {

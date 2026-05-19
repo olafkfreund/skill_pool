@@ -86,6 +86,25 @@ enum AdminAction {
         #[arg(long, conflicts_with_all = ["text", "url"])]
         clear: bool,
     },
+    /// Set or clear a tenant's per-tenant rate limits (#8 §L20). Plan
+    /// defaults apply when both columns are NULL: team (600/60),
+    /// business (3000/300), enterprise (30000/1000). Range: rpm
+    /// 1..=100000, burst 1..=10000 (DB CHECK enforced). Use `--clear`
+    /// to revert to the plan default. See
+    /// `docs/enterprise/rate-limits.md`.
+    TenantRateLimits {
+        #[arg(long)]
+        slug: String,
+        /// Requests per 60-second window (1..=100000). Conflicts with `--clear`.
+        #[arg(long, conflicts_with = "clear")]
+        rpm: Option<u32>,
+        /// Requests per 1-second window (1..=10000). Conflicts with `--clear`.
+        #[arg(long, conflicts_with = "clear")]
+        burst: Option<u32>,
+        /// Clear both overrides; revert to plan defaults.
+        #[arg(long, conflicts_with_all = ["rpm", "burst"])]
+        clear: bool,
+    },
     /// Hard-delete a tenant and all its data via ON DELETE CASCADE.
     /// Bundle storage is NOT swept — the command prints the storage prefix
     /// for a separate operator sweep (or retention). Pair with SIEM export
@@ -320,6 +339,22 @@ async fn main() -> Result<()> {
                         )
                     };
                     admin::set_session_max_age(&db, &slug, secs).await
+                }
+                AdminAction::TenantRateLimits {
+                    slug,
+                    rpm,
+                    burst,
+                    clear,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::set_tenant_rate_limits(
+                        &db,
+                        &slug,
+                        rpm.map(|v| v as i32),
+                        burst.map(|v| v as i32),
+                        clear,
+                    )
+                    .await
                 }
                 AdminAction::TenantBannerSet {
                     slug,

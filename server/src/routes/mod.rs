@@ -5,6 +5,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::metrics;
+use crate::rate_limit;
 use crate::state::AppState;
 use crate::tracing_setup;
 
@@ -201,6 +202,14 @@ pub fn router(state: AppState) -> Router {
         // so log aggregators can filter/group by tenant without parsing paths.
         .layer(middleware::from_fn(tracing_setup::tenant_span_layer))
         .layer(TraceLayer::new_for_http())
+        // Per-tenant rate limiter (#8 §L20). Sits between TraceLayer and
+        // metrics::track so 429 responses still show up in Prometheus,
+        // but spans/traces aren't opened for traffic we're throttling.
+        // Fails open if Redis is unavailable.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit::rate_limit_layer,
+        ))
         // Prometheus instrumentation: records count, latency, and in-flight
         // for every request that enters the router. Applied after TraceLayer
         // so both observe the same request.
