@@ -1,0 +1,127 @@
+# AWS-specific overlay for the skill-pool Helm chart.
+#
+# Apply with:
+#   helm install skill-pool ./deploy/helm/skill-pool \
+#     -f deploy/helm/skill-pool/values-aws.yaml \
+#     --create-namespace -n skill-pool
+#
+# Every `""` value below is intentionally blank — fill from your
+# `terraform output` (see deploy/terraform/aws/README.md §"What you'll
+# need to paste elsewhere after apply").
+
+# ---------------------------------------------------------------------
+# Ingress — ALB via AWS Load Balancer Controller, TLS terminated at ALB
+# using the ACM cert created by Terraform. No cert-manager.
+# ---------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    # CUSTOMISE — from `terraform output acm_certificate_arn`
+    alb.ingress.kubernetes.io/certificate-arn: ""
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # 50 MiB matches the proxy_body_size in docs/deploy/kubernetes.md;
+    # bundles can be large.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=60
+    # Health check the /v1/healthz the server already exposes.
+    alb.ingress.kubernetes.io/healthcheck-path: /v1/healthz
+    alb.ingress.kubernetes.io/success-codes: "200"
+  hosts:
+    # CUSTOMISE — your apex host. Per-tenant subdomains route through the
+    # same ALB; the catch-all is handled inside the app.
+    - host: ""
+      paths:
+        - path: /
+          pathType: Prefix
+
+# ---------------------------------------------------------------------
+# Service account — bound to the IRSA role so the pod can read/write
+# the S3 bundle bucket and pull the RDS password from Secrets Manager.
+# ---------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: skill-pool
+  annotations:
+    # CUSTOMISE — from `terraform output irsa_role_arn`
+    eks.amazonaws.com/role-arn: ""
+
+# ---------------------------------------------------------------------
+# Server container env. The DB DSN + AES key come from a Secret the
+# operator creates separately (see docs/deploy/aws.md §5). Everything
+# below is non-sensitive.
+# ---------------------------------------------------------------------
+server:
+  replicaCount: 2
+  env:
+    # CUSTOMISE — from `terraform output bundle_storage_uri`
+    # Shape: s3://skill-pool-prod-bundles-<accountid>?region=eu-west-1
+    SKILL_POOL_STORAGE_URI: ""
+    SKILL_POOL_BIND: "0.0.0.0:8080"
+    RUST_LOG: "info,skill_pool=info"
+    RUST_LOG_FORMAT: "json"
+  envFrom:
+    # Created out-of-band — see docs/deploy/aws.md §5.
+    # Keys: SKILL_POOL_DATABASE_URL, SKILL_POOL_EMAIL_SECRET_KEY
+    - secretRef:
+        name: skill-pool-env
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# ---------------------------------------------------------------------
+# Image registries. ECR — paste the URLs from Terraform outputs.
+# Tags come from the GitHub Actions build workflow; defaults to "latest"
+# but you should pin in CI.
+# ---------------------------------------------------------------------
+image:
+  server:
+    # CUSTOMISE — `terraform output ecr_server_repo_url`
+    # Shape: <accountid>.dkr.ecr.<region>.amazonaws.com/skill-pool-server
+    repository: ""
+    tag: ""        # CUSTOMISE — set per-deploy by CI to the git SHA / version tag
+    pullPolicy: IfNotPresent
+  web:
+    # CUSTOMISE — `terraform output ecr_web_repo_url`
+    repository: ""
+    tag: ""        # CUSTOMISE
+    pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------
+# Autoscaling: the chart wires an HPA on CPU at 70% utilisation; bump
+# `maxReplicas` per real traffic. See docs/deploy/kubernetes.md.
+# ---------------------------------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+
+# ---------------------------------------------------------------------
+# Metrics: Prometheus ServiceMonitor enabled. Assumes you have
+# kube-prometheus-stack installed; if not, set this `false` and scrape
+# `/metrics` however your stack does it.
+# ---------------------------------------------------------------------
+metrics:
+  serviceMonitor:
+    enabled: true
+
+# ---------------------------------------------------------------------
+# Pod security defaults — non-root, read-only rootfs, no privilege esc.
+# ---------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
