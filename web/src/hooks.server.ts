@@ -33,10 +33,25 @@ function resolveTenant(url: URL, host: string | null): string {
   const fallback = env.SP_DEFAULT_TENANT;
   if (!host) return fallback ?? 'default';
 
-  const hostNoPort = host.split(':')[0];
-  const first = hostNoPort.split('.')[0]?.toLowerCase();
+  const hostNoPort = host.split(':')[0].toLowerCase();
+  const first = hostNoPort.split('.')[0];
 
-  if (!first || first === 'www' || first === 'localhost' || /^\d+$/.test(first)) {
+  // Skiplist: hostnames where the first label is not a tenant subdomain
+  // but a LAN/dev identifier. Fall back to SP_DEFAULT_TENANT instead of
+  // treating it as a real tenant slug.
+  //   - localhost / www / numeric IPs: classic loopback / generic
+  //   - *.lan / *.local: mDNS/Avahi LAN-local domains (e.g. razer.lan)
+  //   - *.nip.io: the free wildcard DNS we use for AWS deploys
+  if (
+    !first ||
+    first === 'www' ||
+    first === 'localhost' ||
+    /^\d+$/.test(first) ||
+    hostNoPort.endsWith('.lan') ||
+    hostNoPort.endsWith('.local') ||
+    hostNoPort.endsWith('.nip.io') ||
+    hostNoPort.includes('.') === false
+  ) {
     return fallback ?? 'default';
   }
   return first;
