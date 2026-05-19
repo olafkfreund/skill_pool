@@ -608,6 +608,13 @@ async fn serve(cfg: config::Config) -> Result<()> {
         None
     };
 
+    // Background decay sweep (#7 lifecycle). Flips long-stale skills
+    // to `status = 'archive_candidate'` so curators see them flagged
+    // proactively. Configurable via SKILL_POOL_DECAY_CHECK_INTERVAL_SECS;
+    // set to 0 to disable (the on-demand /v1/tenant/skills/decay endpoint
+    // continues to work). Shares the same shutdown channel as the worker.
+    let decay_handle = spawn_decay_sweep(state.db().clone(), cfg.decay_check_interval_secs, shutdown_rx.clone());
+
     let app = routes::router(state);
 
     let addr: SocketAddr = cfg.bind.parse()?;
@@ -622,17 +629,71 @@ async fn serve(cfg: config::Config) -> Result<()> {
     // Tell the worker to drain. We give it 30s to finish whatever it's
     // doing; longer than that and we time out and log a warning rather
     // than block the process from exiting.
+    let _ = shutdown_tx.send(true);
     if let Some(handle) = worker_handle {
-        let _ = shutdown_tx.send(true);
         match tokio::time::timeout(std::time::Duration::from_secs(30), handle).await {
             Ok(Ok(())) => tracing::info!("queue worker shut down cleanly"),
             Ok(Err(e)) => tracing::warn!(error = %e, "queue worker task panicked during shutdown"),
             Err(_) => tracing::warn!("queue worker shutdown timed out after 30s"),
         }
     }
+    if let Some(handle) = decay_handle {
+        // Decay sweep is purely periodic; 5s is plenty for the in-flight
+        // UPDATE (if any) to finish.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => tracing::info!("decay sweep shut down cleanly"),
+            Ok(Err(e)) => tracing::warn!(error = %e, "decay sweep task panicked"),
+            Err(_) => tracing::warn!("decay sweep shutdown timed out"),
+        }
+    }
 
     telemetry::shutdown();
     Ok(())
+}
+
+/// Spawn the background decay sweep task. Returns `None` when the
+/// configured interval is 0 (disabled) so callers can skip the
+/// shutdown join. The task listens on the shared shutdown channel so
+/// SIGTERM drains it alongside the queue worker.
+fn spawn_decay_sweep(
+    db: sqlx::PgPool,
+    interval_secs: u32,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if interval_secs == 0 {
+        tracing::info!("decay_check_interval_secs=0; background sweep disabled");
+        return None;
+    }
+    let dur = std::time::Duration::from_secs(interval_secs as u64);
+    Some(tokio::spawn(async move {
+        tracing::info!(interval_secs, "decay sweep task starting");
+        let mut tick = tokio::time::interval(dur);
+        // First tick fires immediately. Consume it; otherwise a server
+        // restart loop on a misconfigured deployment would hammer the
+        // DB. The first real sweep runs one `interval` after startup.
+        tick.tick().await;
+        loop {
+            tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        tracing::info!("decay sweep shutting down");
+                        return;
+                    }
+                }
+                _ = tick.tick() => {
+                    match skill_pool_server::routes::decay::sweep(
+                        &db,
+                        skill_pool_server::routes::decay::DEFAULT_SWEEP_STALE_DAYS,
+                        skill_pool_server::routes::decay::DEFAULT_SWEEP_MIN_USES,
+                    ).await {
+                        Ok(n) if n > 0 => tracing::info!(flipped = n, "decay sweep flipped rows to archive_candidate"),
+                        Ok(_) => tracing::debug!("decay sweep: no stale skills"),
+                        Err(e) => tracing::warn!(error = %e, "decay sweep failed; continuing"),
+                    }
+                }
+            }
+        }
+    }))
 }
 
 async fn shutdown_signal() {

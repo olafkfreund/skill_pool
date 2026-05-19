@@ -89,6 +89,7 @@ async fn boot(redis_url_override: Option<String>) -> Result<Harness> {
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
     let app_state = state::AppState::new(&cfg).await?;
     let app = routes::router(app_state);

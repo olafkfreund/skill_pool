@@ -287,6 +287,7 @@ async fn saml_acs_full_round_trip() -> Result<()> {
         origin_pattern: origin.clone(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
     let state = state::AppState::new(&cfg).await?;
     let app = routes::router(state);

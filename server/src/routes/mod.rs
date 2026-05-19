@@ -12,7 +12,7 @@ use crate::tracing_setup;
 mod audit_siem;
 mod bootstrap;
 mod custom_domains;
-mod decay;
+pub mod decay;
 mod drafts;
 mod email_branding;
 mod enterprise;
@@ -136,6 +136,10 @@ pub fn router(state: AppState) -> Router {
         // Telemetry dashboards (Phase 5)
         .route("/v1/tenant/usage/timeline", get(usage::timeline))
         .route("/v1/tenant/usage/top", get(usage::top))
+        // CLI-driven usage event (#7 lifecycle). `skill-pool ensure`
+        // POSTs a `view` event per installed skill so the decay model
+        // sees session-load activity, not just bundle downloads.
+        .route("/v1/usage", post(usage::post_event))
         // Custom domains (Phase 5 / Enterprise) — tenant-side admin flow
         // for mapping `skills.acme.com` at this backend with ACME
         // issuance handled by the reverse proxy.

@@ -75,6 +75,7 @@ async fn per_tenant_rate_limit_429_after_threshold() -> Result<()> {
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
     let app_state = state::AppState::new_with_redis(&cfg, redis.clone()).await?;
     let app = routes::router(app_state);
@@ -197,6 +198,7 @@ async fn rate_limit_fails_open_without_redis() -> Result<()> {
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
     // Explicitly clear SKILL_POOL_REDIS_URL so `AppState::new` sees no
     // Redis (the test runner may have set it).

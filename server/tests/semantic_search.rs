@@ -115,6 +115,7 @@ async fn boot(embedder: SharedEmbedder) -> Result<Harness> {
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
 
     let state = state::AppState::new_with_embedder(&cfg, embedder).await?;

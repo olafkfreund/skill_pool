@@ -509,6 +509,11 @@ pub async fn publish(
     // SKILL.md frontmatter becomes one row in skill_dependencies.
     // Forward references are fine: the target slug doesn't need to exist
     // yet; the closure endpoint resolves at read time.
+    //
+    // Conflict detection (#7): before inserting, check whether any OTHER
+    // published skill in this tenant requires the same slug at an
+    // incompatible version range. If so the publish fails with 409 and
+    // names both skills + ranges so the operator can resolve.
     for req in &validated.frontmatter.requires {
         let (req_slug, version_range) = parse_requires_entry(req);
         if req_slug.is_empty() {
@@ -521,6 +526,14 @@ pub async fn publish(
                 "skill `{req_slug}` cannot require itself"
             )));
         }
+        check_version_compatibility(
+            state.db(),
+            caller.tenant.tenant_id,
+            &meta.slug,
+            &req_slug,
+            &version_range,
+        )
+        .await?;
         sqlx::query(
             "INSERT INTO skill_dependencies \
                (tenant_id, parent_skill_id, requires_slug, version_range) \
@@ -852,6 +865,59 @@ impl From<SkillRowWithId> for Skill {
             similarity: None,
         }
     }
+}
+
+/// Reject the publish when another published skill in this tenant
+/// already requires `req_slug` at an incompatible `version_range`.
+///
+/// v1 semantics (intentionally narrow, see `docs/lifecycle.md` "Future
+/// work"):
+///   - `*` matches anything → never conflicts.
+///   - Two non-`*` ranges are compatible iff they are byte-identical.
+///   - More complex ranges (`^1.2`, `>=1.0,<2.0`) are treated as opaque
+///     strings — they conflict with any other non-equal range. The
+///     tradeoff: false-positives push operators to align ranges
+///     explicitly, which is the right outcome until we ship a semver
+///     resolver.
+async fn check_version_compatibility(
+    db: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    new_slug: &str,
+    req_slug: &str,
+    new_range: &str,
+) -> AppResult<()> {
+    // `*` never conflicts with anything.
+    if new_range == "*" {
+        return Ok(());
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT s.slug, sd.version_range \
+         FROM skill_dependencies sd \
+         JOIN skills s ON s.id = sd.parent_skill_id \
+         WHERE sd.tenant_id = $1 \
+           AND sd.requires_slug = $2 \
+           AND s.slug <> $3 \
+           AND s.status = 'published'",
+    )
+    .bind(tenant_id)
+    .bind(req_slug)
+    .bind(new_slug)
+    .fetch_all(db)
+    .await?;
+
+    for (other_slug, other_range) in rows {
+        if !ranges_compatible(new_range, &other_range) {
+            return Err(AppError::Conflict(format!(
+                "skill `{new_slug}` requires `{req_slug}@{new_range}` but skill `{other_slug}` already requires `{req_slug}@{other_range}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// v1 compatibility predicate. See `check_version_compatibility` docs.
+fn ranges_compatible(a: &str, b: &str) -> bool {
+    a == "*" || b == "*" || a == b
 }
 
 /// Parse a `requires` entry. Accepts either `slug` or `slug@version`.

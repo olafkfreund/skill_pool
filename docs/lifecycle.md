@@ -50,6 +50,33 @@ decayed ones.
 | `max_uses` | `3`           | `DEFAULT_MAX_USES` in `server/src/routes/decay.rs`     |
 | `limit`    | `200`         | hard-capped at 1000                                   |
 
+### Background sweep
+
+The on-demand endpoint above shows operators which skills *would*
+decay. A background tokio task (`spawn_decay_sweep` in
+`server/src/main.rs`) runs the same heuristic periodically and flips
+qualifying rows to `status = 'archive_candidate'` so curators see
+them flagged proactively — without auto-archiving anything (that
+remains an explicit admin verb via `POST /v1/skills/{slug}/archive`).
+
+| knob                              | default value | source                                                 |
+|-----------------------------------|---------------|--------------------------------------------------------|
+| `decay_check_interval_secs`       | `86400` (24h) | `SKILL_POOL_DECAY_CHECK_INTERVAL_SECS`                 |
+| stale-days threshold              | `180`         | `routes::decay::DEFAULT_SWEEP_STALE_DAYS`              |
+| min-uses threshold                | `3`           | `routes::decay::DEFAULT_SWEEP_MIN_USES`                |
+
+Set the interval to `0` to disable the sweep (the on-demand
+`/v1/tenant/skills/decay` endpoint continues to work). The sweep
+shares the queue worker's shutdown channel so SIGTERM drains both at
+the same time. Errors log + continue: a transient DB blip never
+crashes the server.
+
+The new `archive_candidate` value lives in `skills.status` (migration
+`0027`). Catalog list / search endpoints filter `status = 'published'`,
+so flagged skills disappear from the catalog automatically. Operators
+restore via the existing un-archive SQL recipe in the Reversibility
+section.
+
 Operators can override at query time:
 
 ```http
@@ -149,12 +176,39 @@ without becoming a behavioural-tracking system.
 
 ### Aggregations
 
-Two endpoints serve the read side (`server/src/routes/usage.rs`):
+Three endpoints serve the read + write sides (`server/src/routes/usage.rs`):
 
 | endpoint                          | shape                                                                       |
 |-----------------------------------|-----------------------------------------------------------------------------|
 | `GET /v1/tenant/usage/timeline`   | per-day `{ day, downloads, views, unique_skills }` (gap-filled w/ zeros)    |
 | `GET /v1/tenant/usage/top`        | top N skills in the window: `{ slug, downloads, views, total }`             |
+| `POST /v1/usage`                  | CLI-driven `view` event; body: `{ skill_id, kind, event, project_hash }`    |
+
+### CLI usage events on session-load (#7)
+
+`skill-pool ensure` POSTs one `view` event per successful skill
+install to `/v1/usage` so the decay model sees session-load activity
+alongside actual bundle downloads. Otherwise a popular skill that
+gets installed once and read from disk many times looks unused from
+the registry's vantage point — and quietly drifts toward
+`archive_candidate`.
+
+Defaults:
+- **Telemetry is ON by default.** The CLI already authenticates against
+  the registry with its API token; sending one best-effort `view`
+  event per installed skill is symmetrical with that trust posture.
+- **`--no-telemetry`** opts out per invocation. Use on air-gapped
+  deploys or when the network policy forbids outbound POSTs from the
+  install step.
+- The POST is **fire-and-forget**: a network blip logs at `debug` and
+  never blocks the install. The install path's contract is unchanged.
+
+`project_hash` is the SHA-256 of the project root, truncated to 16
+hex chars (~64 bits). It anonymises which project on which machine
+sent the event so the server can dedup repeats without persisting a
+reversible identifier. The field is accepted today but not yet
+persisted; reserved for the dedup pass that lands with the v2 decay
+heuristic.
 
 Both are admin-scoped (`tenant:admin`). The timeline query uses
 `generate_series` to fill missing days so the dashboard chart has no
@@ -263,6 +317,35 @@ The endpoint is tenant-scoped (closure can only cross edges in the
 same tenant) and returns `404` if the parent slug isn't published in
 this tenant.
 
+### Version-range conflict detection (#7)
+
+At publish time, every entry in `requires:` is checked against
+existing dependency rows in the same tenant. If another published
+skill already requires the same target slug at an *incompatible*
+version range, the publish fails with `409 Conflict` and an error
+message naming both skills and both ranges:
+
+```
+skill `b` requires `lib@2.0.0` but skill `a` already requires `lib@1.0.0`
+```
+
+**v1 compatibility predicate** (`check_version_compatibility` in
+`server/src/routes/skills.rs`):
+
+| left range | right range | compatible? |
+|------------|-------------|-------------|
+| `*`        | anything    | yes         |
+| anything   | `*`         | yes         |
+| `1.0.0`    | `1.0.0`     | yes (identical) |
+| `1.0.0`    | `2.0.0`     | **no** → 409 |
+| `^1.2`     | `^1.3`      | **no** → 409 (opaque string compare) |
+
+For v1 we deliberately do not parse semver. Anything beyond `*` and
+exact versions is treated as an opaque string; non-equal strings
+collide. The trade-off: false-positives push operators to align
+ranges explicitly, which is the right outcome until we ship a proper
+resolver (see [Future work](#future-work)).
+
 ### How `skill-pool ensure` uses it
 
 The CLI's `ensure` command (`cli/src/cmd/ensure.rs`) walks each
@@ -308,9 +391,11 @@ reference when wiring up dashboards or writing runbook steps.
 | **bump use_count**    | (inline, during fetch body / download)                         | `skills.use_count`, `skills.last_used_at`|
 | **walk closure**      | `GET /v1/skills/{slug}/deps`                                   | `skill_dependencies` (recursive)         |
 | **decay candidate**   | `GET /v1/tenant/skills/decay?days=&max_uses=`                  | `skills` (read)                          |
+| **decay sweep**       | background tokio task (every `decay_check_interval_secs`)      | `skills.status` ← `archive_candidate`    |
 | **archive**           | `POST /v1/skills/{slug}/archive`                               | `skills.status`, `audit_events`          |
 | **usage timeline**    | `GET /v1/tenant/usage/timeline?days=`                          | `skill_usage_events` (read)              |
 | **top skills**        | `GET /v1/tenant/usage/top?days=&limit=`                        | `skill_usage_events`, `skills` (read)    |
+| **CLI usage event**   | `POST /v1/usage` (called by `skill-pool ensure`)               | `skill_usage_events`, `skills`           |
 
 Defaults that operators most commonly tune: decay `days=180`,
 `max_uses=3`; usage timeline `days=30`; closure depth cap `10`.
@@ -332,13 +417,14 @@ has the context.
   today. Once the table volume warrants it, partition monthly and
   drop partitions older than the tenant's configured retention
   window. Surface as a per-tenant setting (`usage_retention_days`).
-- **Dependency conflict detection across versions.** Today
-  `version_range` is opaque text. A future slice parses semver and
-  flags incompatible closures (e.g. parent A requires `B@1.x` while
-  parent C requires `B@2.x` and both are pulled into the same plan).
-  Right now the CLI installs both versions side-by-side under
-  `~/.skill-pool/library/<tenant>/<slug>@<version>/`, which usually
-  works but can confuse `.claude/skills/<slug>` symlink ownership.
+- **Semver-aware conflict detection.** The publish-time check now
+  catches the common case (parent A requires `lib@1.0.0`, parent B
+  requires `lib@2.0.0` → 409). It treats non-`*` ranges as opaque
+  strings, which is intentionally narrow: `^1.2` vs `^1.3` reads as a
+  conflict even though semver would consider them compatible. A
+  follow-up slice parses semver ranges properly and downgrades those
+  false-positives to "OK". Until then, operators align ranges
+  explicitly when the resolver complains.
 - **Per-kind decay tuning.** As noted above, agents and commands need
   their own thresholds before they participate in the graveyard view.
 - **Un-archive UI button.** Today archive is one-way through the UI;

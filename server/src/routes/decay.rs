@@ -156,3 +156,35 @@ fn require_scope(scope: &str, needed: &str) -> AppResult<()> {
 // keep StatusCode in scope for crate compat with the existing module pattern
 #[allow(dead_code)]
 const _: StatusCode = StatusCode::OK;
+
+/// One pass of the background decay sweep (#7 lifecycle).
+///
+/// Flips every published skill that has been stale for at least
+/// `stale_days` days AND has been used fewer than `min_uses` times to
+/// `status = 'archive_candidate'`. Returns the number of rows updated
+/// so the caller can log + sample metrics. Multi-tenant: no
+/// `tenant_id` filter — this runs over every tenant's rows at once.
+///
+/// Best-effort by contract: the only error this returns is a hard
+/// `sqlx::Error`. The caller (the background tokio task in
+/// `main::serve`) catches and logs that without crashing the server.
+pub async fn sweep(db: &sqlx::PgPool, stale_days: i32, min_uses: i32) -> sqlx::Result<u64> {
+    let res = sqlx::query(
+        "UPDATE skills \
+         SET status = 'archive_candidate' \
+         WHERE status = 'published' \
+           AND kind = 'skill' \
+           AND use_count < $1 \
+           AND (last_used_at IS NULL OR last_used_at < now() - make_interval(days => $2::int))",
+    )
+    .bind(min_uses)
+    .bind(stale_days)
+    .execute(db)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// Defaults for the background sweep. Match the on-demand
+/// `list_candidates` heuristic so operators see the same surface.
+pub const DEFAULT_SWEEP_STALE_DAYS: i32 = 180;
+pub const DEFAULT_SWEEP_MIN_USES: i32 = 3;
