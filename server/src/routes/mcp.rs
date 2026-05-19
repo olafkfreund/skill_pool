@@ -11,10 +11,12 @@
 //!   - `tools/call` — dispatch
 //!
 //! Tools:
-//!   - `search_skills(query?, tags?, semantic?, limit?)` — wraps the
-//!     existing list endpoint. Returns a formatted text block listing
-//!     matches, plus the raw JSON for tooling.
-//!   - `get_skill(slug)` — returns the rendered `SKILL.md` body.
+//!   - `search_skills(query?, tags?, semantic?, limit?, kind?)` — wraps
+//!     the existing list endpoint. Returns a formatted text block listing
+//!     matches, plus the raw JSON for tooling. `kind` defaults to
+//!     `"skill"` to preserve pre-existing behaviour; pass `"agent"` or
+//!     `"command"` to search the parallel catalog surfaces.
+//!   - `get_skill(slug, kind?)` — returns the rendered `SKILL.md` body.
 //!
 //! Auth: reuses the standard `AuthedCaller` extractor — operators set
 //! `Authorization: Bearer <token>` and `X-Skill-Pool-Tenant: <slug>`
@@ -35,6 +37,27 @@ const SERVER_NAME: &str = "skill-pool";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_LIMIT: i64 = 50;
 const DEFAULT_LIMIT: i64 = 10;
+
+/// Catalog kinds exposed via MCP. Mirrors `routes::skills::VALID_KINDS`.
+/// Kept local so this module is self-contained for the JSON-RPC layer.
+const VALID_KINDS: &[&str] = &["skill", "agent", "command"];
+const DEFAULT_KIND: &str = "skill";
+
+/// Normalise an optional inbound kind string to one of the three
+/// canonical values. Returns the static str so it can be bound straight
+/// into SQL. Invalid input becomes an Err that the tool layer surfaces
+/// as INVALID_PARAMS.
+fn resolve_kind(raw: Option<&str>) -> Result<&'static str, String> {
+    let v = raw.unwrap_or(DEFAULT_KIND).trim();
+    match v {
+        "skill" => Ok("skill"),
+        "agent" => Ok("agent"),
+        "command" => Ok("command"),
+        other => Err(format!(
+            "kind must be one of {VALID_KINDS:?}, got `{other}`"
+        )),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // JSON-RPC envelope
@@ -155,9 +178,11 @@ fn tools_list(id: Option<Value>) -> JsonRpcResponse {
                 {
                     "name": "search_skills",
                     "description":
-                        "Search the team skill catalog. Returns matching skill slugs, \
-                         versions, and descriptions. Use this to find a reusable team \
-                         skill before re-deriving a pattern from scratch.",
+                        "Search the team catalog for skills, agents, or commands. \
+                         Returns matching slugs, versions, and descriptions. Use \
+                         this to find a reusable team artefact before re-deriving \
+                         a pattern from scratch. Pass `kind` to switch surfaces \
+                         (defaults to `skill`).",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -179,6 +204,12 @@ fn tools_list(id: Option<Value>) -> JsonRpcResponse {
                                 "minimum": 1,
                                 "maximum": 50,
                                 "description": "Maximum results returned. Default 10."
+                            },
+                            "kind": {
+                                "type": "string",
+                                "enum": ["skill", "agent", "command"],
+                                "default": "skill",
+                                "description": "Catalog surface to search. `skill` (default), `agent`, or `command`."
                             }
                         },
                         "additionalProperties": false
@@ -187,15 +218,23 @@ fn tools_list(id: Option<Value>) -> JsonRpcResponse {
                 {
                     "name": "get_skill",
                     "description":
-                        "Fetch a skill's rendered SKILL.md (frontmatter + body). \
-                         Use after `search_skills` to read the full skill contents.",
+                        "Fetch a catalog item's rendered SKILL.md (frontmatter + \
+                         body). Use after `search_skills` to read the full \
+                         contents. Pass `kind` to fetch agents or commands; \
+                         defaults to `skill`.",
                     "inputSchema": {
                         "type": "object",
                         "required": ["slug"],
                         "properties": {
                             "slug": {
                                 "type": "string",
-                                "description": "Skill slug — exact match, no globbing."
+                                "description": "Catalog slug — exact match, no globbing."
+                            },
+                            "kind": {
+                                "type": "string",
+                                "enum": ["skill", "agent", "command"],
+                                "default": "skill",
+                                "description": "Catalog surface to fetch from. `skill` (default), `agent`, or `command`."
                             }
                         },
                         "additionalProperties": false
@@ -224,7 +263,9 @@ async fn tools_call(
     match name {
         "search_skills" => match call_search(state, caller, args).await {
             Ok(v) => JsonRpcResponse::ok(id, v),
-            Err(e) => JsonRpcResponse::err(id, INTERNAL_ERROR, e),
+            Err(ToolError::NotFound(msg)) => tool_error_result(id, &msg),
+            Err(ToolError::Invalid(msg)) => JsonRpcResponse::err(id, INVALID_PARAMS, msg),
+            Err(ToolError::Internal(msg)) => JsonRpcResponse::err(id, INTERNAL_ERROR, msg),
         },
         "get_skill" => match call_get_skill(state, caller, args).await {
             Ok(v) => JsonRpcResponse::ok(id, v),
@@ -265,6 +306,10 @@ struct SearchArgs {
     semantic: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
+    /// Catalog surface to search. Defaults to `skill` so existing
+    /// MCP clients that omit the field keep their behaviour.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(sqlx::FromRow, Serialize)]
@@ -280,11 +325,16 @@ struct SearchRow {
     created_at: DateTime<Utc>,
 }
 
-async fn call_search(state: &AppState, caller: &AuthedCaller, args: Value) -> Result<Value, String> {
+async fn call_search(
+    state: &AppState,
+    caller: &AuthedCaller,
+    args: Value,
+) -> Result<Value, ToolError> {
     let args: SearchArgs = serde_json::from_value(args)
-        .map_err(|e| format!("invalid arguments: {e}"))?;
+        .map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))?;
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let tag_list: Vec<String> = args.tags.unwrap_or_default();
+    let kind = resolve_kind(args.kind.as_deref()).map_err(ToolError::Invalid)?;
 
     let rows: Vec<SearchRow> = if let Some(query_text) =
         args.semantic.as_deref().map(str::trim).filter(|s| !s.is_empty())
@@ -293,22 +343,20 @@ async fn call_search(state: &AppState, caller: &AuthedCaller, args: Value) -> Re
         let embedding = state
             .embedder()
             .embed(query_text)
-            .map_err(|e| format!("embedder error: {e}"))?;
+            .map_err(|e| ToolError::Internal(format!("embedder error: {e}")))?;
         let Some(v) = embedding else {
-            return Err(
+            return Err(ToolError::Invalid(
                 "semantic search is not enabled on this server (no embedder configured)".into(),
-            );
+            ));
         };
         let lit = crate::embedding::vector_to_pg_literal(&v);
-        // MCP search is skills-only for v1; agents/commands surface in the
-        // portal but aren't yet exposed to Claude through MCP.
         sqlx::query_as(
             "WITH latest AS ( \
                SELECT DISTINCT ON (slug) \
                  slug, version, description, when_to_use, tags, created_at, description_embedding \
                FROM skills \
                WHERE tenant_id = $1 \
-                 AND kind = 'skill' \
+                 AND kind = $5 \
                  AND status = 'published' \
                  AND ($2::text[] = '{}' OR tags @> $2) \
                  AND description_embedding IS NOT NULL \
@@ -325,9 +373,9 @@ async fn call_search(state: &AppState, caller: &AuthedCaller, args: Value) -> Re
         .bind(&tag_list)
         .bind(lit)
         .bind(limit)
+        .bind(kind)
         .fetch_all(state.db())
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
     } else {
         let needle = args.query.as_deref().map(|s| format!("%{s}%"));
         sqlx::query_as(
@@ -336,7 +384,7 @@ async fn call_search(state: &AppState, caller: &AuthedCaller, args: Value) -> Re
                 NULL::real AS similarity, created_at \
              FROM skills \
              WHERE tenant_id = $1 \
-               AND kind = 'skill' \
+               AND kind = $5 \
                AND status = 'published' \
                AND ($2::text IS NULL OR description ILIKE $2 OR slug ILIKE $2) \
                AND ($3::text[] = '{}' OR tags @> $3) \
@@ -347,9 +395,9 @@ async fn call_search(state: &AppState, caller: &AuthedCaller, args: Value) -> Re
         .bind(needle)
         .bind(&tag_list)
         .bind(limit)
+        .bind(kind)
         .fetch_all(state.db())
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
     };
 
     let text = render_search_text(&rows);
@@ -388,6 +436,10 @@ fn render_search_text(rows: &[SearchRow]) -> String {
 #[derive(Deserialize)]
 struct GetSkillArgs {
     slug: String,
+    /// Catalog surface to fetch from. Defaults to `skill` so existing
+    /// MCP clients that only pass `slug` keep their behaviour.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 async fn call_get_skill(
@@ -397,19 +449,21 @@ async fn call_get_skill(
 ) -> Result<Value, ToolError> {
     let args: GetSkillArgs = serde_json::from_value(args)
         .map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))?;
+    let kind = resolve_kind(args.kind.as_deref()).map_err(ToolError::Invalid)?;
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT bundle_uri FROM skills \
-         WHERE tenant_id = $1 AND slug = $2 AND kind = 'skill' AND status = 'published' \
+         WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(caller.tenant.tenant_id)
     .bind(&args.slug)
+    .bind(kind)
     .fetch_optional(state.db())
     .await?;
     let Some((key,)) = row else {
         return Err(ToolError::NotFound(format!(
-            "no published skill `{}` in tenant `{}`",
-            args.slug, caller.tenant.tenant_slug
+            "no published {} `{}` in tenant `{}`",
+            kind, args.slug, caller.tenant.tenant_slug
         )));
     };
 
@@ -487,6 +541,35 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"search_skills"));
         assert!(names.contains(&"get_skill"));
+    }
+
+    #[test]
+    fn tools_list_advertises_kind_on_both_tools() {
+        let r = tools_list(Some(serde_json::json!(2)));
+        let v = r.result.unwrap();
+        let tools = v["tools"].as_array().unwrap();
+        for t in tools {
+            let kind_schema = &t["inputSchema"]["properties"]["kind"];
+            assert!(
+                kind_schema.is_object(),
+                "tool `{}` missing kind property",
+                t["name"]
+            );
+            assert_eq!(kind_schema["default"], "skill");
+            let variants = kind_schema["enum"].as_array().unwrap();
+            let vs: Vec<&str> = variants.iter().map(|v| v.as_str().unwrap()).collect();
+            assert_eq!(vs, vec!["skill", "agent", "command"]);
+        }
+    }
+
+    #[test]
+    fn resolve_kind_defaults_and_validates() {
+        assert_eq!(resolve_kind(None).unwrap(), "skill");
+        assert_eq!(resolve_kind(Some("skill")).unwrap(), "skill");
+        assert_eq!(resolve_kind(Some("agent")).unwrap(), "agent");
+        assert_eq!(resolve_kind(Some("command")).unwrap(), "command");
+        assert!(resolve_kind(Some("plugin")).is_err());
+        assert!(resolve_kind(Some("")).is_err());
     }
 
     #[test]

@@ -47,6 +47,11 @@ pub struct PublishMetadata<'a> {
     pub when_to_use: Option<&'a str>,
     #[serde(default)]
     pub tags: &'a [String],
+    /// Catalog kind: `skill` (default), `agent`, or `command`. Omitted
+    /// from the wire payload when `None` so the server keeps its
+    /// pre-Phase-5 default-skill behaviour.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
