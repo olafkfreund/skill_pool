@@ -27,6 +27,7 @@ mod saml;
 mod scim;
 mod session_policy;
 mod skills;
+mod sso_admin;
 mod stack_mappings;
 mod theme;
 mod usage;
@@ -125,6 +126,16 @@ pub fn router(state: AppState) -> Router {
             "/v1/tenant/email-branding/test",
             post(email_branding::test_config),
         )
+        // Admin SSO config surface (#4) — separate from the runtime
+        // `/v1/auth/oidc/*` and `/v1/auth/saml/*` endpoints, which are
+        // unauthenticated browser-redirect flows. This surface is
+        // tenant-admin JSON CRUD for the SvelteKit admin portal.
+        .route(
+            "/v1/tenant/sso",
+            get(sso_admin::get_config).delete(sso_admin::delete_config),
+        )
+        .route("/v1/tenant/sso/oidc", axum::routing::put(sso_admin::put_oidc))
+        .route("/v1/tenant/sso/saml", axum::routing::put(sso_admin::put_saml))
         // SIEM export (Phase 5) — fan out audit_events to Splunk HEC,
         // Datadog Logs, or any generic JSON POST receiver.
         .route(
