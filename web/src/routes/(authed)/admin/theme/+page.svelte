@@ -205,6 +205,7 @@
       name="logo"
       accept="image/svg+xml,image/png,image/jpeg,image/webp"
       required
+      aria-label="Choose logo file"
       class="text-xs"
     />
     <button
@@ -266,6 +267,7 @@
       name="favicon"
       accept="image/svg+xml,image/png,image/jpeg,image/webp,image/x-icon,image/vnd.microsoft.icon,.ico"
       required
+      aria-label="Choose favicon file"
       class="text-xs"
     />
     <button
