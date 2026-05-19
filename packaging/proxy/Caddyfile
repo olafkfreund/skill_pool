@@ -1,4 +1,5 @@
-# Caddyfile — wildcard certs + tenant subdomain routing
+# Caddyfile — wildcard certs + tenant subdomain routing + on-demand
+# per-tenant custom domains.
 #
 # Caddy is the recommended default: zero-config TLS via Let's Encrypt,
 # wildcard cert support via DNS challenge, automatic redirect from :80,
@@ -14,10 +15,23 @@
 #   3. Symlink into /etc/caddy/Caddyfile (or include from your existing one).
 #   4. caddy validate --config /etc/caddy/Caddyfile
 #   5. systemctl reload caddy
+#
+# Per-tenant custom domains: when an Enterprise tenant claims
+# `skills.acme.com` via /v1/tenant/custom-domains, Caddy's
+# `on_demand_tls.ask` hook below gates ACME issuance on the server's
+# `cert-ok` allow-list. See `docs/enterprise/custom-domains.md`.
 
 {
     email ops@example.com
     # acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}    # uncomment for wildcard certs
+
+    # `ask` is called BEFORE Caddy attempts to issue a cert. 200 = go
+    # ahead, anything else = refuse. This prevents random hostnames
+    # pointed at us from triggering Let's Encrypt rate-limit-eating
+    # cert requests.
+    on_demand_tls {
+        ask http://127.0.0.1:8080/v1/tenant/custom-domains/{http.request.host}/cert-ok
+    }
 }
 
 # Apex — landing/marketing page or registry-management portal.
@@ -58,6 +72,40 @@ skill-pool.example.com {
 
     log {
         output file /var/log/caddy/skill-pool-tenants.access.log
+        format json
+    }
+}
+
+# Catch-all for per-tenant custom domains (Phase 5 / Enterprise).
+#
+# A tenant admin claims `skills.acme.com` via the API, points the DNS
+# CNAME at this host, then any incoming request lands here. The
+# `tls on_demand` line tells Caddy to fetch a cert on first connect —
+# but only after the global `on_demand_tls.ask` hook (configured at
+# the top of this file) has returned 200 from the registry's
+# `/v1/tenant/custom-domains/{host}/cert-ok` endpoint.
+#
+# Unknown hostnames pointed at our IP get a TLS handshake error from
+# Caddy because `ask` returns 404 → no cert issuance → no SNI match.
+# This is the desired behaviour: random hosts don't burn through our
+# Let's Encrypt rate limit.
+:443 {
+    tls {
+        on_demand
+    }
+
+    @api path /v1/* /metrics
+    reverse_proxy @api 127.0.0.1:8080
+
+    reverse_proxy 127.0.0.1:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    log {
+        output file /var/log/caddy/skill-pool-custom-domains.access.log
         format json
     }
 }

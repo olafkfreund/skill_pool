@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::config::{Config, TenancyMode};
@@ -12,6 +13,13 @@ use crate::email_branding::TransportCache as EmailTransportCache;
 use crate::embedding::{self, SharedEmbedder};
 use crate::storage::Storage;
 use crate::tenant::TenantCtx;
+
+/// How often the background task refreshes the host→tenant cache from
+/// the DB. 60s is a deliberate tradeoff: short enough that an operator
+/// activating a verified domain sees traffic flow within a minute, long
+/// enough that the cache load query (a single indexed SELECT) is
+/// effectively free per process.
+pub(crate) const CUSTOM_DOMAIN_REFRESH_SECS: u64 = 60;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -38,6 +46,16 @@ struct Inner {
     /// story as `tenant_storage`: never automatic; admin endpoints
     /// invalidate after a PUT/DELETE.
     pub email_transport: Arc<EmailTransportCache>,
+    /// Hostname → tenant_id cache for `tenant_custom_domains` rows whose
+    /// status is `verified` or `active`. Populated at startup and
+    /// refreshed every `CUSTOM_DOMAIN_REFRESH_SECS` seconds by a
+    /// background task; mutating endpoints also call `bump_custom_domains`
+    /// to force an immediate reload so admins see their changes flow
+    /// without waiting out the TTL.
+    ///
+    /// `RwLock` because the read path is per-request (every API call
+    /// after a cache hit) and the write path is the periodic refresher.
+    pub custom_domains: RwLock<HashMap<String, Uuid>>,
     pub embedder: SharedEmbedder,
     #[allow(dead_code)]
     pub origin_pattern: String,
@@ -79,7 +97,7 @@ impl AppState {
         let storage = Storage::from_uri(&cfg.storage_uri)?;
         let embedder = embedding::from_config(&cfg.embedding)?;
 
-        Ok(Self {
+        let state = Self {
             inner: Arc::new(Inner {
                 db,
                 db_read,
@@ -87,10 +105,19 @@ impl AppState {
                 storage,
                 tenant_storage: Mutex::new(HashMap::new()),
                 email_transport: Arc::new(EmailTransportCache::new()),
+                custom_domains: RwLock::new(HashMap::new()),
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
             }),
-        })
+        };
+        // Warm the cache once synchronously so the first request after
+        // startup doesn't 401 on a custom-domain host. Failure here is
+        // not fatal: the cache stays empty and host-based requests fall
+        // back to subdomain resolution.
+        if let Err(e) = state.refresh_custom_domains().await {
+            tracing::warn!(error = ?e, "initial custom-domain cache load failed; will retry");
+        }
+        Ok(state)
     }
 
     /// Build an `AppState` with an explicit embedder. Used by tests that
@@ -100,7 +127,7 @@ impl AppState {
         let db = connect_pool(&cfg.database_url, cfg.db_pool_size).await?;
         let db_read = maybe_read_pool(cfg).await;
         let storage = Storage::from_uri(&cfg.storage_uri)?;
-        Ok(Self {
+        let state = Self {
             inner: Arc::new(Inner {
                 db,
                 db_read,
@@ -108,10 +135,15 @@ impl AppState {
                 storage,
                 tenant_storage: Mutex::new(HashMap::new()),
                 email_transport: Arc::new(EmailTransportCache::new()),
+                custom_domains: RwLock::new(HashMap::new()),
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
             }),
-        })
+        };
+        if let Err(e) = state.refresh_custom_domains().await {
+            tracing::warn!(error = ?e, "initial custom-domain cache load failed; will retry");
+        }
+        Ok(state)
     }
 
     pub fn db(&self) -> &PgPool {
@@ -210,5 +242,57 @@ impl AppState {
     #[allow(dead_code)]
     pub fn origin_pattern(&self) -> &str {
         &self.inner.origin_pattern
+    }
+
+    // ------------------------------------------------------------------
+    // Custom-domain cache
+    // ------------------------------------------------------------------
+
+    /// Resolve a request `Host` value (lower-cased, port stripped) to a
+    /// tenant_id via the in-process cache. Returns `None` when the host
+    /// is not a known custom domain — callers fall back to the
+    /// subdomain/header logic in `slug_from_request`.
+    pub async fn custom_domain_tenant(&self, host: &str) -> Option<Uuid> {
+        let cache = self.inner.custom_domains.read().await;
+        cache.get(host).copied()
+    }
+
+    /// Replace the cache contents with the current set of verified/active
+    /// rows. Called at startup, on every mutating custom-domain endpoint
+    /// (so admins see flips immediately), and on a background interval.
+    pub async fn refresh_custom_domains(&self) -> Result<()> {
+        let rows: Vec<(String, Uuid)> = sqlx::query_as(
+            "SELECT hostname, tenant_id \
+             FROM tenant_custom_domains \
+             WHERE status IN ('verified', 'active')",
+        )
+        .fetch_all(&self.inner.db)
+        .await?;
+        let mut next = HashMap::with_capacity(rows.len());
+        for (host, tenant_id) in rows {
+            next.insert(host.to_lowercase(), tenant_id);
+        }
+        let mut cache = self.inner.custom_domains.write().await;
+        *cache = next;
+        Ok(())
+    }
+
+    /// Spawn a detached task that calls `refresh_custom_domains` on a
+    /// fixed interval. Returned by `new` callers that want background
+    /// refresh; tests skip it (a one-shot warm is plenty there).
+    pub fn spawn_custom_domain_refresher(&self) -> tokio::task::JoinHandle<()> {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(CUSTOM_DOMAIN_REFRESH_SECS));
+            // The first tick fires immediately, but we already warmed in
+            // `new`; skip it to avoid a double-load at startup.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                if let Err(e) = state.refresh_custom_domains().await {
+                    tracing::warn!(error = ?e, "custom-domain cache refresh failed");
+                }
+            }
+        })
     }
 }

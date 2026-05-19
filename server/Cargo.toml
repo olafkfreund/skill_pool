@@ -86,6 +86,15 @@ lettre = { version = "0.11", default-features = false, features = [
     "hostname",
 ] }
 
+# DNS TXT resolver for custom-domain verification (`_skill-pool-verify.<host>`).
+# `tokio-runtime` aligns it with the rest of the async runtime; `system-config`
+# reads `/etc/resolv.conf` so it Just Works on a Linux host. No-default-features
+# keeps OpenSSL out of the dep tree.
+hickory-resolver = { version = "0.24", default-features = false, features = [
+    "tokio-runtime",
+    "system-config",
+] }
+
 # Prometheus exposition format. The `process` feature adds OS-level metrics
 # (CPU, memory, FDs) which are useful but pull in extra deps; keep it optional
 # so the default build stays lean. `protobuf` is not needed — we serve the
