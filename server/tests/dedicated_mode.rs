@@ -87,6 +87,7 @@ async fn dedicated_mode_pins_tenant_without_header() -> Result<()> {
         },
         database_url: db_url,
         database_read_url: None,
+        redis_url: None,
         db_pool_size: 20,
         storage_uri,
         origin_pattern: "https://acme-skill-pool.example.test".into(),

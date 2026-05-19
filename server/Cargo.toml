@@ -49,6 +49,18 @@ sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
 
+# Redis client for the read-through caches (theme + per-request auth)
+# and the rate-limiter shipped in parallel. `connection-manager` gives
+# us a single shared client with auto-reconnect; `tokio-rustls-comp`
+# pulls in `tls-rustls` + the tokio adapter so `rediss://` URLs work
+# without OpenSSL (consistent with sqlx + reqwest above).
+redis = { version = "0.27", default-features = false, features = [
+    "tokio-comp",
+    "tokio-rustls-comp",
+    "connection-manager",
+    "tls-rustls-webpki-roots",
+] }
+
 # AES-256-GCM for at-rest encryption of per-tenant SMTP passwords
 # (tenant_email_branding.smtp_password_enc). Key from env
 # SKILL_POOL_EMAIL_SECRET_KEY (32 raw bytes, hex-encoded).
@@ -131,7 +143,7 @@ otlp = [
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
 testcontainers = "0.23"
-testcontainers-modules = { version = "0.11", features = ["postgres"] }
+testcontainers-modules = { version = "0.11", features = ["postgres", "redis"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full", "test-util"] }
 walkdir = "2"

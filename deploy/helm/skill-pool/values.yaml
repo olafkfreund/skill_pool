@@ -227,6 +227,28 @@ ingress:
   extraTls: []
 
 # ----------------------------------------------------------------------
+# Redis (optional)
+# ----------------------------------------------------------------------
+# When enabled, the server-side read-through cache (theme + per-request
+# auth lookup) and the rate limiter use Redis. Disabled by default — the
+# server runs without Redis (in-process caches only), so leaving this off
+# is fine for single-node / smallest deployments.
+#
+# The secret named here MUST contain a single key `SKILL_POOL_REDIS_URL`
+# with the full URL (`redis://...` or `rediss://...` for TLS). The AWS
+# Terraform stack writes this URL to Secrets Manager — pull it through to
+# k8s with `kubectl create secret` (see docs/deploy/aws.md §5) or
+# External Secrets Operator.
+redis:
+  enabled: false
+  # Recommended: reference an out-of-band Secret. Keep the URL out of
+  # values files committed to git.
+  existingSecret: ""
+  # Optional inline URL. NOT recommended for prod — anyone with read
+  # access to the rendered manifests can see your AUTH token.
+  url: ""
+
+# ----------------------------------------------------------------------
 # AWS-specific (optional)
 # ----------------------------------------------------------------------
 # IRSA: when irsa.roleArn is set, the chart adds the

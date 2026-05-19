@@ -43,6 +43,7 @@ async fn per_tenant_session_policy_round_trip() -> Result<()> {
         tenancy_mode: config::TenancyModeRaw::default(),
         database_url: db_url,
         database_read_url: None,
+        redis_url: None,
         db_pool_size: 20,
         storage_uri,
         origin_pattern: "http://{tenant}.localhost".into(),

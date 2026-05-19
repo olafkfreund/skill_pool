@@ -84,6 +84,20 @@ variable "rds_postgres_version" {
   default     = "16.3"
 }
 
+# --- ElastiCache ---------------------------------------------------------
+
+variable "elasticache_enabled" {
+  description = "Provision the ElastiCache Redis cluster (read-through caches + rate limits). The server falls back gracefully when SKILL_POOL_REDIS_URL is unset, so this can be off for the cheapest dev environments."
+  type        = bool
+  default     = true
+}
+
+variable "elasticache_node_type" {
+  description = "Redis node instance type. `cache.t4g.micro` ≈ $11/mo is the lean baseline; bump to `cache.t4g.small` (~$22/mo) for steady prod load. Cluster mode is disabled by default — see elasticache.tf for the HA upgrade path."
+  type        = string
+  default     = "cache.t4g.micro"
+}
+
 # --- DNS / TLS -----------------------------------------------------------
 
 variable "route53_zone_name" {

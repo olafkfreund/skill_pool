@@ -48,6 +48,15 @@ pub struct Config {
     /// pgvector or HuggingFace network.
     #[serde(default)]
     pub embedding: EmbeddingConfig,
+
+    /// Optional Redis connection URL used by the server-side
+    /// read-through caches (theme / per-request auth) and the rate
+    /// limiter. Accepts both `redis://` and `rediss://` (TLS). Unset →
+    /// caches are no-ops and every request goes straight to Postgres.
+    /// Connection failure at startup is logged + treated as "no Redis"
+    /// rather than a hard error — see `state::AppState::new`.
+    #[serde(default)]
+    pub redis_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

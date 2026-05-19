@@ -77,6 +77,17 @@ spec:
             {{- with .Values.server.envFrom }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- /*
+              Optional Redis URL secret. When `redis.enabled` is true and
+              `redis.existingSecret` names an out-of-band Secret, mount it
+              via envFrom so SKILL_POOL_REDIS_URL flows through unchanged.
+              When `redis.url` is set instead, it lands in the ConfigMap
+              above (which is the default-deny path — keep secrets out).
+            */}}
+            {{- if and .Values.redis.enabled .Values.redis.existingSecret }}
+            - secretRef:
+                name: {{ .Values.redis.existingSecret }}
+            {{- end }}
           {{- with .Values.server.extraEnv }}
           env:
             {{- toYaml . | nindent 12 }}

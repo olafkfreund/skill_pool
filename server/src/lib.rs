@@ -8,6 +8,7 @@ pub mod admin;
 pub mod audit;
 pub mod auth;
 pub mod bundle;
+pub mod cache;
 pub mod config;
 pub mod css_sanitize;
 pub mod email_branding;

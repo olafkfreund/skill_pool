@@ -27,12 +27,36 @@ use std::sync::OnceLock;
 
 use crate::audit;
 use crate::auth::AuthedCaller;
+use crate::cache;
 use crate::css_sanitize::{self, MAX_CSS_BYTES};
 use crate::error::{AppError, AppResult};
 use crate::logo_sanitize::{self, LogoKind, MAX_LOGO_BYTES};
 use crate::state::AppState;
 use crate::storage::Storage;
 use crate::tenant::TenantCtx;
+
+/// Redis cache TTL for `GET /v1/theme` payloads, in seconds.
+///
+/// 5 minutes. Themes are touched by admins, not end users; a longer TTL
+/// would mean a fresh "save" looks like it didn't take effect for the
+/// duration. We also invalidate explicitly on every mutating endpoint
+/// (PUT /v1/theme, logo/favicon/custom-css upload + delete) so the TTL
+/// is really a "freshness ceiling for the case where someone updated
+/// the tenant_theme row out-of-band" — bytes are dirty for at most
+/// `THEME_CACHE_TTL_SECS` seconds.
+const THEME_CACHE_TTL_SECS: usize = 300;
+
+fn theme_cache_key(tenant_id: uuid::Uuid) -> String {
+    format!("theme:v1:{tenant_id}")
+}
+
+/// Invalidate the theme cache for a tenant. Best-effort: errors are
+/// logged inside the cache layer, never propagated.
+async fn invalidate_theme_cache(state: &AppState, tenant_id: uuid::Uuid) {
+    if let Some(redis) = state.redis() {
+        let _ = cache::invalidate(redis, &theme_cache_key(tenant_id)).await;
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Theme {
@@ -121,6 +145,33 @@ impl Theme {
 }
 
 pub async fn get_theme(State(state): State<AppState>, tenant: TenantCtx) -> AppResult<Json<Theme>> {
+    // Hot path: when Redis is available, wrap the DB lookup with a
+    // read-through cache keyed by tenant_id. Misses fall through to the
+    // exact same SELECT we'd otherwise run; the cache write-back is
+    // best-effort inside `cached_json`.
+    if let Some(redis) = state.redis() {
+        let key = theme_cache_key(tenant.tenant_id);
+        let db = state.db().clone();
+        let tenant_id = tenant.tenant_id;
+        let tenant_slug = tenant.tenant_slug.clone();
+        let theme = cache::cached_json(redis, &key, THEME_CACHE_TTL_SECS, move || async move {
+            let row: Option<ThemeRow> = sqlx::query_as(
+                "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
+                        border, radius, logo_uri, footer_branding, font_family \
+                 FROM tenant_theme WHERE tenant_id = $1",
+            )
+            .bind(tenant_id)
+            .fetch_optional(&db)
+            .await?;
+            Ok(row
+                .map(Theme::from)
+                .unwrap_or_else(|| Theme::default_for(&tenant_slug)))
+        })
+        .await
+        .map_err(AppError::Anyhow)?;
+        return Ok(Json(theme));
+    }
+
     let row: Option<ThemeRow> = sqlx::query_as(
         "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
                 border, radius, logo_uri, footer_branding, font_family \
@@ -202,6 +253,7 @@ pub async fn put_theme(
     )
     .await;
 
+    invalidate_theme_cache(&state, caller.tenant.tenant_id).await;
     Ok((StatusCode::OK, Json(body)))
 }
 
@@ -465,6 +517,7 @@ pub async fn post_logo(
     )
     .await;
 
+    invalidate_theme_cache(&state, caller.tenant.tenant_id).await;
     // Return the freshly-updated theme so the UI can re-render.
     let theme = read_theme(state.db(), &caller.tenant).await?;
     Ok((StatusCode::OK, Json(theme)))
@@ -522,6 +575,7 @@ pub async fn delete_logo(
     )
     .await;
 
+    invalidate_theme_cache(&state, caller.tenant.tenant_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -692,6 +746,7 @@ pub async fn post_favicon(
     )
     .await;
 
+    invalidate_theme_cache(&state, caller.tenant.tenant_id).await;
     let theme = read_theme(state.db(), &caller.tenant).await?;
     Ok((StatusCode::OK, Json(theme)))
 }
@@ -746,6 +801,7 @@ pub async fn delete_favicon(
     )
     .await;
 
+    invalidate_theme_cache(&state, caller.tenant.tenant_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -930,6 +986,7 @@ pub async fn post_custom_css(
     )
     .await;
 
+    invalidate_theme_cache(&state, caller.tenant.tenant_id).await;
     let theme = read_theme(state.db(), &caller.tenant).await?;
     Ok((StatusCode::OK, Json(theme)))
 }
@@ -985,6 +1042,7 @@ pub async fn delete_custom_css(
     )
     .await;
 
+    invalidate_theme_cache(&state, caller.tenant.tenant_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
