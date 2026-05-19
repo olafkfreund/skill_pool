@@ -134,7 +134,11 @@ enum Cmd {
         stage2_model: Option<String>,
     },
     /// Diagnose: list loaded skills, dangling symlinks, drift.
-    Doctor,
+    Doctor {
+        /// Emit JSON instead of a human-friendly summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Detect the current project's stack from filesystem fingerprints.
     Detect {
         /// Emit JSON instead of a human-friendly summary.
@@ -244,7 +248,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Cmd::Doctor => cmd::doctor::run(&cfg),
+        Cmd::Doctor { json } => cmd::doctor::run(&cfg, json).await,
         Cmd::Detect { json } => cmd::detect::run(json),
         Cmd::Bootstrap {
             yes,

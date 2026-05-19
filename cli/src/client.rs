@@ -69,6 +69,17 @@ pub struct CapturedDraft {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct DecayCandidate {
+    pub slug: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub use_count: i32,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct DepEntry {
     pub slug: String,
     #[serde(default)]
@@ -164,6 +175,25 @@ impl Client {
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("get_deps: {status} — {body}"));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Fetch decay candidates (admin-scoped). Returns an empty vec on 401/403
+    /// so `doctor` can soft-skip when the configured token lacks
+    /// `tenant:admin` scope.
+    pub async fn decay_candidates(&self) -> Result<Vec<DecayCandidate>> {
+        let url = self.base.join("/v1/tenant/skills/decay")?;
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+        {
+            return Ok(vec![]);
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("decay_candidates: {status} — {body}"));
         }
         Ok(resp.json().await?)
     }
