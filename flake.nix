@@ -15,8 +15,14 @@
     nixosModules.skill-pool-capturer = ./nix/modules/skill-pool-capturer.nix;
     # Server (system-scope, single-node deploys + cluster nodes).
     nixosModules.skill-pool-server = ./nix/modules/skill-pool-server.nix;
+    # Project-side declarative manifest module (Phase 3 §B). Lets the
+    # NixOS / Home Manager user pin their `.skill-pool/manifest.toml`
+    # contents from their flake instead of committing the generated TOML.
+    nixosModules.skill-pool = ./nix/modules/skill-pool.nix;
     # Home Manager users import this at the same path; same module shape.
     homeManagerModules.default = ./nix/modules/skill-pool-capturer.nix;
+    homeManagerModules.skill-pool-capturer = ./nix/modules/skill-pool-capturer.nix;
+    homeManagerModules.skill-pool = ./nix/modules/skill-pool.nix;
   } // flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
