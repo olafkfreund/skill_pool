@@ -22,7 +22,7 @@
     "@tailwindcss/vite": "^4.0.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/svelte": "^5.3.1",
-    "@types/node": "^22.10.0",
+    "@types/node": "^25.9.0",
     "@vitest/ui": "^4.1.6",
     "axe-core": "^4.11.4",
     "happy-dom": "^20.9.0",
