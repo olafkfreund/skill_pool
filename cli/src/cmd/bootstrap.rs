@@ -20,7 +20,7 @@ pub async fn run(cfg: &Config, force_detect: bool, assume_yes: bool, dry_run: bo
 
     // 2. Determine stack tags.
     let stack: Vec<String> = if force_detect || mf.project.stack.is_empty() {
-        let d = detect::detect(&project_root);
+        let d = detect::detect_cached(&project_root)?;
         if d.stack.is_empty() {
             println!(
                 "(no stack detected at {}; nothing to bootstrap)",

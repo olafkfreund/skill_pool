@@ -2,9 +2,13 @@ use anyhow::Result;
 
 use crate::detect;
 
-pub fn run(json: bool) -> Result<()> {
+pub fn run(json: bool, no_cache: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let d = detect::detect(&cwd);
+    let d = if no_cache {
+        detect::detect(&cwd)
+    } else {
+        detect::detect_cached(&cwd)?
+    };
 
     if json {
         println!("{}", serde_json::to_string_pretty(&d)?);

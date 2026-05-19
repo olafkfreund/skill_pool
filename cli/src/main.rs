@@ -168,6 +168,12 @@ enum Cmd {
         /// Emit JSON instead of a human-friendly summary.
         #[arg(long)]
         json: bool,
+        /// Ignore the `.skill-pool/detected.json` cache and force a fresh
+        /// fingerprint scan. The cache is normally invalidated automatically
+        /// by mtime changes; use this when you want to verify a stale entry
+        /// or measure raw detection latency.
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Install the direnv helper into ~/.config/direnv/lib so .envrc files
     /// can use `use skill_pool`. Embedded at compile time — no network.
@@ -297,7 +303,7 @@ async fn main() -> Result<()> {
             .await
         }
         Cmd::Doctor { json } => cmd::doctor::run(&cfg, json).await,
-        Cmd::Detect { json } => cmd::detect::run(json),
+        Cmd::Detect { json, no_cache } => cmd::detect::run(json, no_cache),
         Cmd::Bootstrap {
             yes,
             detect,
