@@ -57,6 +57,14 @@ pub fn router(state: AppState) -> Router {
                 .delete(theme::delete_favicon),
         )
         .route("/v1/theme/fonts", get(theme::get_fonts))
+        // Per-tenant custom CSS overlay (#9). POST/DELETE require
+        // `tenant:admin`; the GET is public (matches the rest of the
+        // /v1/theme/* surface) and adds a strict CSP + cache headers.
+        .route(
+            "/v1/theme/custom-css",
+            post(theme::post_custom_css).delete(theme::delete_custom_css),
+        )
+        .route("/v1/theme/custom.css", get(theme::get_custom_css))
         .route(
             "/v1/tenant/session-policy",
             get(session_policy::get_session_policy),

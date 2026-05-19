@@ -346,6 +346,56 @@ export async function deleteFavicon(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+/**
+ * Upload a tenant custom-CSS overlay. The server sanitizes the bytes
+ * (`css_sanitize`) — rejects `@import`, off-site `url()`, `expression()`,
+ * `behavior:`, `javascript:` URIs, HTML-tag-like content, and the literal
+ * `</style>` sequence. 32 KiB cap.
+ *
+ * `css` is the raw stylesheet text (we wrap it into a `Blob` and submit as
+ * multipart so the server's existing extractor pattern keeps working).
+ */
+export async function uploadCustomCss(
+  auth: Auth,
+  css: string,
+): Promise<{ ok: true; theme: ServerTheme } | { ok: false; status: number; error: string }> {
+  const blob = new Blob([css], { type: 'text/css' });
+  const form = new FormData();
+  form.append('file', blob, 'overlay.css');
+
+  const headers = new Headers();
+  headers.set('X-Skill-Pool-Tenant', auth.tenant);
+  if (auth.token) headers.set('Authorization', `Bearer ${auth.token}`);
+
+  const resp = await fetch(`${base()}/v1/theme/custom-css`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+  if (resp.ok) return { ok: true, theme: (await resp.json()) as ServerTheme };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+/** Delete the tenant's custom-CSS overlay. 204 on success. */
+export async function deleteCustomCss(
+  auth: Auth,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', '/v1/theme/custom-css', auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+/**
+ * Fetch the raw CSS bytes for the editor. Returns the text on 200,
+ * `null` on 404 (no overlay), and throws on other failures.
+ */
+export async function fetchCustomCss(auth: Auth): Promise<string | null> {
+  const resp = await call('GET', '/v1/theme/custom.css', auth);
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`fetch custom CSS failed: ${resp.status}`);
+  return await resp.text();
+}
+
 export interface PublishMetadata {
   slug: string;
   version: string;

@@ -31,6 +31,13 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
     <link rel="stylesheet" href={googleFontUrl} />
   {/if}
+  <!-- Tenant-uploaded CSS overlay (#9). Pulled from the proxy route so the
+       API server can resolve the tenant by host. The endpoint serves bytes
+       with `Content-Security-Policy: style-src 'self'` as defence-in-depth
+       under the sanitizer. Cached for 5 minutes upstream. -->
+  {#if data.hasCustomCss}
+    <link rel="stylesheet" href="/theme/custom.css" />
+  {/if}
 </svelte:head>
 
 {@render children?.()}

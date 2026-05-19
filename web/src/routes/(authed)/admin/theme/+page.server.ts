@@ -1,12 +1,15 @@
 import { fail } from '@sveltejs/kit';
 import {
+  deleteCustomCss,
   deleteFavicon,
   deleteLogo,
+  fetchCustomCss,
   fromClientTheme,
   getFonts,
   getTheme,
   putTheme,
   toClientTheme,
+  uploadCustomCss,
   uploadFavicon,
   uploadLogo,
 } from '$lib/server/api';
@@ -42,6 +45,9 @@ const MAX_LOGO_BYTES = 256 * 1024;
 /** Server-side favicon cap is 64 KiB; mirror it for an early friendly error. */
 const MAX_FAVICON_BYTES = 64 * 1024;
 
+/** Server-side custom-CSS cap is 32 KiB; mirror it for early validation. */
+const MAX_CUSTOM_CSS_BYTES = 32 * 1024;
+
 /**
  * Fallback allowlist used when /v1/theme/fonts is unreachable at load. Kept
  * in sync with `ALLOWED_FONTS` in `server/src/routes/theme.rs` — the server
@@ -76,7 +82,16 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
   // honest about which families are accepted. Fall back to a hard-coded
   // mirror when the server is unreachable.
   const fonts = (await getFonts(auth)) ?? FALLBACK_FONT_ALLOWLIST;
-  return { theme, hasLogo, hasFavicon, fonts };
+  // Pull the existing CSS overlay (if any) so the textarea is pre-populated.
+  // The API returns the raw bytes — we surface them as `customCss` for the
+  // editor; empty string means "no overlay set yet".
+  let customCss = '';
+  try {
+    customCss = (await fetchCustomCss(auth)) ?? '';
+  } catch {
+    // best-effort: render an empty editor rather than blocking page load
+  }
+  return { theme, hasLogo, hasFavicon, fonts, customCss };
 };
 
 async function checkAssetExists(
@@ -235,5 +250,44 @@ export const actions: Actions = {
       return fail(result.status, { error: result.error || 'favicon delete failed' });
     }
     return { removedFavicon: true, hasFavicon: false };
+  },
+
+  /**
+   * Save the custom-CSS overlay. The textarea posts as a regular form field
+   * (`customCss`) — we wrap it into a `text/css` blob and forward through
+   * the API, which runs the deny-rule sanitizer before persisting.
+   */
+  customCss: async ({ request, locals, cookies }) => {
+    const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
+    const data = await request.formData();
+    const css = String(data.get('customCss') ?? '');
+    if (css.trim().length === 0) {
+      return fail(400, {
+        error: 'paste a CSS overlay or use Remove to clear the existing one',
+      });
+    }
+    // The server measures bytes after UTF-8 encoding; mirror that here so a
+    // pasted payload that's borderline isn't surprising. `Blob.size` returns
+    // the byte count of the encoded blob, which is what the API will see.
+    const byteLen = new Blob([css]).size;
+    if (byteLen > MAX_CUSTOM_CSS_BYTES) {
+      return fail(400, {
+        error: `custom CSS is ${byteLen} bytes; the limit is ${MAX_CUSTOM_CSS_BYTES} bytes (32 KiB)`,
+      });
+    }
+    const result = await uploadCustomCss(auth, css);
+    if (!result.ok) {
+      return fail(result.status, { error: result.error || 'custom CSS upload failed' });
+    }
+    return { savedCustomCss: true, customCss: css };
+  },
+
+  removeCustomCss: async ({ locals, cookies }) => {
+    const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
+    const result = await deleteCustomCss(auth);
+    if (!result.ok) {
+      return fail(result.status, { error: result.error || 'custom CSS delete failed' });
+    }
+    return { removedCustomCss: true, customCss: '' };
   },
 };

@@ -27,6 +27,7 @@ use std::sync::OnceLock;
 
 use crate::audit;
 use crate::auth::AuthedCaller;
+use crate::css_sanitize::{self, MAX_CSS_BYTES};
 use crate::error::{AppError, AppResult};
 use crate::logo_sanitize::{self, LogoKind, MAX_LOGO_BYTES};
 use crate::state::AppState;
@@ -836,6 +837,221 @@ const _: () = {
     }
     let _ = _exhaustive;
 };
+
+// --- custom CSS upload / serve --------------------------------------------
+
+/// `POST /v1/theme/custom-css` — multipart upload, single field `file`.
+///
+/// The handler is structurally identical to `post_logo`: read the bytes from
+/// multipart, run the sanitizer (which is the only thing standing between an
+/// admin token and persisted CSS injection), persist via `storage_for`, and
+/// update the `tenant_theme` row.
+///
+/// The sanitizer rejects `@import`, `url()` pointing off-site, `expression()`,
+/// `behavior:`, `javascript:` URIs, HTML-tag-like bytes, and the literal
+/// `</style>` sequence — see `css_sanitize.rs` for the full list. The GET
+/// endpoint additionally pins `Content-Security-Policy: style-src 'self'`
+/// as defence in depth.
+pub async fn post_custom_css(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    mut multipart: Multipart,
+) -> AppResult<(StatusCode, Json<Theme>)> {
+    require_scope(&caller.scope, "tenant:admin")?;
+
+    let mut bytes: Option<Bytes> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("multipart: {e}")))?
+    {
+        if field.name() == Some("file") {
+            let body = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(format!("file: {e}")))?;
+            bytes = Some(body);
+        }
+    }
+
+    let raw = bytes.ok_or_else(|| AppError::BadRequest("missing `file` field".into()))?;
+
+    if raw.len() > MAX_CSS_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "custom CSS too large: {} bytes (max {})",
+            raw.len(),
+            MAX_CSS_BYTES
+        )));
+    }
+
+    let sanitized = css_sanitize::sanitize(raw.as_ref())
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    let key = Storage::custom_css_key(caller.tenant.tenant_id);
+    let storage = state
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    storage
+        .put_object(&key, Bytes::from(sanitized.bytes.clone()))
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    let size: i32 = sanitized.bytes.len() as i32;
+    sqlx::query(
+        "INSERT INTO tenant_theme (tenant_id, brand_name, custom_css_storage_key, custom_css_bytes_size) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (tenant_id) DO UPDATE SET \
+            custom_css_storage_key = EXCLUDED.custom_css_storage_key, \
+            custom_css_bytes_size  = EXCLUDED.custom_css_bytes_size",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(&caller.tenant.tenant_slug)
+    .bind(&key)
+    .bind(size)
+    .execute(state.db())
+    .await?;
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: None,
+            actor_token: Some(caller.token_id),
+            action: "theme.custom_css.upload",
+            target_kind: "theme",
+            target_id: None,
+            metadata: serde_json::json!({ "size_bytes": size }),
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    let theme = read_theme(state.db(), &caller.tenant).await?;
+    Ok((StatusCode::OK, Json(theme)))
+}
+
+/// `DELETE /v1/theme/custom-css` — clear the stored overlay + delete the
+/// storage object. 204 on success.
+pub async fn delete_custom_css(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+) -> AppResult<StatusCode> {
+    require_scope(&caller.scope, "tenant:admin")?;
+
+    let prev: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT custom_css_storage_key FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .fetch_optional(state.db())
+    .await?;
+
+    if let Some((Some(key),)) = prev {
+        let storage = state
+            .storage_for(&caller.tenant)
+            .await
+            .map_err(AppError::Anyhow)?;
+        storage
+            .delete_object(&key)
+            .await
+            .map_err(AppError::Anyhow)?;
+    }
+
+    sqlx::query(
+        "UPDATE tenant_theme \
+            SET custom_css_storage_key = NULL, custom_css_bytes_size = NULL \
+          WHERE tenant_id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .execute(state.db())
+    .await?;
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: None,
+            actor_token: Some(caller.token_id),
+            action: "theme.custom_css.delete",
+            target_kind: "theme",
+            target_id: None,
+            metadata: serde_json::Value::Null,
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /v1/theme/custom.css` — public; serves the sanitized bytes as
+/// `text/css; charset=utf-8`. 404 when no overlay is set.
+///
+/// Headers:
+///   * `Content-Type: text/css; charset=utf-8` — pinned so the response
+///     cannot be reinterpreted as HTML by browsers that sniff.
+///   * `Cache-Control: public, max-age=300` — five minutes mirrors the
+///     logo / favicon endpoints; a fresh upload propagates within that
+///     window.
+///   * `Content-Security-Policy: style-src 'self'` — defence in depth.
+///     Even if a `url(https://evil.com/x.css)` slipped past the sanitizer,
+///     the response itself is forbidden from loading external sheets when
+///     rendered under its own CSP. The parent document still controls the
+///     CSP that applies to its own `<link rel="stylesheet">` tags; this
+///     header pins the response-level policy that browsers honour when the
+///     resource is fetched standalone or in worker contexts.
+///   * `X-Content-Type-Options: nosniff` — close the "mis-typed as HTML"
+///     escape hatch on older browsers.
+pub async fn get_custom_css(
+    State(state): State<AppState>,
+    tenant: TenantCtx,
+) -> AppResult<Response> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT custom_css_storage_key FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(tenant.tenant_id)
+    .fetch_optional(state.db_read())
+    .await?;
+
+    let key = match row {
+        Some((Some(k),)) => k,
+        _ => return Err(AppError::NotFound),
+    };
+
+    let storage = state
+        .storage_for(&tenant)
+        .await
+        .map_err(AppError::Anyhow)?;
+    let bytes = storage
+        .read_object(&key)
+        .await
+        .map_err(AppError::Anyhow)?
+        .ok_or(AppError::NotFound)?;
+
+    let mut resp = (StatusCode::OK, bytes).into_response();
+    let headers = resp.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/css; charset=utf-8"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("style-src 'self'"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(resp)
+}
 
 #[cfg(test)]
 mod tests {
