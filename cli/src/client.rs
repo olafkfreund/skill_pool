@@ -203,12 +203,18 @@ impl Client {
         Ok(resp.json().await?)
     }
 
-    pub async fn get_skill(&self, slug: &str) -> Result<Skill> {
-        let url = self.base.join(&format!("/v1/skills/{slug}"))?;
+    /// Kind-aware metadata lookup. Mirrors the server's `?kind=` query
+    /// param on `GET /v1/skills/{slug}`. `kind="skill"` is identical to
+    /// the historical `get_skill` payload because the server defaults
+    /// the query param to `"skill"` when omitted; we still forward it
+    /// explicitly so the wire shape is the same for all three kinds.
+    pub async fn get_skill_with_kind(&self, slug: &str, kind: &str) -> Result<Skill> {
+        let mut url = self.base.join(&format!("/v1/skills/{slug}"))?;
+        url.query_pairs_mut().append_pair("kind", kind);
         let resp = self.http.get(url).send().await?;
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
-            return Err(anyhow!("skill `{slug}` not found"));
+            return Err(anyhow!("{kind} `{slug}` not found"));
         }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -235,10 +241,15 @@ impl Client {
         Ok(resp.json().await?)
     }
 
-    pub async fn download_bundle(&self, slug: &str) -> Result<Bytes> {
-        let url = self
+    /// Kind-aware bundle download. Same wire path with an additional
+    /// `?kind=` query param so agents/commands round-trip too. The
+    /// server defaults to `skill` when the param is absent, so omitting
+    /// the kind on the server side still maps to `kind="skill"`.
+    pub async fn download_bundle_with_kind(&self, slug: &str, kind: &str) -> Result<Bytes> {
+        let mut url = self
             .base
             .join(&format!("/v1/skills/{slug}/bundle.tar.gz"))?;
+        url.query_pairs_mut().append_pair("kind", kind);
         let resp = self.http.get(url).send().await?;
         let status = resp.status();
         if !status.is_success() {

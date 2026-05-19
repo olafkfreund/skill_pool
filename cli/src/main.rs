@@ -53,6 +53,14 @@ enum Cmd {
     },
     /// Add a skill to the manifest and install it.
     Add { slug: String },
+    /// Add an agent (`kind=agent`) to the manifest and install it.
+    /// Convenience wrapper over `add --kind agent`; writes into the
+    /// `[[agents]]` array.
+    AddAgent { slug: String },
+    /// Add a slash-command (`kind=command`) to the manifest and install
+    /// it. Convenience wrapper over `add --kind command`; writes into
+    /// the `[[commands]]` array.
+    AddCommand { slug: String },
     /// Search the registry. With no query, lists all skills.
     Search {
         /// Optional substring matched against slug and description (ILIKE).
@@ -222,6 +230,8 @@ async fn main() -> Result<()> {
         Cmd::Login { registry, tenant } => cmd::login::run(&cfg, &registry, &tenant).await,
         Cmd::Ensure { quiet } => cmd::ensure::run_with_quiet(&cfg, quiet).await,
         Cmd::Add { slug } => cmd::add::run(&cfg, &slug).await,
+        Cmd::AddAgent { slug } => cmd::add::run_with_kind(&cfg, &slug, "agent").await,
+        Cmd::AddCommand { slug } => cmd::add::run_with_kind(&cfg, &slug, "command").await,
         Cmd::Search {
             query,
             tags,
