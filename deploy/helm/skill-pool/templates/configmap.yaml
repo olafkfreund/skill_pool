@@ -1,0 +1,36 @@
+{{- /*
+Non-sensitive env. The Deployments pick this up via envFrom so any change
+here triggers a rollout (we hash the data into pod annotations).
+Secrets (DSN, OIDC client_secret, SCIM tokens, AES key) live in
+user-managed Secrets — see server.envFrom in values.yaml.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "skill-pool.server.fullname" . }}-env
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "skill-pool.server.labels" . | nindent 4 }}
+data:
+  {{- range $k, $v := .Values.server.env }}
+  {{- if ne ($v | toString) "" }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "skill-pool.web.fullname" . }}-env
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "skill-pool.web.labels" . | nindent 4 }}
+data:
+  {{- range $k, $v := .Values.web.env }}
+  {{- /* SKILL_POOL_API_BASE has a computed fallback when empty */ -}}
+  {{- if and (eq $k "SKILL_POOL_API_BASE") (eq ($v | toString) "") }}
+  SKILL_POOL_API_BASE: {{ include "skill-pool.internalApiBase" $ | quote }}
+  {{- else if ne ($v | toString) "" }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+  {{- end }}

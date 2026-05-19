@@ -1,0 +1,308 @@
+# Default values for skill-pool.
+#
+# All keys are documented inline. See README.md for installation recipes
+# and the AWS-specific values-aws.yaml for IRSA + ALB ingress overrides.
+#
+# This chart is BYO database and BYO object storage. Provide:
+#   * SKILL_POOL_DATABASE_URL via a Secret referenced from server.envFrom
+#   * SKILL_POOL_STORAGE_URI inline under server.env
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ----------------------------------------------------------------------
+# Images
+# ----------------------------------------------------------------------
+image:
+  server:
+    repository: ghcr.io/olafkfreund/skill-pool-server
+    tag: ""             # defaults to .Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
+  web:
+    repository: ghcr.io/olafkfreund/skill-pool-web
+    tag: ""             # defaults to .Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
+# imagePullSecrets is a list of secret names for private registries.
+imagePullSecrets: []
+#  - name: ghcr-pull
+
+# ----------------------------------------------------------------------
+# Server (Rust HTTP API)
+# ----------------------------------------------------------------------
+server:
+  replicas: 2
+  # Static env (non-secret). Secrets go via envFrom -> existing Secret.
+  env:
+    SKILL_POOL_BIND: "0.0.0.0:8080"
+    # REQUIRED. e.g. "s3://my-bucket?region=eu-west-1" or
+    # "fs:///var/lib/skill-pool/bundles" for single-node.
+    SKILL_POOL_STORAGE_URI: ""
+    # Optional fallback tenant when Host header has no subdomain.
+    SKILL_POOL_DEFAULT_TENANT: ""
+    SKILL_POOL_DB_POOL_SIZE: "20"
+    RUST_LOG: "info,skill_pool=info"
+    RUST_LOG_FORMAT: "json"
+    # OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability:4318"
+    # OTEL_SERVICE_NAME: "skill-pool-server"
+  # User-managed Secret refs. The chart never bakes secrets in.
+  # Typical layout:
+  #   * skill-pool-db     : SKILL_POOL_DATABASE_URL [+ SKILL_POOL_DATABASE_READ_URL]
+  #   * skill-pool-secrets: SKILL_POOL_EMAIL_SECRET_KEY, SCIM tokens, OIDC secret, ...
+  envFrom:
+    - secretRef:
+        name: skill-pool-db
+    - secretRef:
+        name: skill-pool-secrets
+        optional: true
+  # Extra envs (verbatim). Append-only override hook for one-offs.
+  extraEnv: []
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+    annotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  podAnnotations: {}
+  podLabels: {}
+  # CPU-based Horizontal Pod Autoscaler.
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    # Optionally also scale on memory:
+    targetMemoryUtilizationPercentage: 0
+  # Probes hit /v1/healthz on the server.
+  probes:
+    readiness:
+      periodSeconds: 5
+      failureThreshold: 3
+      initialDelaySeconds: 3
+    liveness:
+      periodSeconds: 30
+      failureThreshold: 5
+      initialDelaySeconds: 15
+  # PodDisruptionBudget keeps min one replica during voluntary disruptions.
+  pdb:
+    enabled: true
+    minAvailable: 1
+    # maxUnavailable: ""   # set this OR minAvailable, not both
+
+# ----------------------------------------------------------------------
+# Web (SvelteKit portal)
+# ----------------------------------------------------------------------
+web:
+  replicas: 2
+  env:
+    # ORIGIN is required by SvelteKit's adapter-node when fronted by TLS.
+    # e.g. "https://skill-pool.example.com".
+    ORIGIN: ""
+    PORT: "3000"
+    # Where the web tier reaches the API. Left empty -> the chart fills in
+    # the cluster-internal Service URL automatically.
+    SKILL_POOL_API_BASE: ""
+    SP_DEFAULT_TENANT: ""
+  envFrom: []
+  extraEnv: []
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000
+    annotations: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  podAnnotations: {}
+  podLabels: {}
+  probes:
+    readiness:
+      # The web tier does not expose /v1/healthz; /login renders for any
+      # tenant and is the cheapest reliable readiness signal.
+      path: /login
+      periodSeconds: 5
+      failureThreshold: 3
+      initialDelaySeconds: 3
+    liveness:
+      path: /login
+      periodSeconds: 30
+      failureThreshold: 5
+      initialDelaySeconds: 15
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# ----------------------------------------------------------------------
+# Migration Job
+# ----------------------------------------------------------------------
+# The server binary does NOT auto-migrate on startup (see
+# docs/ops/rollback.md). This Job runs `sqlx migrate run` as a
+# pre-install + pre-upgrade hook.
+#
+# The image must contain `sqlx-cli` AND the migrations directory.
+# Three viable images:
+#
+#   1. A custom image you build with `sqlx-cli` + the bundled migrations
+#      (recommended for production — pin both server + migrator versions).
+#   2. A public sqlx-cli image (e.g. `ghcr.io/jbergstroem/sqlx-cli`) plus
+#      this chart mounting the migrations from the server image via an
+#      initContainer.
+#   3. Disable the Job entirely and run `sqlx migrate run` from CI /
+#      a bastion before each rollout.
+#
+# Default uses approach (2): grab migrations from the server image via an
+# initContainer, then run sqlx-cli from a separate image.
+migrate:
+  enabled: true
+  # Image that ships the `sqlx` CLI. Override with a pinned digest in prod.
+  image:
+    repository: ghcr.io/jbergstroem/sqlx-cli
+    tag: "0.8.2"
+    pullPolicy: IfNotPresent
+  # Use an initContainer to extract /app/migrations from the server image
+  # into an emptyDir shared with the migrator. Disable if your sqlx-cli
+  # image already ships the migrations.
+  copyMigrationsFromServerImage: true
+  # Env passed to the migrator. By default it inherits the same envFrom
+  # as the server so SKILL_POOL_DATABASE_URL resolves identically.
+  env: []
+  envFrom:
+    - secretRef:
+        name: skill-pool-db
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # ActiveDeadlineSeconds prevents a wedged migration from blocking helm
+  # forever. Bump for very large migrations.
+  activeDeadlineSeconds: 600
+  backoffLimit: 1
+  podAnnotations: {}
+  # The env var name `sqlx` reads. Defaults to SKILL_POOL_DATABASE_URL.
+  databaseUrlEnv: SKILL_POOL_DATABASE_URL
+
+# ----------------------------------------------------------------------
+# Ingress
+# ----------------------------------------------------------------------
+# Routes:
+#   /v1/*    -> server Service
+#   /metrics -> server Service (Exact)
+#   /        -> web Service
+#
+# Use `className: alb` + ALB-specific annotations on AWS; nginx elsewhere.
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  #  cert-manager.io/cluster-issuer: letsencrypt-prod
+  #  nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+  tls:
+    enabled: true
+    secretName: ""        # supply when tls.enabled and not using cert-manager
+  hosts:
+    - host: skill-pool.example.com
+      paths:
+        - path: /v1
+          pathType: Prefix
+          service: server
+        - path: /metrics
+          pathType: Exact
+          service: server
+        - path: /
+          pathType: Prefix
+          service: web
+  # extraTls lets you add additional hosts that share a separate secret.
+  extraTls: []
+
+# ----------------------------------------------------------------------
+# AWS-specific (optional)
+# ----------------------------------------------------------------------
+# IRSA: when irsa.roleArn is set, the chart adds the
+# `eks.amazonaws.com/role-arn` annotation to the ServiceAccount, which
+# lets pods assume the role for S3 access. See values-aws.yaml.
+aws:
+  irsa:
+    roleArn: ""
+
+# ----------------------------------------------------------------------
+# ServiceAccount
+# ----------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ----------------------------------------------------------------------
+# Metrics — Prometheus Operator ServiceMonitor (opt-in)
+# ----------------------------------------------------------------------
+metrics:
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
+    interval: 30s
+    scrapeTimeout: 10s
+    # Relabel out high-cardinality dimensions if your Prometheus is small.
+    metricRelabelings: []
+    relabelings: []
+
+# ----------------------------------------------------------------------
+# NetworkPolicy (opt-in)
+# ----------------------------------------------------------------------
+# When enabled, restricts ingress to:
+#   * server: ingress controller + monitoring namespace (configurable)
+#   * web:    ingress controller only
+# Egress is left open by default; tighten via `networkPolicy.egress`.
+networkPolicy:
+  enabled: false
+  # Selector matching pods allowed to call the server/web Services.
+  ingressFrom: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: ingress-nginx
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: monitoring
+  egress: []
+
+# ----------------------------------------------------------------------
+# Security context
+# ----------------------------------------------------------------------
+podSecurityContext:
+  fsGroup: 65532
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# ----------------------------------------------------------------------
+# Scheduling
+# ----------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# topologySpreadConstraints applied to both server + web pods.
+topologySpreadConstraints: []
+priorityClassName: ""

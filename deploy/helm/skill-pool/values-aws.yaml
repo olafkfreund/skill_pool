@@ -1,0 +1,84 @@
+# AWS overlay — apply on top of values.yaml.
+#
+#   helm install skill-pool ./deploy/helm/skill-pool \
+#       -f deploy/helm/skill-pool/values.yaml \
+#       -f deploy/helm/skill-pool/values-aws.yaml \
+#       -f my-prod-values.yaml
+#
+# Placeholders below are filled in by the sister Terraform / GitHub
+# Actions agent (see ops/terraform/aws/* and .github/workflows/deploy-aws.yml).
+
+aws:
+  irsa:
+    # Populated by Terraform output `skill_pool_irsa_role_arn`.
+    # arn:aws:iam::<account-id>:role/skill-pool-server
+    roleArn: ""
+
+serviceAccount:
+  create: true
+  # IRSA needs an annotated SA. The template adds the annotation
+  # automatically when aws.irsa.roleArn is non-empty.
+  annotations: {}
+
+server:
+  env:
+    # Replace with the bucket Terraform provisions (output: bundle_bucket).
+    # Region must match the bucket's; opendal uses the AWS SDK convention.
+    SKILL_POOL_STORAGE_URI: "s3://REPLACE-ME-bundle-bucket?region=eu-west-1"
+    # Logs ship straight to CloudWatch via fluent-bit on the node.
+    RUST_LOG_FORMAT: "json"
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    # AWS Load Balancer Controller selects this ingress class.
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # ACM cert ARN; Terraform output `acm_certificate_arn`.
+    alb.ingress.kubernetes.io/certificate-arn: ""
+    # Health check hits the server's healthz so the TG status reflects
+    # actual service health, not just TCP reachability.
+    alb.ingress.kubernetes.io/healthcheck-path: /v1/healthz
+    alb.ingress.kubernetes.io/healthcheck-port: traffic-port
+    alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
+    alb.ingress.kubernetes.io/success-codes: "200"
+    # Group multiple ingresses onto one ALB to save $.
+    alb.ingress.kubernetes.io/group.name: skill-pool
+  # The ALB terminates TLS via ACM, so we leave the chart-level TLS block
+  # off (no Secret needed). Override hosts in your prod values file.
+  tls:
+    enabled: false
+    secretName: ""
+  hosts:
+    - host: REPLACE-ME.example.com
+      paths:
+        - path: /v1
+          pathType: Prefix
+          service: server
+        - path: /metrics
+          pathType: Exact
+          service: server
+        - path: /
+          pathType: Prefix
+          service: web
+
+# RDS for Postgres + S3 for bundles is the canonical AWS layout.
+# Provide the DSN via an externally-managed Secret (e.g. external-secrets
+# pointing at AWS Secrets Manager).
+server:
+  envFrom:
+    - secretRef:
+        name: skill-pool-db
+    - secretRef:
+        name: skill-pool-secrets
+        optional: true
+
+# Pin metrics on for AMP (Amazon Managed Prometheus) or self-hosted kube-prometheus.
+metrics:
+  serviceMonitor:
+    enabled: true
+    interval: 30s

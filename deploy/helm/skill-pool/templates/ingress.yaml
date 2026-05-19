@@ -1,0 +1,55 @@
+{{- if .Values.ingress.enabled -}}
+{{- $serverSvc := include "skill-pool.server.fullname" . -}}
+{{- $webSvc := include "skill-pool.web.fullname" . -}}
+{{- $serverPort := .Values.server.service.port | int -}}
+{{- $webPort := .Values.web.service.port | int -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "skill-pool.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "skill-pool.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        {{- range .Values.ingress.hosts }}
+        - {{ .host | quote }}
+        {{- end }}
+      {{- with $.Values.ingress.tls.secretName }}
+      secretName: {{ . | quote }}
+      {{- end }}
+    {{- with .Values.ingress.extraTls }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path | quote }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                {{- if eq .service "server" }}
+                name: {{ $serverSvc }}
+                port:
+                  number: {{ $serverPort }}
+                {{- else if eq .service "web" }}
+                name: {{ $webSvc }}
+                port:
+                  number: {{ $webPort }}
+                {{- else }}
+                {{- fail (printf "ingress path service must be 'server' or 'web', got %q" .service) }}
+                {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end -}}
