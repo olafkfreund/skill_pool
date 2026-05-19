@@ -19,6 +19,7 @@ use anyhow::{bail, Context, Result};
 use crate::client::{CaptureMetadata, Client};
 use crate::config::Config;
 use crate::install;
+use crate::secret_scan;
 
 pub async fn run(
     cfg: &Config,
@@ -26,6 +27,7 @@ pub async fn run(
     slug_override: Option<&str>,
     notes: Option<&str>,
     extra_tags: &[String],
+    allow_secret: bool,
 ) -> Result<()> {
     let skill_md = dir.join("SKILL.md");
     if !skill_md.exists() {
@@ -56,6 +58,30 @@ pub async fn run(
         dir.display(),
         slug
     );
+
+    // Pre-POST secret scan. The explicit `capture` path is operator-driven
+    // but the same hazard applies: a SKILL.md may have grown a token paste
+    // during authoring. `--allow-secret` downgrades this to a warning for
+    // skills that legitimately discuss credentials.
+    let findings = secret_scan::scan_bundle(&bundle)
+        .context("scan bundle for secrets")?;
+    if !findings.is_empty() {
+        let summary = secret_scan::summarise(&findings);
+        if allow_secret {
+            println!(
+                "  ! secret findings ({}); proceeding under --allow-secret: {}",
+                findings.len(),
+                summary,
+            );
+        } else {
+            bail!(
+                "{} secret finding{} in bundle: {}. Re-run with --allow-secret if these are false positives.",
+                findings.len(),
+                if findings.len() == 1 { "" } else { "s" },
+                summary,
+            );
+        }
+    }
 
     let reg = cfg.require_registry()?;
     let client = Client::new(reg)?;
