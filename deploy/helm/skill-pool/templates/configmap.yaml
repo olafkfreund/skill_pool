@@ -17,6 +17,15 @@ data:
   {{ $k }}: {{ $v | quote }}
   {{- end }}
   {{- end }}
+  {{- /*
+    Inline Redis URL — only when redis.enabled and no existingSecret is
+    set. NOT recommended for prod (it lands in a ConfigMap, visible to
+    anyone who can `kubectl get cm`). The existingSecret path above is
+    the safe option.
+  */}}
+  {{- if and .Values.redis.enabled (not .Values.redis.existingSecret) .Values.redis.url }}
+  SKILL_POOL_REDIS_URL: {{ .Values.redis.url | quote }}
+  {{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap

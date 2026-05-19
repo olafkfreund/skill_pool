@@ -185,7 +185,21 @@ EMAIL_KEY="$(aws secretsmanager get-secret-value \
 kubectl -n skill-pool create secret generic skill-pool-env \
   --from-literal=SKILL_POOL_DATABASE_URL="$DB_DSN" \
   --from-literal=SKILL_POOL_EMAIL_SECRET_KEY="$EMAIL_KEY"
+
+# --- Redis URL Secret (only if elasticache_enabled = true) ---
+REDIS_URL="$(aws secretsmanager get-secret-value \
+  --secret-id "$(terraform -chdir=deploy/terraform/aws output -raw redis_auth_secret_arn)" \
+  --query SecretString --output text | jq -r .url)"
+
+kubectl -n skill-pool create secret generic skill-pool-redis \
+  --from-literal=SKILL_POOL_REDIS_URL="$REDIS_URL"
 ```
+
+The Helm chart's `values-aws.yaml` references `skill-pool-redis` by name
+(`redis.existingSecret`), so once the Secret exists the server pod picks
+up `SKILL_POOL_REDIS_URL` on next roll. The server falls back gracefully
+when the variable is unset or Redis is unreachable — read-through caches
+become no-ops and every request still hits Postgres directly.
 
 If you're using **External Secrets Operator** instead, see
 [the ESO quickstart](https://external-secrets.io/) — the `SecretStore`

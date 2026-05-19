@@ -65,6 +65,24 @@ output "database_url_template" {
   sensitive   = true
 }
 
+# --- ElastiCache (Redis) -------------------------------------------------
+
+output "redis_endpoint" {
+  description = "ElastiCache primary endpoint (DNS name). Empty when `elasticache_enabled = false`."
+  value       = var.elasticache_enabled ? aws_elasticache_replication_group.redis[0].primary_endpoint_address : ""
+}
+
+output "redis_port" {
+  description = "ElastiCache port (always 6379 in this config)."
+  value       = var.elasticache_enabled ? 6379 : 0
+}
+
+output "redis_auth_secret_arn" {
+  description = "Secrets Manager ARN holding the Redis AUTH token + drop-in `url` field (rediss://). Pull from here; do not hard-code."
+  value       = var.elasticache_enabled ? aws_secretsmanager_secret.redis_auth[0].arn : ""
+  sensitive   = true
+}
+
 # --- ECR -----------------------------------------------------------------
 
 output "ecr_server_repo_url" {
