@@ -700,6 +700,85 @@ export async function discoverSaml(auth: Auth): Promise<{ enabled: boolean }> {
   return resp.json();
 }
 
+// --- Admin SSO config CRUD (#4) ------------------------------------------
+
+export interface SsoOidcView {
+  issuer_url: string;
+  client_id: string;
+  /** Last 4 chars of the stored secret, prefixed with `••••`. Never plaintext. */
+  client_secret_hint: string;
+  default_role: SsoRole;
+}
+
+export interface SsoSamlView {
+  idp_entity_id: string;
+  idp_sso_url: string;
+  idp_x509_cert_bytes: number;
+  sp_entity_id?: string | null;
+  default_role: SsoRole;
+}
+
+export type SsoRole = 'viewer' | 'publisher' | 'curator' | 'admin';
+export const SSO_ROLES: SsoRole[] = ['viewer', 'publisher', 'curator', 'admin'];
+
+export interface SsoConfigView {
+  kind: 'oidc' | 'saml' | null;
+  oidc?: SsoOidcView | null;
+  saml?: SsoSamlView | null;
+  scim_endpoint: string;
+}
+
+export async function getSsoConfig(auth: Auth): Promise<SsoConfigView | null> {
+  const resp = await call('GET', '/v1/tenant/sso', auth);
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export interface PutSsoOidcBody {
+  issuer_url: string;
+  client_id: string;
+  client_secret: string;
+  default_role: SsoRole;
+}
+
+export async function putSsoOidc(
+  auth: Auth,
+  body: PutSsoOidcBody,
+): Promise<
+  | { ok: true; config: SsoConfigView }
+  | { ok: false; status: number; error: string }
+> {
+  const resp = await call('PUT', '/v1/tenant/sso/oidc', auth, { jsonBody: body });
+  if (resp.ok) return { ok: true, config: (await resp.json()) as SsoConfigView };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export interface PutSsoSamlBody {
+  metadata_xml: string;
+  default_role: SsoRole;
+  sp_entity_id?: string | null;
+}
+
+export async function putSsoSaml(
+  auth: Auth,
+  body: PutSsoSamlBody,
+): Promise<
+  | { ok: true; config: SsoConfigView }
+  | { ok: false; status: number; error: string }
+> {
+  const resp = await call('PUT', '/v1/tenant/sso/saml', auth, { jsonBody: body });
+  if (resp.ok) return { ok: true, config: (await resp.json()) as SsoConfigView };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function deleteSsoConfig(
+  auth: Auth,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', '/v1/tenant/sso', auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
 /** Build the `?return_to=` URL the server redirects back to once OIDC completes. */
 export function oidcStartUrl(tenant: string, returnTo: string): string {
   const url = `${base()}/v1/auth/oidc/${encodeURIComponent(tenant)}/start`;
