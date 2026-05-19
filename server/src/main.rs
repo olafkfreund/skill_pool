@@ -65,6 +65,27 @@ enum AdminAction {
         #[arg(long)]
         storage_uri: Option<String>,
     },
+    /// Set, update, or clear a tenant's CLI startup banner (#9). The CLI
+    /// fetches this once per shell session and prints `text` + optional
+    /// `url` to stderr before running the user's subcommand. Constraints:
+    /// `text` ≤240 chars; `url` must be `https://` with no whitespace.
+    /// Use `--clear` to wipe both columns. See
+    /// `docs/enterprise/branded-cli-banner.md`.
+    TenantBannerSet {
+        #[arg(long)]
+        slug: String,
+        /// One-line greeting (≤240 chars). Pass an empty string to
+        /// clear just this column while leaving `--url` alone.
+        #[arg(long, conflicts_with = "clear")]
+        text: Option<String>,
+        /// Optional `https://` link printed below the greeting. Pass
+        /// empty string to clear just this column.
+        #[arg(long, conflicts_with = "clear")]
+        url: Option<String>,
+        /// Clear both banner_text and banner_url for this tenant.
+        #[arg(long, conflicts_with_all = ["text", "url"])]
+        clear: bool,
+    },
     /// Hard-delete a tenant and all its data via ON DELETE CASCADE.
     /// Bundle storage is NOT swept — the command prints the storage prefix
     /// for a separate operator sweep (or retention). Pair with SIEM export
@@ -299,6 +320,27 @@ async fn main() -> Result<()> {
                         )
                     };
                     admin::set_session_max_age(&db, &slug, secs).await
+                }
+                AdminAction::TenantBannerSet {
+                    slug,
+                    text,
+                    url,
+                    clear,
+                } => {
+                    if !clear && text.is_none() && url.is_none() {
+                        return Err(anyhow::anyhow!(
+                            "pass --text, --url, or --clear (at least one required)"
+                        ));
+                    }
+                    let db = admin::connect(&cfg).await?;
+                    admin::set_tenant_banner(
+                        &db,
+                        &slug,
+                        text.as_deref(),
+                        url.as_deref(),
+                        clear,
+                    )
+                    .await
                 }
                 AdminAction::TenantResidency {
                     slug,

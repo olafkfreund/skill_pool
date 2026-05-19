@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod anthropic;
+mod banner;
 mod capturer;
 mod client;
 mod cmd;
@@ -209,6 +210,12 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let cfg = config::Config::load(cli.config.as_deref(), cli.registry.as_deref())?;
+
+    // Per-tenant CLI banner (#9). Fire-and-forget — no error path back to
+    // the user. Skips itself when stdout isn't a TTY, when
+    // SKILL_POOL_NO_BANNER=1, or when shown in the last 24h. See
+    // `cli/src/banner.rs` for the full set of guards.
+    banner::show_if_due(&cfg).await;
 
     match cli.command {
         Cmd::Init => cmd::init::run(&cfg),

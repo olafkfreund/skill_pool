@@ -162,6 +162,104 @@ pub async fn set_session_max_age(db: &PgPool, slug: &str, max_age_secs: Option<i
     Ok(())
 }
 
+/// Set, update, or clear a tenant's CLI startup banner (#9).
+///
+/// Semantics:
+///   - `clear = true` → both `banner_text` and `banner_url` are set to NULL
+///     regardless of `text`/`url`. Mutually exclusive with the other args
+///     in the CLI front-end; the helper itself just honors the flag.
+///   - `text = Some("")` or `url = Some("")` → that column is explicitly
+///     cleared (sentinel for "blank this out without touching the other").
+///   - `text = None` or `url = None` → that column is left unchanged.
+///   - `text = Some("Welcome…")` / `url = Some("https://…")` → write the
+///     new value. CHECK constraints enforce the length and scheme.
+///
+/// We deliberately do NOT validate URL scheme / text length here — the
+/// DB CHECK constraint is the single source of truth and surfaces a
+/// clean error via the `with_context` wrapper.
+pub async fn set_tenant_banner(
+    db: &PgPool,
+    slug: &str,
+    text: Option<&str>,
+    url: Option<&str>,
+    clear: bool,
+) -> Result<()> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) =
+        tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+
+    // Three update modes mapped to a single SQL statement via $4 (clear flag):
+    //   * clear=true  → set both to NULL unconditionally.
+    //   * clear=false → for each column, NULL if the caller passed "" sentinel,
+    //                   the new value if they passed Some(non-empty),
+    //                   COALESCE-leave-alone if they passed None.
+    // Encoding `None` as the "sentinel-not-passed" value uses a non-empty
+    // string we know can never reach a real banner field (length > 240 would
+    // hit CHECK, but we use a literal that text-input never produces — a
+    // form-feed). Simpler than two queries.
+    const KEEP: &str = "\x0c__skill_pool_keep__\x0c";
+    let result = sqlx::query(
+        "UPDATE tenants
+           SET banner_text = CASE
+                   WHEN $4 THEN NULL
+                   WHEN $2 = $5 THEN banner_text
+                   WHEN $2 = '' THEN NULL
+                   ELSE $2
+               END,
+               banner_url = CASE
+                   WHEN $4 THEN NULL
+                   WHEN $3 = $5 THEN banner_url
+                   WHEN $3 = '' THEN NULL
+                   ELSE $3
+               END
+         WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .bind(text.unwrap_or(KEEP))
+    .bind(url.unwrap_or(KEEP))
+    .bind(clear)
+    .bind(KEEP)
+    .execute(db)
+    .await
+    .with_context(|| {
+        format!("set banner for `{slug}` (text ≤240 chars, url must be https://...)")
+    })?;
+    if result.rows_affected() != 1 {
+        return Err(anyhow!(
+            "expected 1 row updated, got {}",
+            result.rows_affected()
+        ));
+    }
+
+    if clear {
+        println!("banner cleared for `{slug}`");
+    } else {
+        println!("banner updated for `{slug}`");
+        if let Some(t) = text {
+            if t.is_empty() {
+                println!("  text: (cleared)");
+            } else {
+                println!("  text: {t}");
+            }
+        }
+        if let Some(u) = url {
+            if u.is_empty() {
+                println!("  url:  (cleared)");
+            } else {
+                println!("  url:  {u}");
+            }
+        }
+    }
+    println!(
+        "\n→ CLI fetches this on next shell session (or in 24h, whichever first)."
+    );
+    Ok(())
+}
+
 /// Hard-delete a tenant by slug. Relies on `ON DELETE CASCADE` on every
 /// business table (audit_events, skills, skill_drafts, skill_usage_events,
 /// tenant_theme, tenant_api_tokens, tenant_users, tenant_oidc, tenant_saml,
