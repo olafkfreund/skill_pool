@@ -15,6 +15,10 @@
   let { data, form } = $props();
 
   const d = $derived(data.detail);
+  // Brand name used in the og:title. Falls back to the tenant slug when
+  // the tenant hasn't set a brand_name yet — mirrors the server's own
+  // default-theme behaviour.
+  const brandName = $derived(data.theme?.brandName ?? data.tenant?.slug ?? 'skill-pool');
 
   function fmtDate(iso: string | null): string {
     if (!iso) return '—';
@@ -36,6 +40,28 @@
     return `${(v * 100).toFixed(0)}%`;
   }
 </script>
+
+<!--
+  Open Graph + Twitter Card metadata (#9). The image is served by the
+  registry server at `/v1/og`, which renders an SVG with the tenant's
+  brand colours + skill name + version. Crawlers (Slack, Discord,
+  Twitter, LinkedIn) cache aggressively — see
+  docs/enterprise/og-images.md for the platform-by-platform support
+  matrix and cache caveats.
+-->
+<svelte:head>
+  <title>{d.slug} · {brandName}</title>
+  <meta name="description" content={d.description} />
+  <meta property="og:title" content={`${d.slug} · ${brandName}`} />
+  <meta property="og:description" content={d.description} />
+  <meta property="og:image" content={data.ogImageUrl} />
+  <meta property="og:url" content={data.pageUrl} />
+  <meta property="og:type" content="article" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content={`${d.slug} · ${brandName}`} />
+  <meta name="twitter:description" content={d.description} />
+  <meta name="twitter:image" content={data.ogImageUrl} />
+</svelte:head>
 
 <a
   href="/"
