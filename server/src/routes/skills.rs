@@ -757,6 +757,92 @@ pub async fn get_detail(
     }))
 }
 
+/// One row in `GET /v1/skills/{slug}/versions`.
+#[derive(serde::Serialize)]
+pub struct SkillVersion {
+    pub version: String,
+    pub published_at: DateTime<Utc>,
+    /// Email of the publishing user when known. `created_by` is currently
+    /// always NULL on publish (the column references users(id) but the
+    /// publish handler stores NULL), so this is `None` in practice today
+    /// but will populate once the publish path attaches the caller's
+    /// user_id. See `publish` in this module.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_by: Option<String>,
+    /// Description truncated to 200 chars (the schema has no separate
+    /// change-summary column; description is the closest proxy).
+    pub change_summary: String,
+    pub status: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct SkillVersionRow {
+    version: String,
+    created_at: DateTime<Utc>,
+    description: String,
+    status: String,
+    published_by: Option<String>,
+}
+
+/// Truncate a string to at most `max_chars` Unicode characters.
+/// Adds an ellipsis when truncation happens so callers can render a
+/// visible cue. Stays char-safe (no slicing inside a UTF-8 codepoint).
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max_chars).collect();
+    format!("{cut}…")
+}
+
+/// `GET /v1/skills/{slug}/versions` — return every published version of
+/// a skill, newest-first. Powers the per-skill page's "Version history"
+/// table. Tenant-scoped via the standard extractor; 404 when no row
+/// exists for the slug. Capped at 50 most-recent rows (safety bound;
+/// real-world catalogs are much smaller).
+pub async fn get_versions(
+    State(state): State<AppState>,
+    tenant: TenantCtx,
+    Path(slug): Path<String>,
+    Query(kq): Query<KindQuery>,
+) -> AppResult<Json<Vec<SkillVersion>>> {
+    let kind = resolve_kind(kq.kind.as_deref())?;
+
+    // LEFT JOIN to users so the absence of a created_by FK doesn't drop
+    // the row. Filter accepts every status (so curators see history
+    // across the full lifecycle — published, archive_candidate, archived).
+    let rows: Vec<SkillVersionRow> = sqlx::query_as(
+        "SELECT s.version, s.created_at, s.description, s.status, u.email AS published_by \
+         FROM skills s \
+         LEFT JOIN users u ON u.id = s.created_by \
+         WHERE s.tenant_id = $1 AND s.slug = $2 AND s.kind = $3 \
+         ORDER BY s.created_at DESC \
+         LIMIT 50",
+    )
+    .bind(tenant.tenant_id)
+    .bind(&slug)
+    .bind(kind)
+    .fetch_all(state.db_read())
+    .await?;
+
+    if rows.is_empty() {
+        return Err(AppError::NotFound);
+    }
+
+    let out: Vec<SkillVersion> = rows
+        .into_iter()
+        .map(|r| SkillVersion {
+            version: r.version,
+            published_at: r.created_at,
+            published_by: r.published_by,
+            change_summary: truncate_chars(&r.description, 200),
+            status: r.status,
+        })
+        .collect();
+
+    Ok(Json(out))
+}
+
 /// `GET /v1/skills/{slug}/deps` — return the transitive dependency
 /// closure of a published skill. Cycle-safe (UNION dedups; depth cap
 /// is belt-and-braces). Tenant-scoped.
@@ -1003,3 +1089,34 @@ impl From<SkillRowSemantic> for Skill {
 // We also need to track caller user_id in the future; suppress unused warning for now.
 #[allow(dead_code)]
 fn _unused_metadata(_: &HashMap<String, String>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_chars;
+
+    #[test]
+    fn truncate_chars_passthrough_when_short() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+        assert_eq!(truncate_chars("", 10), "");
+        // Exactly at the boundary keeps the string verbatim — no ellipsis.
+        assert_eq!(truncate_chars("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_chars_truncates_with_ellipsis() {
+        let long = "a".repeat(300);
+        let out = truncate_chars(&long, 200);
+        // 200 'a' + one ellipsis char.
+        assert_eq!(out.chars().count(), 201);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_chars_is_unicode_safe() {
+        // 4-byte emoji must not be split mid-codepoint.
+        let s = "🦀🦀🦀🦀🦀";
+        let out = truncate_chars(s, 3);
+        assert_eq!(out.chars().count(), 4); // 3 crabs + ellipsis
+        assert!(out.starts_with("🦀🦀🦀"));
+    }
+}

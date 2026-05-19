@@ -147,6 +147,31 @@ export async function getSkillDetail(
   return resp.json();
 }
 
+/** One row of the per-skill version history. */
+export interface SkillVersion {
+  version: string;
+  published_at: string;
+  /** Email of the publishing user. Omitted by the server when null. */
+  published_by?: string;
+  /** Description truncated to 200 chars (the server has no separate column). */
+  change_summary: string;
+  status: string;
+}
+
+export async function listSkillVersions(
+  auth: Auth,
+  slug: string,
+  kind?: CatalogKind,
+): Promise<SkillVersion[]> {
+  const resp = await call(
+    'GET',
+    `/v1/skills/${encodeURIComponent(slug)}/versions${kindQuery(kind)}`,
+    auth,
+  );
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
 export interface Member {
   id: string;
   email: string;
