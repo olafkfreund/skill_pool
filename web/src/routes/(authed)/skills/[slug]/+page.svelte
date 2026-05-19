@@ -7,6 +7,7 @@
     Download,
     FileCode,
     GitMerge,
+    History,
     Link as LinkIcon,
     Activity,
   } from '@lucide/svelte';
@@ -15,6 +16,7 @@
   let { data, form } = $props();
 
   const d = $derived(data.detail);
+  const versions = $derived(data.versions ?? []);
   // Brand name used in the og:title. Falls back to the tenant slug when
   // the tenant hasn't set a brand_name yet — mirrors the server's own
   // default-theme behaviour.
@@ -250,6 +252,76 @@
     <p class="text-sm text-[var(--sp-muted-fg)]">
       (couldn't fetch the SKILL.md body; the download link below still works)
     </p>
+  {/if}
+</section>
+
+<!--
+  Version history — sourced from GET /v1/skills/{slug}/versions on the
+  server side (best-effort; falls back to [] if the endpoint is missing).
+  The current row (matching d.version) gets a small badge so users can
+  see which one they're looking at. Empty state covers the
+  fetch-failed case too — a single row means "first version".
+-->
+<section class="mb-8">
+  <h2
+    class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wider text-[var(--sp-muted-fg)] uppercase"
+  >
+    <History size="13" /> Version history{versions.length > 1 ? ` · ${versions.length}` : ''}
+  </h2>
+  {#if versions.length <= 1}
+    <p class="text-sm text-[var(--sp-muted-fg)]">
+      This is the only version published yet.
+    </p>
+  {:else}
+    <div
+      class="overflow-hidden rounded-[var(--sp-radius)] border border-[var(--sp-border)]"
+    >
+      <table class="w-full text-sm">
+        <thead class="bg-[var(--sp-muted)] text-xs tracking-wider text-[var(--sp-muted-fg)] uppercase">
+          <tr>
+            <th class="px-3 py-2 text-left font-medium">Version</th>
+            <th class="px-3 py-2 text-left font-medium">Published</th>
+            <th class="px-3 py-2 text-left font-medium">By</th>
+            <th class="px-3 py-2 text-left font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each versions as v (v.version)}
+            <tr class="border-t border-[var(--sp-border)]">
+              <td class="px-3 py-2 align-top">
+                <span class="font-mono">v{v.version}</span>
+                {#if v.version === d.version}
+                  <span
+                    class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800"
+                  >
+                    current
+                  </span>
+                {/if}
+                {#if v.change_summary}
+                  <div class="mt-0.5 text-xs text-[var(--sp-muted-fg)]">
+                    {v.change_summary}
+                  </div>
+                {/if}
+              </td>
+              <td class="px-3 py-2 align-top text-xs text-[var(--sp-muted-fg)]">
+                {fmtDate(v.published_at)}
+              </td>
+              <td class="px-3 py-2 align-top text-xs text-[var(--sp-muted-fg)]">
+                {v.published_by ?? '—'}
+              </td>
+              <td class="px-3 py-2 align-top">
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs"
+                  style="background: var(--sp-muted); color: var(--sp-muted-fg); border: 1px solid var(--sp-border);"
+                >
+                  {v.status}
+                </span>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   {/if}
 </section>
 

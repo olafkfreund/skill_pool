@@ -45,6 +45,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills/{slug}/bundle.tar.gz", get(skills::get_bundle))
         .route("/v1/skills/{slug}/skill-md", get(skills::get_skill_md))
         .route("/v1/skills/{slug}/deps", get(skills::get_deps))
+        .route("/v1/skills/{slug}/versions", get(skills::get_versions))
         .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
         .route(
             "/v1/theme/logo",

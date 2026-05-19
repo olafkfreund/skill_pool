@@ -5,6 +5,7 @@ import {
   getSkillDetail,
   getSkillMd,
   isCatalogKind,
+  listSkillVersions,
   type CatalogKind,
 } from '$lib/server/api';
 import type { Actions, PageServerLoad } from './$types';
@@ -18,9 +19,14 @@ export const load: PageServerLoad = async ({ locals, params, cookies, url }) => 
   const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
   const kind = resolveKind(url);
   try {
-    const [detail, body] = await Promise.all([
+    // Version history is best-effort: the page still renders if the
+    // versions endpoint is unavailable (e.g. older server pinned at a
+    // commit before #4's slice). Fall back to an empty array — the UI
+    // hides itself when nothing's there.
+    const [detail, body, versions] = await Promise.all([
       getSkillDetail(auth, params.slug, kind),
       getSkillMd(auth, params.slug, kind).catch(() => ''),
+      listSkillVersions(auth, params.slug, kind).catch(() => []),
     ]);
     // Compute the OG image + canonical page URL on the server so the
     // browser-rendered <svelte:head> can emit absolute URLs. Social
@@ -34,7 +40,7 @@ export const load: PageServerLoad = async ({ locals, params, cookies, url }) => 
     if (kind !== 'skill') ogParams.set('kind', kind);
     const ogImageUrl = `${url.origin}/v1/og?${ogParams.toString()}`;
     const pageUrl = `${url.origin}${url.pathname}`;
-    return { detail, body, kind, ogImageUrl, pageUrl };
+    return { detail, body, versions, kind, ogImageUrl, pageUrl };
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
       throw error(404, `${kind} "${params.slug}" not found`);

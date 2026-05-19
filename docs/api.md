@@ -155,6 +155,41 @@ Events:
 
 Writes are best-effort: a DB blip on the events insert is logged but never blocks the response. Both `get_bundle` and `get_skill_md` now require an authenticated caller (Bearer token); existing clients already send one, but the contract is now strict.
 
+## `GET /v1/skills/{slug}/versions` — version history (#4)
+
+Returns every published version of a skill (across all lifecycle
+statuses — `published`, `archive_candidate`, `archived`), newest-first,
+capped at 50 rows. Powers the skill-detail page's "Version history"
+table.
+
+```json
+[
+  {
+    "version": "2.0.0",
+    "published_at": "2025-05-19T12:34:56Z",
+    "change_summary": "rewrite for axum 0.8",
+    "status": "published"
+  },
+  {
+    "version": "1.1.0",
+    "published_at": "2025-04-02T08:11:22Z",
+    "change_summary": "second cut",
+    "status": "published"
+  }
+]
+```
+
+- Tenant-scoped via the standard extractor.
+- `?kind=skill|agent|command` — default `skill`.
+- `published_by` carries `users.email` when known and is omitted when
+  the row's `created_by` is NULL (the current publish path stores NULL;
+  this field will populate once #4's follow-up wires the caller's
+  `user_id` through).
+- `change_summary` is the row's `description` truncated to 200 chars
+  with an ellipsis. The schema doesn't carry a separate change-summary
+  column.
+- 404 when no row exists for the slug.
+
 ## `GET /v1/skills/{slug}/deps` — dependency closure (Phase 5)
 
 Returns the transitive dependency closure of a published skill.
