@@ -17,6 +17,12 @@
 //!     `"skill"` to preserve pre-existing behaviour; pass `"agent"` or
 //!     `"command"` to search the parallel catalog surfaces.
 //!   - `get_skill(slug, kind?)` — returns the rendered `SKILL.md` body.
+//!   - `install_skill(slug, kind?)` — returns the full bundle bytes as
+//!     base64 + SHA-256 + slug + version + kind so the Claude session
+//!     can extract and install the catalog item without leaving the
+//!     chat. Capped at `MAX_BUNDLE_BYTES` (1 MiB); larger bundles
+//!     surface a structured error that points the caller at
+//!     `GET /v1/skills/{slug}/bundle.tar.gz`.
 //!
 //! Auth: reuses the standard `AuthedCaller` extractor — operators set
 //! `Authorization: Bearer <token>` and `X-Skill-Pool-Tenant: <slug>`
@@ -37,6 +43,12 @@ const SERVER_NAME: &str = "skill-pool";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_LIMIT: i64 = 50;
 const DEFAULT_LIMIT: i64 = 10;
+/// Hard cap on bundle bytes returned via `install_skill`. Bundles
+/// over this size route the caller to the streaming HTTP endpoint
+/// (`GET /v1/skills/{slug}/bundle.tar.gz`). Keeps a single JSON-RPC
+/// response body bounded — base64 overhead is ~33%, so the wire
+/// payload tops out around 1.4 MiB before headers.
+const MAX_BUNDLE_BYTES: usize = 1024 * 1024; // 1 MiB
 
 /// Catalog kinds exposed via MCP. Mirrors `routes::skills::VALID_KINDS`.
 /// Kept local so this module is self-contained for the JSON-RPC layer.
@@ -239,6 +251,35 @@ fn tools_list(id: Option<Value>) -> JsonRpcResponse {
                         },
                         "additionalProperties": false
                     }
+                },
+                {
+                    "name": "install_skill",
+                    "description":
+                        "Fetch the full catalog bundle (the `.tar.gz` that \
+                         `skill-pool ensure` would download) as base64. The \
+                         caller can decode and extract it into \
+                         `.claude/skills/<slug>/` to install without leaving \
+                         the chat. Returns slug, version, kind, sha256, and \
+                         the base64-encoded bytes. Bundles over 1 MiB are \
+                         refused — use `GET /v1/skills/{slug}/bundle.tar.gz` \
+                         for those instead.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["slug"],
+                        "properties": {
+                            "slug": {
+                                "type": "string",
+                                "description": "Catalog slug — exact match, no globbing."
+                            },
+                            "kind": {
+                                "type": "string",
+                                "enum": ["skill", "agent", "command"],
+                                "default": "skill",
+                                "description": "Catalog surface to install from. `skill` (default), `agent`, or `command`."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
                 }
             ]
         }),
@@ -268,6 +309,12 @@ async fn tools_call(
             Err(ToolError::Internal(msg)) => JsonRpcResponse::err(id, INTERNAL_ERROR, msg),
         },
         "get_skill" => match call_get_skill(state, caller, args).await {
+            Ok(v) => JsonRpcResponse::ok(id, v),
+            Err(ToolError::NotFound(msg)) => tool_error_result(id, &msg),
+            Err(ToolError::Invalid(msg)) => JsonRpcResponse::err(id, INVALID_PARAMS, msg),
+            Err(ToolError::Internal(msg)) => JsonRpcResponse::err(id, INTERNAL_ERROR, msg),
+        },
+        "install_skill" => match call_install_skill(state, caller, args).await {
             Ok(v) => JsonRpcResponse::ok(id, v),
             Err(ToolError::NotFound(msg)) => tool_error_result(id, &msg),
             Err(ToolError::Invalid(msg)) => JsonRpcResponse::err(id, INVALID_PARAMS, msg),
@@ -483,6 +530,103 @@ async fn call_get_skill(
     }))
 }
 
+#[derive(Deserialize)]
+struct InstallSkillArgs {
+    slug: String,
+    /// Catalog surface to install from. Defaults to `skill` so existing
+    /// MCP clients that only pass `slug` keep their behaviour.
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+async fn call_install_skill(
+    state: &AppState,
+    caller: &AuthedCaller,
+    args: Value,
+) -> Result<Value, ToolError> {
+    use base64::Engine;
+
+    let args: InstallSkillArgs = serde_json::from_value(args)
+        .map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))?;
+    let kind = resolve_kind(args.kind.as_deref()).map_err(ToolError::Invalid)?;
+
+    // Look up the latest published row for this slug+kind. We also pull
+    // `version` and `bundle_sha256` so the MCP response can echo the
+    // exact bytes' identity — clients verify the SHA after decoding to
+    // catch base64 corruption.
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT version, bundle_uri, bundle_sha256 FROM skills \
+         WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(&args.slug)
+    .bind(kind)
+    .fetch_optional(state.db())
+    .await?;
+    let Some((version, key, sha256)) = row else {
+        return Err(ToolError::NotFound(format!(
+            "no published {} `{}` in tenant `{}`",
+            kind, args.slug, caller.tenant.tenant_slug
+        )));
+    };
+
+    let bytes = state
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(|e| ToolError::Internal(e.to_string()))?
+        .read_bundle(&key)
+        .await
+        .map_err(|e| ToolError::Internal(e.to_string()))?;
+
+    // Refuse oversize bundles rather than blow up the JSON-RPC envelope.
+    // The HTTP endpoint streams without this cap, so the operator path
+    // is to fall back to `GET /v1/skills/{slug}/bundle.tar.gz?kind=...`.
+    if bytes.len() > MAX_BUNDLE_BYTES {
+        return Err(ToolError::Invalid(format!(
+            "bundle for `{}` ({} bytes) exceeds the MCP response cap of {} bytes; \
+             fetch via GET /v1/skills/{}/bundle.tar.gz?kind={} instead",
+            args.slug,
+            bytes.len(),
+            MAX_BUNDLE_BYTES,
+            args.slug,
+            kind,
+        )));
+    }
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let summary = format!(
+        "Installable bundle for `{}` v{} [{}] — {} bytes (sha256={}).\n\
+         Decode the base64 payload, write to a `.tar.gz`, and extract \
+         into `.claude/skills/{}/` to install.",
+        args.slug,
+        version,
+        kind,
+        bytes.len(),
+        sha256,
+        args.slug,
+    );
+
+    // Structured second block: the bundle, plus the metadata a client
+    // needs to verify the download (sha256) and place it on disk.
+    let payload = serde_json::json!({
+        "slug": args.slug,
+        "version": version,
+        "kind": kind,
+        "sha256": sha256,
+        "size_bytes": bytes.len() as i64,
+        "bundle_base64": b64,
+    });
+
+    Ok(serde_json::json!({
+        "content": [
+            { "type": "text", "text": summary },
+            { "type": "text", "text": format!("```json\n{}\n```", serde_json::to_string_pretty(&payload).unwrap_or_default()) }
+        ],
+        "isError": false
+    }))
+}
+
 fn read_skill_md(bytes: &[u8]) -> Option<String> {
     use flate2::read::GzDecoder;
     use std::io::Read;
@@ -535,18 +679,19 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_advertises_both_tools() {
+    fn tools_list_advertises_all_tools() {
         let r = tools_list(Some(serde_json::json!(2)));
         let v = r.result.unwrap();
         let tools = v["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 3);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"search_skills"));
         assert!(names.contains(&"get_skill"));
+        assert!(names.contains(&"install_skill"));
     }
 
     #[test]
-    fn tools_list_advertises_kind_on_both_tools() {
+    fn tools_list_advertises_kind_on_all_tools() {
         let r = tools_list(Some(serde_json::json!(2)));
         let v = r.result.unwrap();
         let tools = v["tools"].as_array().unwrap();

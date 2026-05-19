@@ -13,6 +13,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::Result;
+use base64::Engine;
 use bytes::Bytes;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -207,10 +208,11 @@ async fn mcp_protocol_round_trip() -> Result<()> {
     )
     .await?;
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 3);
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"search_skills"));
     assert!(names.contains(&"get_skill"));
+    assert!(names.contains(&"install_skill"));
 
     // 3. tools/call search_skills
     let search = rpc(
@@ -364,11 +366,76 @@ async fn mcp_protocol_round_trip() -> Result<()> {
     .await?;
     assert_eq!(bad["error"]["code"], -32602, "{bad}");
 
+    // 7d. install_skill returns base64 bundle + sha256 + metadata. The
+    //     payload decodes back to a tar.gz that contains the SKILL.md we
+    //     just published.
+    let install = rpc(
+        &h,
+        &c,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "install_skill",
+                "arguments": { "slug": "axum-handler" }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(install["result"]["isError"], false, "{install}");
+    let blocks = install["result"]["content"].as_array().unwrap();
+    // Two content blocks: a human summary, then a fenced JSON payload.
+    assert_eq!(blocks.len(), 2);
+    let summary = blocks[0]["text"].as_str().unwrap();
+    assert!(summary.contains("axum-handler"), "{summary}");
+    assert!(summary.contains("sha256="), "{summary}");
+    let json_block = blocks[1]["text"].as_str().unwrap();
+    // The second block embeds a ```json ... ``` fence. Strip it before parse.
+    let inner = json_block
+        .strip_prefix("```json\n")
+        .and_then(|s| s.strip_suffix("\n```"))
+        .unwrap_or(json_block);
+    let payload: Value = serde_json::from_str(inner).expect("bundle JSON block parses");
+    assert_eq!(payload["slug"], "axum-handler");
+    assert_eq!(payload["version"], "1.0.0");
+    assert_eq!(payload["kind"], "skill");
+    assert!(payload["sha256"].as_str().unwrap().len() == 64);
+    let b64 = payload["bundle_base64"].as_str().unwrap();
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .expect("base64 decodes");
+    assert_eq!(raw.len() as i64, payload["size_bytes"].as_i64().unwrap());
+    // sha256 in the payload must match the actual bundle bytes.
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&raw);
+    let want = format!("{:x}", hasher.finalize());
+    assert_eq!(want, payload["sha256"].as_str().unwrap());
+
+    // 7e. install_skill against a missing slug → tool error.
+    let missing_install = rpc(
+        &h,
+        &c,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "install_skill",
+                "arguments": { "slug": "never-existed" }
+            }
+        }),
+    )
+    .await?;
+    assert!(missing_install.get("error").is_none());
+    assert_eq!(missing_install["result"]["isError"], true);
+
     // 8. Unknown method → JSON-RPC -32601
     let unknown = rpc(
         &h,
         &c,
-        json!({"jsonrpc": "2.0", "id": 10, "method": "no/such/method"}),
+        json!({"jsonrpc": "2.0", "id": 11, "method": "no/such/method"}),
     )
     .await?;
     assert_eq!(unknown["error"]["code"], -32601);
@@ -377,7 +444,7 @@ async fn mcp_protocol_round_trip() -> Result<()> {
     let resp = c
         .post(format!("{}/v1/mcp", h.base))
         .header("x-skill-pool-tenant", "acme")
-        .json(&json!({"jsonrpc": "2.0", "id": 11, "method": "initialize"}))
+        .json(&json!({"jsonrpc": "2.0", "id": 12, "method": "initialize"}))
         .send()
         .await?;
     assert_eq!(resp.status().as_u16(), 401, "{}", resp.text().await?);
