@@ -1,0 +1,131 @@
+name: DB migrations (break-glass)
+
+# This is the EXPLICIT, manual migration runner.
+#
+# The Helm chart's pre-upgrade hook runs `sqlx migrate run` automatically
+# on every `helm upgrade`. This workflow is the break-glass path for
+# when that hook failed, was skipped, or you need to retry a single
+# migration without redeploying the app.
+#
+# Per docs/ops/rollback.md §2: the server binary does NOT auto-migrate
+# at startup. The contract is "operator runs sqlx migrate run before
+# starting new code" — this workflow is the operator's hands.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target environment (e.g. prod, staging)"
+        required: true
+        type: choice
+        options: [prod, staging]
+        default: staging
+      image_tag:
+        description: "skill-pool-server image tag carrying the migrations (e.g. v0.2.0 or sha)"
+        required: true
+        type: string
+
+concurrency:
+  # Never two migrate jobs against the same environment at once.
+  group: migrate-${{ inputs.target }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  migrate:
+    name: sqlx migrate run (${{ inputs.target }})
+    runs-on: ubuntu-latest
+    environment:
+      # Use a GitHub Environment with required reviewers on it for the
+      # `prod` target. Configure in repo settings → Environments.
+      name: ${{ inputs.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-migrate-${{ inputs.target }}-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Configure kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ vars.AWS_REGION }}" \
+            --name "${{ vars.EKS_CLUSTER_NAME }}"
+
+      - name: Fetch DSN from cluster secret
+        id: dsn
+        run: |
+          set -euo pipefail
+          # The Helm chart ships secret/skill-pool-db with this key.
+          DSN="$(kubectl get secret skill-pool-db \
+                   --namespace "${{ vars.HELM_NAMESPACE }}" \
+                   -o jsonpath='{.data.SKILL_POOL_DATABASE_URL}' \
+                 | base64 -d)"
+          if [[ -z "${DSN}" ]]; then
+            echo "::error::SKILL_POOL_DATABASE_URL not present in secret skill-pool-db"
+            exit 1
+          fi
+          # Mask it so it never lands in a log.
+          echo "::add-mask::${DSN}"
+          echo "dsn=${DSN}" >>"${GITHUB_OUTPUT}"
+
+      - name: Pre-pull image (verifies tag exists)
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${{ vars.ECR_REPO_SERVER }}:${{ inputs.image_tag }}"
+          echo "Pulling ${IMAGE}"
+          docker pull "${IMAGE}"
+
+      - name: Run sqlx migrate run inside a one-shot pod
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          DSN: ${{ steps.dsn.outputs.dsn }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${{ vars.ECR_REPO_SERVER }}:${{ inputs.image_tag }}"
+          POD="skill-pool-migrate-$(date +%s)-${RANDOM}"
+          echo "Launching ${POD} from ${IMAGE}"
+
+          # The server image's skill-pool-server binary exposes a
+          # `migrate` subcommand that wraps sqlx::migrate against the
+          # /app/migrations baked into the image. If your binary uses a
+          # different shape (sqlx-cli installed separately, or a Make
+          # target), edit the --command/--args below — leave the rest
+          # of the workflow alone.
+          kubectl run "${POD}" \
+            --namespace "${{ vars.HELM_NAMESPACE }}" \
+            --image="${IMAGE}" \
+            --restart=Never \
+            --rm -i \
+            --command \
+            --env "SKILL_POOL_DATABASE_URL=${DSN}" \
+            -- /usr/local/bin/skill-pool-server migrate
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Migration run (${{ inputs.target }})"
+            echo ""
+            echo "- Image: \`${{ vars.ECR_REPO_SERVER }}:${{ inputs.image_tag }}\`"
+            echo "- Cluster: \`${{ vars.EKS_CLUSTER_NAME }}\`"
+            echo "- Namespace: \`${{ vars.HELM_NAMESPACE }}\`"
+            echo "- Outcome: \`${{ job.status }}\`"
+            echo ""
+            echo "If this is the first attempt and the chart's pre-upgrade hook"
+            echo "is configured, prefer \`helm upgrade\` instead — this workflow"
+            echo "is for break-glass retries (see docs/deploy/github-actions.md)."
+          } >>"${GITHUB_STEP_SUMMARY}"

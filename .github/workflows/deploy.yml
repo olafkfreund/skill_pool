@@ -1,0 +1,150 @@
+name: Deploy to EKS
+
+# Production deploy gate.
+#
+# Triggered on:
+#   - push of a v* tag    → automatic deploy of that tag's images
+#   - workflow_dispatch   → manual override; supply the exact version to ship
+#
+# Auth: GitHub OIDC → AWS role. No static AWS creds.
+# Rollback: if `helm upgrade` or `rollout status` fails, we run a
+#           `helm rollback` to the previous release revision. This is
+#           the app-only rollback (§4.1 + §4.2 of docs/ops/rollback.md);
+#           a DB-restore rollback (§4.3) is manual and out of scope here.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag to deploy (e.g. v0.2.0 or a full git SHA)"
+        required: true
+        type: string
+
+concurrency:
+  # Serialize deploys to the same cluster — never two helm upgrades
+  # racing on the same release.
+  group: deploy-${{ vars.EKS_CLUSTER_NAME }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: helm upgrade → EKS
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      # The environment is a GitHub-side gate. Pair it with required
+      # reviewers in repo settings if you want a manual approval on
+      # every tag push.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ inputs.version }}" ]]; then
+            V="${{ inputs.version }}"
+          else
+            # Tag push: github.ref_name is the tag (e.g. v0.2.0).
+            V="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${V}" >>"${GITHUB_OUTPUT}"
+          echo "Deploying ${V}"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+
+      - name: Configure kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ vars.AWS_REGION }}" \
+            --name "${{ vars.EKS_CLUSTER_NAME }}"
+          kubectl version --client=true
+          kubectl cluster-info
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.0
+
+      - name: helm upgrade --install
+        id: upgrade
+        run: |
+          set -euo pipefail
+          helm upgrade --install "${{ vars.HELM_RELEASE_NAME }}" \
+            ./deploy/helm/skill-pool \
+            --namespace "${{ vars.HELM_NAMESPACE }}" \
+            --create-namespace \
+            -f ./deploy/helm/skill-pool/values-aws.yaml \
+            --set image.server.tag="${{ steps.ver.outputs.version }}" \
+            --set image.web.tag="${{ steps.ver.outputs.version }}" \
+            --wait \
+            --timeout 5m
+
+      - name: Wait for rollouts
+        id: rollout
+        run: |
+          set -euo pipefail
+          kubectl rollout status deployment/skill-pool-server \
+            -n "${{ vars.HELM_NAMESPACE }}" --timeout=5m
+          kubectl rollout status deployment/skill-pool-web \
+            -n "${{ vars.HELM_NAMESPACE }}" --timeout=5m
+
+      - name: Smoke test /v1/healthz
+        run: |
+          set -euo pipefail
+          HOST="${{ vars.PUBLIC_HOSTNAME }}"
+          if [[ -z "${HOST}" ]]; then
+            echo "::warning::PUBLIC_HOSTNAME not set; skipping HTTP smoke test"
+            exit 0
+          fi
+          # Allow up to 60s for ingress / DNS to settle on a fresh deploy.
+          for i in $(seq 1 12); do
+            if curl --fail --silent --show-error --max-time 5 \
+                 "https://${HOST}/v1/healthz" >/tmp/healthz; then
+              cat /tmp/healthz
+              echo
+              echo "Smoke test passed on attempt ${i}"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Smoke test failed against https://${HOST}/v1/healthz"
+          exit 1
+
+      # If anything above this step failed (helm upgrade, rollout status,
+      # or the smoke test), roll the release back to the previous good
+      # revision. This is app-only — schema changes are not reverted
+      # (per docs/ops/rollback.md §1: rollbacks are forward-only).
+      - name: helm rollback on failure
+        if: failure() && steps.upgrade.outcome == 'success'
+        run: |
+          set -euo pipefail
+          echo "::warning::Deploy failed after helm upgrade succeeded; rolling back"
+          helm rollback "${{ vars.HELM_RELEASE_NAME }}" \
+            --namespace "${{ vars.HELM_NAMESPACE }}" \
+            --wait \
+            --timeout 5m
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy ${{ steps.ver.outputs.version }}"
+            echo ""
+            echo "- Cluster: \`${{ vars.EKS_CLUSTER_NAME }}\`"
+            echo "- Namespace: \`${{ vars.HELM_NAMESPACE }}\`"
+            echo "- Release: \`${{ vars.HELM_RELEASE_NAME }}\`"
+            echo "- Outcome: \`${{ job.status }}\`"
+          } >>"${GITHUB_STEP_SUMMARY}"
