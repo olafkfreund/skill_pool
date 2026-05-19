@@ -106,6 +106,39 @@ in
       '';
     };
 
+    tenancyMode = lib.mkOption {
+      type = lib.types.enum [ "shared" "dedicated" ];
+      default = "shared";
+      example = "dedicated";
+      description = ''
+        How the server resolves tenant identity from requests.
+
+        - `shared` (default): multi-tenant. Tenant is resolved from the
+          Host subdomain or the `X-Skill-Pool-Tenant` header.
+        - `dedicated`: single-tenant deploy. The tenant is pinned at
+          startup via `tenancyTenantSlug`; subdomain routing and the
+          `X-Skill-Pool-Tenant` header are ignored. Pair with a
+          separate Postgres + bundle store per tenant for compliance
+          / data-residency. See `docs/enterprise/dedicated-mode.md`.
+
+        Maps to `SKILL_POOL_TENANCY_MODE__MODE`.
+      '';
+    };
+
+    tenancyTenantSlug = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "acme";
+      description = ''
+        Pinned tenant slug for `tenancyMode = "dedicated"`. Must
+        already exist as a row in the `tenants` table (create it via
+        `skill-pool-server admin tenant-create --slug <s> --name <n>`
+        on first boot). Ignored when `tenancyMode = "shared"`.
+
+        Maps to `SKILL_POOL_TENANCY_MODE__TENANT_SLUG`.
+      '';
+    };
+
     logLevel = lib.mkOption {
       type = lib.types.str;
       default = "info,skill_pool=info";
@@ -181,6 +214,17 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.tenancyMode != "dedicated" || cfg.tenancyTenantSlug != null;
+        message = ''
+          services.skill-pool-server.tenancyMode = "dedicated" requires
+          services.skill-pool-server.tenancyTenantSlug to be set to the
+          pinned tenant slug (e.g. "acme").
+        '';
+      }
+    ];
+
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;
@@ -211,6 +255,9 @@ in
         SKILL_POOL_DATABASE_READ_URL = cfg.databaseReadUrl;
         SKILL_POOL_DB_POOL_SIZE = toString cfg.dbPoolSize;
         SKILL_POOL_DEFAULT_TENANT = cfg.defaultTenant;
+        SKILL_POOL_TENANCY_MODE__MODE = cfg.tenancyMode;
+        SKILL_POOL_TENANCY_MODE__TENANT_SLUG =
+          if cfg.tenancyMode == "dedicated" then cfg.tenancyTenantSlug else null;
         RUST_LOG = cfg.logLevel;
         RUST_LOG_FORMAT = cfg.logFormat;
         OTEL_EXPORTER_OTLP_ENDPOINT = cfg.otlpEndpoint;
