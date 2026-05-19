@@ -9,6 +9,7 @@ pub mod audit;
 pub mod auth;
 pub mod bundle;
 pub mod config;
+pub mod email_branding;
 pub mod embedding;
 pub mod error;
 pub mod metrics;

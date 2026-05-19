@@ -12,6 +12,7 @@ mod audit_siem;
 mod bootstrap;
 mod decay;
 mod drafts;
+mod email_branding;
 mod enterprise;
 mod health;
 mod mcp;
@@ -75,6 +76,20 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/tenant/notifications/pending-count",
             get(notifications::pending_count),
+        )
+        // Branded transactional email (#9) — per-tenant SMTP + From
+        // override. GET/PUT/DELETE on the config row; POST on /test
+        // sends a probe email so admins can verify before relying on
+        // it for real notifications.
+        .route(
+            "/v1/tenant/email-branding",
+            get(email_branding::get_config)
+                .put(email_branding::put_config)
+                .delete(email_branding::delete_config),
+        )
+        .route(
+            "/v1/tenant/email-branding/test",
+            post(email_branding::test_config),
         )
         // SIEM export (Phase 5) — fan out audit_events to Splunk HEC,
         // Datadog Logs, or any generic JSON POST receiver.

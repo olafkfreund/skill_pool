@@ -49,6 +49,11 @@ sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
 
+# AES-256-GCM for at-rest encryption of per-tenant SMTP passwords
+# (tenant_email_branding.smtp_password_enc). Key from env
+# SKILL_POOL_EMAIL_SECRET_KEY (32 raw bytes, hex-encoded).
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+
 serde_yaml = "0.9"
 tar = "0.4"
 flate2 = "1"
