@@ -94,6 +94,7 @@ async fn dedicated_mode_pins_tenant_without_header() -> Result<()> {
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
         decay_check_interval_secs: 0,
+        git_repo_path: None,
     };
     // Sanity: the resolver maps the raw config onto the enum variant we expect.
     match cfg.resolved_tenancy() {

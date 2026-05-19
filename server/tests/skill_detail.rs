@@ -100,6 +100,7 @@ async fn boot() -> Result<Harness> {
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
         decay_check_interval_secs: 0,
+        git_repo_path: None,
     };
     let embedder: SharedEmbedder = Arc::new(StubEmbedder);
     let state = state::AppState::new_with_embedder(&cfg, embedder).await?;

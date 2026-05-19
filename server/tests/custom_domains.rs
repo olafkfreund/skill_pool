@@ -64,6 +64,7 @@ async fn custom_domain_admin_flow() -> Result<()> {
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
         decay_check_interval_secs: 0,
+        git_repo_path: None,
     };
     let app_state = state::AppState::new(&cfg).await?;
     let app = routes::router(app_state);

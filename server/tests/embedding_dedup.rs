@@ -119,6 +119,7 @@ async fn boot() -> Result<Harness> {
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
         decay_check_interval_secs: 0,
+        git_repo_path: None,
     };
 
     // KEY DIFFERENCE FROM THE OTHER INTEGRATION TESTS: we inject the

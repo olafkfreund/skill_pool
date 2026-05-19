@@ -288,6 +288,7 @@ async fn saml_acs_full_round_trip() -> Result<()> {
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
         decay_check_interval_secs: 0,
+        git_repo_path: None,
     };
     let state = state::AppState::new(&cfg).await?;
     let app = routes::router(state);
