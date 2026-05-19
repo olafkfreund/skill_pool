@@ -140,6 +140,23 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Phase 4 — queue a session for the capturer pipeline. Designed to run
+    /// as the Claude Code `SessionEnd` hook: reads the score that the Stop
+    /// hook persisted, and if the total exceeds `--threshold` (default 50,
+    /// override via `SKILL_POOL_CAPTURE_THRESHOLD`), drops a marker file
+    /// under `~/.skill-pool/queue/<session_id>.queued`. Exits 0 on any
+    /// failure so the hook never interrupts the user's flow.
+    CaptureQueue {
+        /// Override the session id. Defaults to `$CLAUDE_SESSION_ID`.
+        #[arg(long)]
+        session_id: Option<String>,
+        /// Threshold the session must meet to be queued (`>=`). If unset,
+        /// `SKILL_POOL_CAPTURE_THRESHOLD` is read, falling back to 50.
+        /// A non-numeric env value falls back to the default with a
+        /// `tracing` warning rather than failing the hook.
+        #[arg(long)]
+        threshold: Option<u32>,
+    },
     /// Run the Phase 4.6 LLM capturer over draft-worthy sessions. Two-stage
     /// pipeline: Haiku extractor → Sonnet drafter → POST /v1/drafts.
     /// Idempotent: a session whose `capture_state` is set is skipped.
@@ -293,6 +310,10 @@ async fn main() -> Result<()> {
             None => cmd::capture_score::run(),
         },
         Cmd::CaptureStatus { json } => cmd::capture_status::run(json),
+        Cmd::CaptureQueue {
+            session_id,
+            threshold,
+        } => cmd::capture_queue::run(session_id, threshold),
         Cmd::CaptureRun {
             limit,
             dry_run,

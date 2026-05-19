@@ -20,6 +20,7 @@ use crate::audit;
 use crate::auth::AuthedCaller;
 use crate::bundle::{self, BundleError};
 use crate::error::{AppError, AppResult};
+use crate::git_sync;
 use crate::state::AppState;
 use crate::storage::Storage;
 use crate::tenant::TenantCtx;
@@ -568,6 +569,41 @@ pub async fn publish(
         },
     )
     .await;
+
+    // Best-effort Git mirror (#6 Phase 4). Detached; never blocks
+    // the response. Disabled unless `SKILL_POOL_GIT_REPO_PATH` is set.
+    if let Some(repo) = state.git_repo_path().map(std::path::Path::to_path_buf) {
+        let tenant_slug = caller.tenant.tenant_slug.clone();
+        let kind_for_git = kind.to_string();
+        let slug_for_git = meta.slug.clone();
+        let version_for_git = meta.version.clone();
+        let skill_md = bundle::extract_skill_md(&bytes).ok();
+        let bytes_clone = bytes.clone();
+        tokio::spawn(async move {
+            let md = skill_md.unwrap_or_default();
+            match git_sync::commit_skill(
+                &repo,
+                &tenant_slug,
+                &kind_for_git,
+                &slug_for_git,
+                &version_for_git,
+                &md,
+                &bytes_clone,
+            )
+            .await
+            {
+                Ok(Some(sha)) => tracing::info!(
+                    sha = %sha,
+                    slug = %slug_for_git,
+                    version = %version_for_git,
+                    kind = %kind_for_git,
+                    "git_sync: skill publish committed",
+                ),
+                Ok(None) => tracing::debug!("git_sync: skipped (disabled or best-effort fail)"),
+                Err(e) => tracing::warn!(error = %e, "git_sync: commit_skill returned Err"),
+            }
+        });
+    }
 
     Ok((StatusCode::CREATED, Json(row.into())))
 }

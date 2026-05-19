@@ -1,6 +1,7 @@
 pub mod add;
 pub mod bootstrap;
 pub mod capture;
+pub mod capture_queue;
 pub mod capture_run;
 pub mod capture_score;
 pub mod capture_status;

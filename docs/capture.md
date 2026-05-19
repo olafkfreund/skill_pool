@@ -122,13 +122,41 @@ mid-session prompts.** Designed to run in well under 50 ms.
 skill-pool hook-install --with-scorer
 ```
 
-This installs both:
+This installs three hooks:
 - `SessionStart` → `skill-pool ensure --quiet` (Phase 3)
-- `Stop`        → `skill-pool capture-score`  (Phase 4.5)
+- `Stop`         → `skill-pool capture-score`  (Phase 4.5, per-turn)
+- `SessionEnd`   → `skill-pool capture-queue`  (Phase 4, once at end)
 
-`--remove` pulls both. The CLI preserves any other hooks in
+`--remove` pulls all three. The CLI preserves any other hooks in
 `.claude/settings.json` — both install and remove operate on a JSON
 merge, never an overwrite.
+
+### SessionEnd queueing
+
+Where the Stop hook re-scores every turn (cheap, deterministic), the
+SessionEnd hook fires exactly once when a session terminates. It reads
+the score file that the Stop hook wrote and, if the total is at or
+above the configured threshold, drops a small marker into the queue
+directory:
+
+```
+~/.skill-pool/queue/<session_id>.queued   ← {"queued_at", "session_id", "score", "threshold"}
+```
+
+The Phase 4.6 capturer daemon consumes these markers. Until the daemon
+lands the existing hourly `skill-pool capture-run` keeps working off
+score files directly — the queue is additive, not a replacement.
+
+Threshold precedence:
+1. `--threshold N` flag on the hook command
+2. `SKILL_POOL_CAPTURE_THRESHOLD` env var
+3. Default: **50** (deliberately lower than the per-turn scorer's
+   draft threshold of 100; SessionEnd fires only once, so we surface
+   more sessions to the LLM gate downstream).
+
+A non-numeric env value falls back to the default with a `tracing`
+warning rather than failing the hook — same fail-soft policy as
+`capture-score`.
 
 ### Signals scored today
 

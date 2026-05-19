@@ -92,7 +92,7 @@ pub fn validate(bytes: &Bytes) -> Result<ValidatedBundle, BundleError> {
     })
 }
 
-fn extract_skill_md(bundle: &Bytes) -> Result<String, BundleError> {
+pub fn extract_skill_md(bundle: &Bytes) -> Result<String, BundleError> {
     let gz = GzDecoder::new(bundle.as_ref());
     let mut tar = tar::Archive::new(gz);
 

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use serde::Deserialize;
 
@@ -73,6 +75,17 @@ pub struct Config {
     /// on-demand `/v1/tenant/skills/decay` endpoint continues to work.
     #[serde(default = "default_decay_interval")]
     pub decay_check_interval_secs: u32,
+
+    /// Optional path to a Git repo to mirror catalog publishes into.
+    /// Best-effort: when unset, the publish handlers skip the Git side
+    /// entirely. When set but the path is missing or `git` is not
+    /// installed, the publish still succeeds — the failure is logged
+    /// and swallowed so Postgres (source of truth) stays authoritative.
+    ///
+    /// Env: `SKILL_POOL_GIT_REPO_PATH`. See `docs/lifecycle.md` for the
+    /// on-disk layout and operator notes.
+    #[serde(default)]
+    pub git_repo_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

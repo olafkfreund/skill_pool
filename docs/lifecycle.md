@@ -402,6 +402,44 @@ Defaults that operators most commonly tune: decay `days=180`,
 
 ---
 
+## Optional Git mirror
+
+Postgres is the source of truth for the catalog. For teams that want a
+human-readable, audit-grade history on disk, the server can additionally
+commit every successful publish into a Git repo.
+
+Enable with a single env var:
+
+```bash
+SKILL_POOL_GIT_REPO_PATH=/var/lib/skill-pool/catalog-mirror
+```
+
+When set, both publish paths (`POST /v1/skills` and the
+`POST /v1/drafts/{id}/publish` promotion) spawn a detached
+`git_sync::commit_skill` task after a successful row insert. The
+publish response is **never** blocked on the Git side — if `git` isn't
+installed, the repo path doesn't exist, or the commit fails for any
+reason, the failure is logged and the publish still returns 2xx.
+Postgres remains the source of truth; Git is a mirror.
+
+On-disk layout:
+
+```
+<repo>/<tenant_slug>/<kind>/<slug>/<version>/SKILL.md
+                                              <other-bundle-files>
+```
+
+`<kind>` is one of `skill`, `agent`, `command`. Promoted drafts always
+write under `skill/` (drafts have no explicit kind today). Each commit
+has subject `publish: <tenant>/<kind>/<slug>@<version>` and is authored
+as `skill-pool@local`.
+
+If you want signed commits or a custom author, run the path under a
+working tree whose `.git/config` already sets those — the spawned
+process picks up local config from `git -C <repo>`.
+
+---
+
 ## Future work
 
 Phase 5 ships the bones. The following deferred items live on the

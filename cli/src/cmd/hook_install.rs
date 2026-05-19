@@ -1,19 +1,26 @@
 //! `skill-pool hook-install` — wires Claude Code hooks into
 //! `<project>/.claude/settings.json`.
 //!
-//! Two hooks, both opt-in by flag:
+//! Three hooks, the latter two opt-in via `--with-scorer`:
 //!   - **SessionStart** (`skill-pool ensure --quiet`) — keeps the
 //!     project's skills installed; the canonical Phase 3 trigger.
 //!   - **Stop** (`skill-pool capture-score`) — Phase 4.5 signal scorer;
 //!     runs after every assistant turn and persists a score to
 //!     `~/.skill-pool/sessions/`.
+//!   - **SessionEnd** (`skill-pool capture-queue`) — Phase 4 capture
+//!     queueing; fires once at session end, drops a marker into
+//!     `~/.skill-pool/queue/` when the score is at or above the
+//!     configured threshold. The Phase 4.6 capturer daemon picks
+//!     these up.
 //!
-//! Both complement direnv: direnv runs on shell entry; SessionStart
-//! covers users who skip direnv or open Claude directly; Stop is per-turn.
+//! All three complement direnv: direnv runs on shell entry; SessionStart
+//! covers users who skip direnv or open Claude directly; Stop is per-turn;
+//! SessionEnd is the once-per-session capture trigger.
 //!
 //! Identification: each entry we own has a `command` string containing a
-//! recognised substring (`skill-pool ensure` or `skill-pool capture-score`).
-//! That lets users edit our flags without losing remove/idempotency.
+//! recognised substring (`skill-pool ensure`, `skill-pool capture-score`,
+//! or `skill-pool capture-queue`). That lets users edit our flags without
+//! losing remove/idempotency.
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -24,6 +31,8 @@ const ENSURE_COMMAND: &str = "skill-pool ensure --quiet";
 const ENSURE_TIMEOUT: u64 = 30;
 const SCORE_COMMAND: &str = "skill-pool capture-score";
 const SCORE_TIMEOUT: u64 = 10;
+const QUEUE_COMMAND: &str = "skill-pool capture-queue";
+const QUEUE_TIMEOUT: u64 = 10;
 
 pub fn run(remove: bool, print_only: bool, with_scorer: bool) -> Result<()> {
     let project_root = find_project_root().context("locate project root")?;
@@ -55,6 +64,10 @@ pub fn run(remove: bool, print_only: bool, with_scorer: bool) -> Result<()> {
             changed = true;
             messages.push("removed Stop hook".into());
         }
+        if remove_event(&mut settings, "SessionEnd", "skill-pool capture-queue") {
+            changed = true;
+            messages.push("removed SessionEnd hook".into());
+        }
     } else {
         if add_event(
             &mut settings,
@@ -78,6 +91,18 @@ pub fn run(remove: bool, print_only: bool, with_scorer: bool) -> Result<()> {
             changed = true;
             messages.push(format!("installed Stop → `{SCORE_COMMAND}`"));
         }
+        if with_scorer
+            && add_event(
+                &mut settings,
+                "SessionEnd",
+                "skill-pool capture-queue",
+                QUEUE_COMMAND,
+                QUEUE_TIMEOUT,
+            )
+        {
+            changed = true;
+            messages.push(format!("installed SessionEnd → `{QUEUE_COMMAND}`"));
+        }
     }
 
     if print_only {
@@ -90,7 +115,7 @@ pub fn run(remove: bool, print_only: bool, with_scorer: bool) -> Result<()> {
             println!("(no skill-pool hooks found in {})", settings_path.display());
         } else if with_scorer {
             println!(
-                "(skill-pool SessionStart + Stop hooks already present in {})",
+                "(skill-pool SessionStart + Stop + SessionEnd hooks already present in {})",
                 settings_path.display()
             );
         } else {
@@ -359,5 +384,100 @@ mod tests {
         assert!(remove_event(&mut s, "Stop", "skill-pool capture-score"));
         assert!(s["hooks"].get("Stop").is_none(), "Stop should be pruned");
         assert!(s["hooks"]["SessionStart"].is_array(), "SessionStart kept");
+    }
+
+    #[test]
+    fn add_session_end_event_for_queue() {
+        let mut s = fresh();
+        assert!(add_event(
+            &mut s,
+            "SessionEnd",
+            "skill-pool capture-queue",
+            QUEUE_COMMAND,
+            QUEUE_TIMEOUT
+        ));
+        let arr = s["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(arr[0]["hooks"][0]["command"], QUEUE_COMMAND);
+    }
+
+    #[test]
+    fn session_end_is_idempotent() {
+        let mut s = fresh();
+        assert!(add_event(
+            &mut s,
+            "SessionEnd",
+            "skill-pool capture-queue",
+            QUEUE_COMMAND,
+            QUEUE_TIMEOUT
+        ));
+        assert!(!add_event(
+            &mut s,
+            "SessionEnd",
+            "skill-pool capture-queue",
+            QUEUE_COMMAND,
+            QUEUE_TIMEOUT
+        ));
+    }
+
+    #[test]
+    fn session_end_preserves_unrelated_entries() {
+        let mut s = json!({
+            "hooks": {
+                "SessionEnd": [
+                    { "matcher": "interactive", "hooks": [
+                        { "type": "command", "command": "echo bye" }
+                    ]}
+                ]
+            }
+        });
+        assert!(add_event(
+            &mut s,
+            "SessionEnd",
+            "skill-pool capture-queue",
+            QUEUE_COMMAND,
+            QUEUE_TIMEOUT
+        ));
+        let arr = s["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["hooks"][0]["command"], "echo bye");
+        assert!(arr[1]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("skill-pool capture-queue"));
+    }
+
+    #[test]
+    fn remove_session_end_leaves_other_hooks_untouched() {
+        let mut s = fresh();
+        assert!(add_event(
+            &mut s,
+            "SessionStart",
+            "skill-pool ensure",
+            ENSURE_COMMAND,
+            ENSURE_TIMEOUT
+        ));
+        assert!(add_event(
+            &mut s,
+            "Stop",
+            "skill-pool capture-score",
+            SCORE_COMMAND,
+            SCORE_TIMEOUT
+        ));
+        assert!(add_event(
+            &mut s,
+            "SessionEnd",
+            "skill-pool capture-queue",
+            QUEUE_COMMAND,
+            QUEUE_TIMEOUT
+        ));
+
+        assert!(remove_event(
+            &mut s,
+            "SessionEnd",
+            "skill-pool capture-queue"
+        ));
+        assert!(s["hooks"].get("SessionEnd").is_none());
+        assert!(s["hooks"]["SessionStart"].is_array());
+        assert!(s["hooks"]["Stop"].is_array());
     }
 }
