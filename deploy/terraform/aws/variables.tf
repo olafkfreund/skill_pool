@@ -131,3 +131,35 @@ variable "bundle_draft_ttl_days" {
   type        = number
   default     = 14
 }
+
+# --- TLS / cert-manager -------------------------------------------------
+
+variable "cert_manager_enabled" {
+  description = "Install cert-manager + Let's Encrypt ClusterIssuers (free, in-cluster TLS issuance). Set false if you manage cert-manager elsewhere OR use ACM only."
+  type        = bool
+  default     = true
+}
+
+variable "cert_manager_chart_version" {
+  description = "cert-manager Helm chart version. Pinned; bump deliberately."
+  type        = string
+  default     = "v1.16.1"
+}
+
+variable "letsencrypt_email" {
+  description = "Email for Let's Encrypt account registration. Receives renewal notices + service messages from LE. CUSTOMISE."
+  type        = string
+  default     = "ops@example.com"
+}
+
+variable "use_nip_io" {
+  description = "Use *.nip.io DNS for the portal (free, no domain purchase needed; resolves *.<dashed-ip>.nip.io to the ALB IP). When true, the Helm values target nip.io hosts and cert-manager issues per-tenant Let's Encrypt certs. When false, supply your own domain + DNS records."
+  type        = bool
+  default     = true
+}
+
+variable "use_acm_cert" {
+  description = "Use an ACM-issued cert (set acm_certificate_arn in your Helm values) instead of cert-manager + Let's Encrypt. Default false because nip.io can't validate via ACM."
+  type        = bool
+  default     = false
+}

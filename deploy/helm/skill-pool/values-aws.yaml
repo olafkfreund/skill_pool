@@ -10,8 +10,22 @@
 # need to paste elsewhere after apply").
 
 # ---------------------------------------------------------------------
-# Ingress — ALB via AWS Load Balancer Controller, TLS terminated at ALB
-# using the ACM cert created by Terraform. No cert-manager.
+# Ingress — ALB via AWS Load Balancer Controller.
+#
+# TLS strategy: **nip.io + cert-manager + Let's Encrypt** (free, no domain
+# purchase needed). After `terraform apply`, the ALB gets a public IP;
+# `<dashed-ip>.nip.io` resolves to that IP via the free nip.io service.
+# cert-manager watches the Ingress, runs an HTTP-01 challenge through
+# the ALB, and writes the issued cert into the `tls.secretName` below.
+#
+# Two listeners on the ALB:
+#   * :80 — used by cert-manager's HTTP-01 challenge AND for HTTP→HTTPS
+#           redirect on user traffic.
+#   * :443 — TLS-terminated with the cert-manager-issued cert.
+#
+# When you migrate to a real domain, switch the host below to your
+# domain and OPTIONALLY swap to ACM by setting var.use_acm_cert = true
+# in Terraform — that path doesn't go through cert-manager at all.
 # ---------------------------------------------------------------------
 ingress:
   enabled: true
@@ -19,23 +33,53 @@ ingress:
   annotations:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
-    # CUSTOMISE — from `terraform output acm_certificate_arn`
-    alb.ingress.kubernetes.io/certificate-arn: ""
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+
+    # TLS issuance via cert-manager — see deploy/terraform/aws/cert-manager.tf.
+    # Use `letsencrypt-staging` while iterating (untrusted certs, 30k/wk),
+    # then flip to `letsencrypt-prod` once it's working (trusted, 50/wk).
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+    # Listen on both 80 and 443 — 80 is needed for the LE HTTP-01 challenge
+    # (cert-manager creates a transient Ingress that needs port-80 reach).
+    # ssl-redirect makes user traffic on 80 bounce to 443; the challenge
+    # path /.well-known/acme-challenge/* is exempted by the ALB controller.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
+
     # 50 MiB matches the proxy_body_size in docs/deploy/kubernetes.md;
     # bundles can be large.
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=60
     # Health check the /v1/healthz the server already exposes.
     alb.ingress.kubernetes.io/healthcheck-path: /v1/healthz
     alb.ingress.kubernetes.io/success-codes: "200"
+
   hosts:
-    # CUSTOMISE — your apex host. Per-tenant subdomains route through the
-    # same ALB; the catch-all is handled inside the app.
-    - host: ""
+    # CUSTOMISE — replace <dashed-ip> with the ALB's IP after
+    # `kubectl get ingress -n skill-pool`. The first deploy uses
+    # a placeholder so the chart renders; the second deploy uses
+    # the real ALB hostname:
+    #   helm upgrade skill-pool ... \
+    #     --set ingress.hosts[0].host=skill-pool.54-220-123-45.nip.io
+    - host: skill-pool.REPLACE-WITH-ALB-DASHED-IP.nip.io
       paths:
+        # /v1/* and /metrics route to the server pod; everything else
+        # goes to the SvelteKit web pod.
+        - path: /v1
+          pathType: Prefix
+          service: server
+        - path: /metrics
+          pathType: Exact
+          service: server
         - path: /
           pathType: Prefix
+          service: web
+
+  tls:
+    enabled: true
+    # cert-manager will create this Secret automatically and populate it
+    # with the LE-issued cert. The chart's Ingress references it; the
+    # ALB controller wires it to the listener.
+    secretName: skill-pool-tls
 
 # ---------------------------------------------------------------------
 # Service account — bound to the IRSA role so the pod can read/write

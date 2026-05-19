@@ -2,7 +2,17 @@
 
 End-to-end deploy of skill-pool to AWS: EKS for compute, RDS Postgres
 16 (with pgvector) for the catalog, S3 for bundle storage, ECR for
-container images, ACM + Route53 + an ALB for ingress.
+container images, an ALB for ingress, and **cert-manager + Let's Encrypt
++ nip.io** for free TLS without buying a domain.
+
+> **TLS strategy.** The default path uses `<dashed-ip>.nip.io` — a free
+> wildcard DNS service that resolves `*.<dashed-ip>.nip.io` to any IPv4
+> you stick in the host. cert-manager runs in-cluster, watches the
+> Ingress, kicks off an HTTP-01 challenge through the ALB, and writes
+> the Let's Encrypt cert into a Secret the ALB then serves. **Zero
+> domain purchase, zero DNS-provider setup.** When you eventually want
+> a real domain, swap `ingress.hosts[].host` to your own and either keep
+> cert-manager OR flip to ACM via `var.use_acm_cert = true`.
 
 The Terraform starter is at [`deploy/terraform/aws/`](../../deploy/terraform/aws/);
 the Helm chart at [`deploy/helm/skill-pool/`](../../deploy/helm/skill-pool/)
@@ -11,9 +21,9 @@ workflows live in [`.github/workflows/`](../../.github/workflows/).
 
 ```
 ┌──────────────┐  HTTPS  ┌──────────────┐
-│  internet    │ ──────► │     ALB      │  ← ACM cert, Route53 ALIAS
-└──────────────┘         │  (kube-alb)  │
-                         └──────┬───────┘
+│  internet    │ ──────► │     ALB      │  ← cert from Let's Encrypt
+└──────────────┘         │  (kube-alb)  │     (cert-manager + nip.io)
+   *.nip.io DNS          └──────┬───────┘
                                 │
                 ┌───────────────┴───────────────┐
                 ▼                               ▼
@@ -242,60 +252,110 @@ kubectl -n skill-pool rollout status deploy/skill-pool-web
 kubectl -n skill-pool get pods
 ```
 
-## 8. DNS — point Route53 at the ALB
+## 8. DNS via nip.io + Let's Encrypt cert (default, free)
+
+The default deploy uses **nip.io** as a wildcard DNS service so you don't
+need to buy a domain or configure Route53. `<anything>.<dashed-ipv4>.nip.io`
+resolves to the IPv4 in the middle.
+
+### Step 1 — find the ALB IP
 
 The chart's Ingress causes the ALB Controller to provision an ALB.
-Get the ALB hostname:
+Resolve its DNS name to a public IP:
 
 ```bash
-kubectl -n skill-pool get ingress skill-pool \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-# k8s-skillpoo-skillpoo-abc123def.eu-west-1.elb.amazonaws.com
-```
-
-Create an A-ALIAS record in your zone for both the apex and the
-wildcard, pointing at that hostname. Example with the AWS CLI:
-
-```bash
-ZONE_ID="$(terraform -chdir=deploy/terraform/aws output -raw route53_zone_id)"
-ALB_HOSTNAME="$(kubectl -n skill-pool get ingress skill-pool \
+ALB_HOST="$(kubectl -n skill-pool get ingress skill-pool \
   -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
+# k8s-skillpoo-skillpoo-abc123def.eu-west-1.elb.amazonaws.com
 
-cat > change-batch.json <<JSON
-{
-  "Changes": [
-    {
-      "Action": "UPSERT",
-      "ResourceRecordSet": {
-        "Name": "skill-pool.example.com",
-        "Type": "A",
-        "AliasTarget": {
-          "HostedZoneId": "Z32O12XQLNTSW2",
-          "DNSName": "$ALB_HOSTNAME",
-          "EvaluateTargetHealth": false
-        }
-      }
-    },
-    {
-      "Action": "UPSERT",
-      "ResourceRecordSet": {
-        "Name": "*.skill-pool.example.com",
-        "Type": "A",
-        "AliasTarget": {
-          "HostedZoneId": "Z32O12XQLNTSW2",
-          "DNSName": "$ALB_HOSTNAME",
-          "EvaluateTargetHealth": false
-        }
-      }
-    }
-  ]
-}
-JSON
-
-aws route53 change-resource-record-sets \
-  --hosted-zone-id "$ZONE_ID" \
-  --change-batch file://change-batch.json
+ALB_IP="$(dig +short "$ALB_HOST" | head -n1)"
+echo "$ALB_IP"
+# 54.220.123.45
 ```
+
+(ALBs are technically dual-stack with multiple IPs; any one works for
+nip.io. The IPs rotate occasionally — re-resolve if you see TLS
+issuance failures days later.)
+
+### Step 2 — derive the nip.io host
+
+```bash
+DASHED_IP="${ALB_IP//./-}"
+PORTAL_HOST="skill-pool.${DASHED_IP}.nip.io"
+echo "$PORTAL_HOST"
+# skill-pool.54-220-123-45.nip.io
+```
+
+### Step 3 — re-deploy with the real host
+
+The first deploy used a placeholder host so the chart could render. Now
+that the ALB is up, set the real host and re-upgrade:
+
+```bash
+helm upgrade skill-pool ./deploy/helm/skill-pool \
+  -f deploy/helm/skill-pool/values-aws.yaml \
+  --namespace skill-pool \
+  --set ingress.hosts[0].host="$PORTAL_HOST" \
+  --reuse-values
+```
+
+### Step 4 — wait for Let's Encrypt to issue the cert
+
+cert-manager (installed by `deploy/terraform/aws/cert-manager.tf`)
+watches the Ingress, creates a `Certificate` resource, runs the HTTP-01
+challenge through the ALB on port 80, and writes the issued cert into
+the `skill-pool-tls` Secret. Watch it:
+
+```bash
+kubectl -n skill-pool get certificate -w
+# Wait until READY=True (typically 30-120 seconds).
+
+# If it stalls, inspect:
+kubectl -n skill-pool describe certificate skill-pool-tls
+kubectl -n skill-pool describe certificaterequest
+kubectl -n skill-pool describe order
+kubectl -n skill-pool describe challenge
+```
+
+**While iterating**, point the chart at the LE staging issuer (much
+higher rate limits, untrusted cert):
+
+```bash
+helm upgrade skill-pool ./deploy/helm/skill-pool \
+  -f deploy/helm/skill-pool/values-aws.yaml \
+  --namespace skill-pool \
+  --set ingress.annotations.'cert-manager\.io/cluster-issuer'=letsencrypt-staging \
+  --reuse-values
+```
+
+Then flip back to `letsencrypt-prod` once the path works end-to-end.
+
+### Step 5 — per-tenant subdomains
+
+Tenants get their own subdomain on the same nip.io hostname:
+
+```text
+acme.54-220-123-45.nip.io   → resolves to ALB → tenant acme
+globex.54-220-123-45.nip.io → resolves to ALB → tenant globex
+```
+
+For each tenant subdomain you also want LE-issued, list it in
+`ingress.hosts[]` so cert-manager issues a SAN cert. cert-manager
+will batch the host list into one `Certificate` resource and one
+challenge per host (Let's Encrypt allows up to 100 SAN names per cert).
+
+### What changes when you switch to a real domain
+
+When you outgrow nip.io (production, branding, SAN-cert rate limits):
+
+1. Buy a domain + add a Route53 hosted zone.
+2. Set `var.route53_zone_name` in Terraform and `var.use_nip_io = false`.
+3. Re-apply Terraform — it'll create the Route53 ALIAS records pointing
+   at the ALB.
+4. Change `ingress.hosts[].host` to your real domain.
+5. Optionally `terraform apply -var use_acm_cert=true` to swap to an
+   ACM-issued cert and drop cert-manager (slightly cheaper / fully
+   managed by AWS; cert-manager + LE works fine too).
 
 > The `HostedZoneId` `Z32O12XQLNTSW2` is the well-known eu-west-1
 > ALB zone — substitute your region's value from
