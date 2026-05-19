@@ -4,6 +4,28 @@ import { DEFAULT_THEME, type Theme } from '$lib/theme';
 import type { TenantContext } from '$lib/types';
 import { getTheme, toClientTheme } from '$lib/server/api';
 
+const DEFAULT_API_BASE = 'http://127.0.0.1:8080';
+
+/**
+ * Cheap HEAD-like probe to determine whether the tenant has a custom-CSS
+ * overlay set. We can't use HEAD (the server doesn't expose it) so we issue
+ * a GET and immediately discard the body — the overlay is at most 32 KiB so
+ * the wasted bandwidth is negligible compared to the alternative (an extra
+ * column in `GET /v1/theme` just for a boolean flag).
+ */
+async function hasCustomCssFor(slug: string): Promise<boolean> {
+  const apiBase = env.SKILL_POOL_API_BASE?.replace(/\/$/, '') ?? DEFAULT_API_BASE;
+  try {
+    const resp = await fetch(`${apiBase}/v1/theme/custom.css`, {
+      method: 'GET',
+      headers: { 'X-Skill-Pool-Tenant': slug },
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 function resolveTenant(url: URL, host: string | null): string {
   const override = url.searchParams.get('tenant');
   if (override) return override.toLowerCase();
@@ -40,9 +62,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 
   const tenant: TenantContext = { slug, authed };
   const theme = await themeFor(slug);
+  const hasCustomCss = await hasCustomCssFor(slug);
 
   event.locals.tenant = tenant;
   event.locals.theme = theme;
+  event.locals.hasCustomCss = hasCustomCss;
 
   return resolve(event);
 };

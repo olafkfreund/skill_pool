@@ -81,6 +81,14 @@ impl Storage {
         format!("{tenant_id}/theme/favicon.{ext}")
     }
 
+    /// Object key for a tenant's uploaded custom-CSS overlay. One key per
+    /// tenant — the column is single-valued and overwriting on every upload
+    /// matches the logo/favicon convention. No `ext` parameter: a custom CSS
+    /// file is always `.css`.
+    pub fn custom_css_key(tenant_id: Uuid) -> String {
+        format!("{tenant_id}/theme/custom.css")
+    }
+
     pub async fn put_bundle(&self, key: &str, bytes: Bytes) -> Result<()> {
         self.op
             .write(key, bytes)

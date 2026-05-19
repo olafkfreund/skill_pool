@@ -10,6 +10,7 @@
     Image as ImageIcon,
     Trash2,
     Type as TypeIcon,
+    Code2,
   } from '@lucide/svelte';
   import { contrastRatio, wcagBadge, checkThemeContrast } from '$lib/contrast';
   import type { Theme } from '$lib/theme';
@@ -32,6 +33,20 @@
   // Editable copy. Intentionally non-reactive — `untrack` tells the compiler
   // we mean it. The `$effect` below re-syncs after a successful save.
   let theme = $state<Theme>(untrack(() => ({ ...(form?.draft ?? form?.theme ?? data.theme) })));
+
+  // Custom CSS overlay editor. Pre-populated from the server on load; the
+  // server returns the raw bytes verbatim so a tenant's comments survive
+  // round-trips. The textarea is untracked initially and re-synced on
+  // successful save/remove via the effect below.
+  let customCss = $state<string>(
+    untrack(() => (typeof form?.customCss === 'string' ? form.customCss : data.customCss ?? '')),
+  );
+  $effect(() => {
+    if (typeof form?.customCss === 'string') {
+      customCss = form.customCss;
+    }
+  });
+  const hasCustomCss = $derived(customCss.trim().length > 0);
 
   // The font-picker value is bound separately because the form encodes
   // `"system"` for the OS stack but the Theme object stores `undefined` in
@@ -275,6 +290,64 @@
     >
       Upload
     </button>
+  </form>
+</section>
+
+<!-- Custom CSS overlay. The server runs a strict sanitizer over the bytes
+     before persisting; the response also pins
+     `Content-Security-Policy: style-src 'self'` so a sanitizer bypass can't
+     pull in an external sheet. 32 KiB cap. -->
+<section class="mb-6 rounded-[var(--sp-radius)] border border-[var(--sp-border)] p-4">
+  <header class="mb-3 flex items-center gap-2">
+    <Code2 size="16" aria-hidden="true" />
+    <h2 class="text-sm font-semibold">Custom CSS overlay</h2>
+  </header>
+  <p class="mb-3 text-xs text-[var(--sp-muted-fg)]">
+    Layer a CSS overlay on top of the curated <code>--sp-*</code> variables.
+    Max 32&nbsp;KiB. The server rejects <code>@import</code>, off-site
+    <code>url()</code>, <code>expression()</code>, <code>behavior:</code>,
+    <code>javascript:</code> URIs, and HTML-tag-like content — see the
+    enterprise docs for the full list.
+  </p>
+
+  {#if form?.savedCustomCss}
+    <p class="mb-2 text-xs text-emerald-700">Custom CSS saved.</p>
+  {/if}
+  {#if form?.removedCustomCss}
+    <p class="mb-2 text-xs text-emerald-700">Custom CSS removed.</p>
+  {/if}
+
+  <form method="POST" action="?/customCss" class="space-y-3">
+    <textarea
+      name="customCss"
+      bind:value={customCss}
+      rows="12"
+      placeholder={'.sp-hero { background: var(--sp-primary); }'}
+      class="w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 font-mono text-xs leading-relaxed"
+      spellcheck="false"
+      aria-label="Custom CSS overlay editor"
+    ></textarea>
+    <div class="flex flex-wrap items-center gap-3">
+      <button
+        type="submit"
+        class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] px-3 py-1.5 text-xs font-medium"
+        style="background: var(--sp-primary); color: var(--sp-primary-fg);"
+      >
+        <Save size="12" aria-hidden="true" /> Save custom CSS
+      </button>
+      {#if hasCustomCss}
+        <button
+          type="submit"
+          formaction="?/removeCustomCss"
+          class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50"
+        >
+          <Trash2 size="12" aria-hidden="true" /> Remove custom CSS
+        </button>
+      {/if}
+      <span class="text-xs text-[var(--sp-muted-fg)]">
+        {new Blob([customCss]).size} / 32&thinsp;768 bytes
+      </span>
+    </div>
   </form>
 </section>
 
