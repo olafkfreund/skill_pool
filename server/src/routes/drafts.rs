@@ -338,8 +338,7 @@ pub async fn create(
     // audit-logged from the spawned task. Skipped silently if the tenant
     // has no webhook configured.
     crate::notify::draft_created(
-        state.db().clone(),
-        state.email_transport().clone(),
+        state.clone(),
         crate::notify::DraftCreatedEvent {
             tenant_id: caller.tenant.tenant_id,
             tenant_slug: caller.tenant.tenant_slug.clone(),

@@ -92,6 +92,7 @@ async fn dedicated_mode_pins_tenant_without_header() -> Result<()> {
         storage_uri,
         origin_pattern: "https://acme-skill-pool.example.test".into(),
         embedding: config::EmbeddingConfig::default(),
+        queue_enabled: None,
     };
     // Sanity: the resolver maps the raw config onto the enum variant we expect.
     match cfg.resolved_tenancy() {

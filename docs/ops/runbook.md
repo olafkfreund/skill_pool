@@ -413,3 +413,73 @@ Wake the next person up when any of the following is true.
 | Hardware or cloud-provider outage (host unreachable, region degraded, S3/RDS degraded) | Platform / infra on-call | skill-pool cannot self-heal through this; the fix is at the provider layer. |
 | Suspected security incident: leaked token in logs, unexpected `admin` CLI invocations, suspected RCE in a published bundle | Security on-call | Tokens may need mass revocation; the bundle may need to be pulled from storage. |
 | Data corruption suspected — `http_requests_total{status="5.."} > 1%` together with sqlx error logs mentioning `unique violation`, `foreign key constraint`, or `check constraint` | Database owner | A bad migration or a write path corrupting state needs eyes that have schema context. |
+
+## 7. Queue + DLQ
+
+The skill-pool job queue (issue #10 §D) is a thin layer on the same Redis used by the read-through caches and the rate-limiter. The first consumer is the email-notification path; future consumers (webhook delivery, embedding backfill) will land on the same machinery. This section is the operator runbook for inspecting and recovering jobs.
+
+### Redis keys per queue
+
+Every queue named `<name>` (only `default` today) owns four keys:
+
+| Key | Type | What it holds |
+|---|---|---|
+| `q:<name>` | ZSET | Pending + leased jobs. Member is the job id, score is the unix-ms timestamp at which the job is due. Leased jobs sit at `now + 60_000` so a crashed worker's job becomes due again automatically. |
+| `q:<name>:job:<id>` | STRING | JSON envelope: `{ id, kind, payload, attempts, max_attempts, idempotency_key, first_enqueued_at }`. 7-day TTL. |
+| `q:<name>:dlq` | LIST | Job ids that exhausted retries. New entries are `LPUSH`'d so `LRANGE 0 -1` shows newest first. |
+| `q:<name>:idem:<key>` | STRING | 24h-TTL marker for enqueue-side dedup; written via `SET NX EX`. |
+
+### Inspecting
+
+```bash
+# How many jobs are pending or in-flight right now
+redis-cli ZCARD q:default
+
+# What's queued, in due-by-score order
+redis-cli ZRANGE q:default 0 -1 WITHSCORES
+
+# Dead-letter list
+redis-cli LRANGE q:default:dlq 0 -1
+
+# Full envelope for one job
+redis-cli GET q:default:job:<id>
+```
+
+The Prometheus dashboard surfaces the same data via `skill_pool_queue_depth{queue="default"}` and `skill_pool_queue_dlq_depth{queue="default"}`. The counter `skill_pool_queue_jobs_total{queue,outcome}` is the rate of completions, broken out by outcome ∈ `{success, retried, dlq, failed}`.
+
+### Requeueing from the DLQ
+
+After fixing the underlying cause (broken SMTP relay, expired credentials, bad branding row, etc.), push DLQ entries back into the main queue:
+
+```bash
+# Pop one id, then re-add at "due now" so the worker picks it up
+ID=$(redis-cli LPOP q:default:dlq)
+NOW_MS=$(($(date +%s%3N)))
+redis-cli ZADD q:default $NOW_MS $ID
+```
+
+You can also bulk-requeue all entries with a small loop. The envelope's `attempts` counter is preserved across requeue so a still-broken job will quickly land back in the DLQ — that's intentional and good.
+
+### Retry schedule
+
+`nack` re-schedules with exponential back-off. The first nack waits 1s, the second 2s, the third 4s, then 8, 16, 32, 64, … s up to a cap of 30 minutes. After 5 nacks (the default `max_attempts`) the job moves to the DLQ; consumers can override `max_attempts` per job kind.
+
+| nack # | back-off | next-run-at |
+|---|---|---|
+| 1 | 1 s | `now + 1000ms` |
+| 2 | 2 s | `now + 2000ms` |
+| 3 | 4 s | `now + 4000ms` |
+| 4 | 8 s | `now + 8000ms` |
+| 5 | (DLQ) | — |
+
+### Lease semantics
+
+`try_dequeue` is atomic via a `redis::Script`: it `ZRANGEBYSCORE`s the next due job and immediately `ZADD`s the same member at `score = now + 60_000` ms. That makes the job invisible to other workers for 60 seconds. If the worker crashes between dequeue and ack/nack, the lease expires and the job becomes due again — at-least-once delivery. Handlers must therefore be idempotent w.r.t. the same `(job_id, attempts)` pair; the queue helps via its enqueue-side `idempotency_key`.
+
+### Fallback when Redis is offline
+
+When `SKILL_POOL_REDIS_URL` is unset or the initial connect fails, the queue is not built and `AppState::queue()` returns `None`. The email-notification consumer detects this and falls back to inline SMTP send on the request-handling thread — the contract before issue #10 §D landed. If `enqueue` itself fails on a live queue (a transient Redis blip during a request), the consumer logs the error and runs the inline path so the email still goes out; we never silently drop a notification because Redis hiccuped.
+
+### Alert: `SkillPoolDLQGrowing`
+
+Fires `warning` after `skill_pool_queue_dlq_depth > 0` for 10 minutes. Defined in `ops/alerts/skill-pool.rules.yaml`. The annotation embeds the inspection commands above; this section is the longer-form playbook.

@@ -120,3 +120,21 @@ groups:
             for 2 consecutive minutes. The server is up enough to respond
             to /v1/healthz (HTTP 200 by design — load balancers stay up),
             but the database probe is failing. Inspect Postgres logs.
+
+  - name: skill-pool.queue
+    interval: 30s
+    rules:
+      - alert: SkillPoolDLQGrowing
+        expr: skill_pool_queue_dlq_depth > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: skill-pool
+        annotations:
+          summary: "skill-pool DLQ has jobs for 10m+"
+          description: |
+            The {{ $labels.queue }} queue's dead-letter list has been non-empty
+            for 10 minutes. Inspect with `redis-cli LRANGE q:{{ $labels.queue }}:dlq 0 -1`
+            then `GET q:{{ $labels.queue }}:job:<id>` for each. Decide: requeue
+            via ZADD back to the main queue, fix the underlying issue, or
+            delete. See docs/ops/runbook.md §"Queue + DLQ".

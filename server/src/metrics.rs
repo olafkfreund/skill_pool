@@ -19,8 +19,9 @@ use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use prometheus::{
-    register_histogram_vec, register_int_counter_vec, register_int_gauge, Encoder, HistogramVec,
-    IntCounterVec, IntGauge, TextEncoder,
+    register_histogram_vec, register_int_counter_vec, register_int_gauge,
+    register_int_gauge_vec, Encoder, HistogramVec, IntCounter, IntCounterVec, IntGauge,
+    IntGaugeVec, TextEncoder,
 };
 
 use crate::state::AppState;
@@ -71,6 +72,71 @@ fn db_pool_size() -> &'static IntGauge {
         register_int_gauge!("db_pool_size", "Current number of connections in the sqlx pool")
             .expect("register db_pool_size")
     })
+}
+
+// ---------------------------------------------------------------------------
+// Job-queue instruments (#10 §D)
+// ---------------------------------------------------------------------------
+//
+// Three series, all labelled by the queue name (we only run `default`
+// today, but worker shipped with a label keeps the API stable when a
+// second queue arrives):
+//
+//   * `skill_pool_queue_depth{queue}`     — current ZCARD of q:<name>
+//   * `skill_pool_queue_dlq_depth{queue}` — current LLEN of q:<name>:dlq
+//   * `skill_pool_queue_jobs_total{queue,outcome}` — counter, outcome ∈
+//     {success, retried, dlq, failed}
+
+fn queue_depth_vec() -> &'static IntGaugeVec {
+    static ONCE: std::sync::OnceLock<IntGaugeVec> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        register_int_gauge_vec!(
+            "skill_pool_queue_depth",
+            "Current number of pending or in-flight jobs in the queue (ZCARD)",
+            &["queue"]
+        )
+        .expect("register skill_pool_queue_depth")
+    })
+}
+
+fn queue_dlq_depth_vec() -> &'static IntGaugeVec {
+    static ONCE: std::sync::OnceLock<IntGaugeVec> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        register_int_gauge_vec!(
+            "skill_pool_queue_dlq_depth",
+            "Current number of jobs in the dead-letter list (LLEN)",
+            &["queue"]
+        )
+        .expect("register skill_pool_queue_dlq_depth")
+    })
+}
+
+fn queue_jobs_total_vec() -> &'static IntCounterVec {
+    static ONCE: std::sync::OnceLock<IntCounterVec> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        register_int_counter_vec!(
+            "skill_pool_queue_jobs_total",
+            "Job outcomes by queue. outcome is one of: success, retried, dlq, failed.",
+            &["queue", "outcome"]
+        )
+        .expect("register skill_pool_queue_jobs_total")
+    })
+}
+
+/// Gauge handle for `skill_pool_queue_depth{queue=<name>}`.
+pub fn queue_depth(queue: &str) -> IntGauge {
+    queue_depth_vec().with_label_values(&[queue])
+}
+
+/// Gauge handle for `skill_pool_queue_dlq_depth{queue=<name>}`.
+pub fn queue_dlq_depth(queue: &str) -> IntGauge {
+    queue_dlq_depth_vec().with_label_values(&[queue])
+}
+
+/// Counter handle for `skill_pool_queue_jobs_total{queue,outcome}`.
+/// `outcome` must be one of `success`, `retried`, `dlq`, `failed`.
+pub fn queue_jobs_total(queue: &str, outcome: &str) -> IntCounter {
+    queue_jobs_total_vec().with_label_values(&[queue, outcome])
 }
 
 // ---------------------------------------------------------------------------

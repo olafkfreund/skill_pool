@@ -57,6 +57,15 @@ pub struct Config {
     /// rather than a hard error — see `state::AppState::new`.
     #[serde(default)]
     pub redis_url: Option<String>,
+
+    /// Master switch for the Redis-backed job queue (#10 §D). When
+    /// unset we default to `Some(true)` if `redis_url` is configured,
+    /// because the only reason to disable it on a Redis-enabled
+    /// deployment is the bring-up window where an operator wants the
+    /// old inline behaviour. Setting this to `false` forces the
+    /// inline path on every consumer even when Redis is available.
+    #[serde(default)]
+    pub queue_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

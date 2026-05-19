@@ -13,18 +13,21 @@
 //! are signed with HMAC-SHA256 and the hex digest is shipped in
 //! `X-Skill-Pool-Signature: sha256=<hex>`. Matches GitHub/Stripe convention.
 
-use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use hmac::{Hmac, Mac};
-use serde::Serialize;
-use sha2::Sha256;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::audit;
 use crate::email_branding::{self, TransportCache as EmailTransportCache};
+use crate::queue::Job;
+use crate::state::AppState;
+use crate::worker::JobHandler;
 
 const DELIVERY_TIMEOUT_SECS: u64 = 5;
 const SIGNATURE_HEADER: &str = "X-Skill-Pool-Signature";
@@ -179,20 +182,24 @@ pub struct DraftCreatedEvent {
     pub merge_proposal_slug: Option<String>,
 }
 
-/// Fire-and-forget delivery. Returns immediately; outcome is audit-logged
-/// from inside the spawned task. Both webhook + email channels fan out
-/// from a single tokio task — neither blocks the other.
+/// Fire-and-forget delivery. Returns immediately. The webhook channel
+/// always runs inline on a detached `tokio::spawn` (it's idempotent
+/// against the receiver, and the existing retry-once policy is fine).
+/// The email channel splits two ways:
 ///
-/// `email_transport` is the per-tenant branded SMTP cache. When a tenant
-/// has a `tenant_email_branding` row configured, the email branch sends
-/// through that cached transport with the branded From / Reply-To /
-/// footer. When the row is absent, the legacy global SMTP path
-/// (`notification_smtp_*` columns) is used unchanged.
-pub fn draft_created(
-    db: PgPool,
-    email_transport: Arc<EmailTransportCache>,
-    ev: DraftCreatedEvent,
-) {
+///   * **Queue available** (`state.queue()` is `Some`) → builds an
+///     `EmailJob` and enqueues it. The worker picks it up, runs the
+///     SMTP send with exponential back-off, and audit-logs the
+///     outcome. If SMTP is slow or unreachable the request thread is
+///     never blocked and the job retries up to 5 times before falling
+///     into the DLQ.
+///   * **No queue** (Redis off, `queue_enabled=false`) → keeps the
+///     legacy inline path bit-identical to v0.14. This is the
+///     behaviour every existing test (`notifications`,
+///     `email_branding`, `email_notifications`) was built against;
+///     keeping it unchanged means those tests keep passing without
+///     modification.
+pub fn draft_created(state: AppState, ev: DraftCreatedEvent) {
     let DraftCreatedEvent {
         tenant_id,
         tenant_slug,
@@ -202,6 +209,9 @@ pub fn draft_created(
         origin,
         merge_proposal_slug,
     } = ev;
+    let db = state.db().clone();
+    let email_transport = state.email_transport().clone();
+    let queue = state.queue().cloned();
     tokio::spawn(async move {
         let cfg = match NotificationConfig::load(&db, tenant_id).await {
             Ok(c) => c,
@@ -263,7 +273,7 @@ pub fn draft_created(
         }
 
         // ---- Email fanout ----
-        if let Some(em) = &cfg.email {
+        if let Some(em) = cfg.email {
             let subject = format!("[skill-pool] New draft \"{}\" in {}", draft_slug, tenant_slug);
             let body = build_email_body(
                 &tenant_slug,
@@ -273,53 +283,255 @@ pub fn draft_created(
                 merge_proposal_slug.as_deref(),
             );
 
-            // Branded path: tenant has per-tenant SMTP + From override.
-            // We still respect `cfg.email.to_addr` from the legacy table
-            // as the recipient — that's where curators expect to be
-            // notified. Only the transport + From line are branded.
-            let branded_row = match email_branding::load_row(&db, tenant_id).await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "load tenant_email_branding failed; falling back to global SMTP");
-                    None
-                }
-            };
-
-            let (metadata, _channel) = if let Some(row) = branded_row {
-                let outcome = email_branding::send_branded(
-                    email_transport.as_ref(),
-                    &row,
-                    &em.to_addr,
-                    &subject,
-                    &body,
-                )
-                .await;
-                (
-                    outcome.to_audit_metadata(&em.to_addr, &row.from_addr),
-                    "branded",
-                )
-            } else {
-                let outcome = send_email(em, &subject, &body).await;
-                (outcome.to_email_audit_metadata(&em.to_addr), "global")
-            };
-
-            audit::record_best_effort(
-                &db,
-                audit::Event {
+            // Queue path: build a job, enqueue, return. The worker
+            // owns the retry loop and the audit row from then on.
+            if let Some(q) = queue.as_ref() {
+                let job = EmailJob {
                     tenant_id,
-                    actor_user: None,
-                    actor_token: None,
-                    action: "notification.deliver",
-                    target_kind: "email",
-                    target_id: Some(&draft_id.to_string()),
-                    metadata,
-                    ip_addr: None,
-                    user_agent: None,
-                },
+                    draft_id,
+                    smtp_url: em.smtp_url,
+                    from_addr: em.from_addr,
+                    to_addr: em.to_addr,
+                    subject,
+                    body,
+                };
+                match q.enqueue(&job).await {
+                    Ok(crate::queue::EnqueueOutcome::Enqueued) => {
+                        tracing::debug!(tenant_id = %tenant_id, draft_id = %draft_id, "email job enqueued");
+                    }
+                    Ok(crate::queue::EnqueueOutcome::Deduped) => {
+                        tracing::info!(tenant_id = %tenant_id, draft_id = %draft_id, "email job deduped (already in-flight)");
+                    }
+                    Err(e) => {
+                        // Enqueue itself failed (Redis blip). Fall back
+                        // to inline so the notification still goes
+                        // out; better a slow request than a dropped
+                        // one.
+                        tracing::warn!(error = %e, "queue enqueue failed; falling back to inline send");
+                        send_inline(&db, email_transport.as_ref(), tenant_id, draft_id, &job).await;
+                    }
+                }
+                return;
+            }
+
+            // No-queue path. Identical to the pre-queue behaviour.
+            send_inline_legacy(
+                &db,
+                email_transport.as_ref(),
+                tenant_id,
+                draft_id,
+                &em,
+                &subject,
+                &body,
             )
             .await;
         }
     });
+}
+
+/// Inline-send fallback shared by (a) the no-queue path and (b) the
+/// "enqueue failed" recovery path. Takes the same `EmailJob` shape so
+/// both routes go through one SMTP code path.
+async fn send_inline(
+    db: &PgPool,
+    email_transport: &EmailTransportCache,
+    tenant_id: Uuid,
+    draft_id: Uuid,
+    job: &EmailJob,
+) {
+    let (metadata, _channel) = send_email_inner(db, email_transport, tenant_id, job).await;
+    audit::record_best_effort(
+        db,
+        audit::Event {
+            tenant_id,
+            actor_user: None,
+            actor_token: None,
+            action: "notification.deliver",
+            target_kind: "email",
+            target_id: Some(&draft_id.to_string()),
+            metadata,
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+}
+
+/// Pre-queue legacy inline path. Behaviourally identical to the v0.14
+/// code so the existing `notifications` + `email_branding` +
+/// `email_notifications` tests keep passing unchanged.
+async fn send_inline_legacy(
+    db: &PgPool,
+    email_transport: &EmailTransportCache,
+    tenant_id: Uuid,
+    draft_id: Uuid,
+    em: &EmailConfig,
+    subject: &str,
+    body: &str,
+) {
+    // Branded path: tenant has per-tenant SMTP + From override.
+    // We still respect `em.to_addr` from the legacy table as the
+    // recipient — that's where curators expect to be notified.
+    // Only the transport + From line are branded.
+    let branded_row = match email_branding::load_row(db, tenant_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = ?e, "load tenant_email_branding failed; falling back to global SMTP");
+            None
+        }
+    };
+
+    let (metadata, _channel) = if let Some(row) = branded_row {
+        let outcome =
+            email_branding::send_branded(email_transport, &row, &em.to_addr, subject, body).await;
+        (
+            outcome.to_audit_metadata(&em.to_addr, &row.from_addr),
+            "branded",
+        )
+    } else {
+        let outcome = send_email(em, subject, body).await;
+        (outcome.to_email_audit_metadata(&em.to_addr), "global")
+    };
+
+    audit::record_best_effort(
+        db,
+        audit::Event {
+            tenant_id,
+            actor_user: None,
+            actor_token: None,
+            action: "notification.deliver",
+            target_kind: "email",
+            target_id: Some(&draft_id.to_string()),
+            metadata,
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+}
+
+/// Self-contained job for the worker. All recipient / SMTP info is
+/// captured at enqueue time so the worker never needs to re-read the
+/// tenant row mid-flight (it does still read `tenant_email_branding`
+/// to pick the branded transport when configured — that's a lookup
+/// on a different table and stays the responsibility of the send
+/// path so a branding change between enqueue and send takes effect).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct EmailJob {
+    pub tenant_id: Uuid,
+    pub draft_id: Uuid,
+    pub smtp_url: String,
+    pub from_addr: String,
+    pub to_addr: String,
+    pub subject: String,
+    pub body: String,
+}
+
+impl Job for EmailJob {
+    const KIND: &'static str = "email";
+    fn idempotency_key(&self) -> String {
+        // Stable across retries from the same draft (same tenant,
+        // same recipient, same subject) without leaking recipient
+        // addresses into the key. We hash the recipient+subject so
+        // a Redis dump doesn't trivially expose curator email lists.
+        let mut hasher = Sha256::new();
+        hasher.update(self.to_addr.as_bytes());
+        hasher.update(b"|");
+        hasher.update(self.subject.as_bytes());
+        let digest = hex::encode(hasher.finalize());
+        format!("email:{}:{}", self.tenant_id, digest)
+    }
+}
+
+/// Send the email and return the audit-metadata blob + a channel tag.
+/// Shared by the inline fallback and the worker handler so there is
+/// exactly one SMTP code path.
+async fn send_email_inner(
+    db: &PgPool,
+    email_transport: &EmailTransportCache,
+    tenant_id: Uuid,
+    job: &EmailJob,
+) -> (serde_json::Value, &'static str) {
+    let branded_row = match email_branding::load_row(db, tenant_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = ?e, "load tenant_email_branding failed; falling back to global SMTP");
+            None
+        }
+    };
+    if let Some(row) = branded_row {
+        let outcome = email_branding::send_branded(
+            email_transport,
+            &row,
+            &job.to_addr,
+            &job.subject,
+            &job.body,
+        )
+        .await;
+        return (
+            outcome.to_audit_metadata(&job.to_addr, &row.from_addr),
+            "branded",
+        );
+    }
+    let em = EmailConfig {
+        smtp_url: job.smtp_url.clone(),
+        from_addr: job.from_addr.clone(),
+        to_addr: job.to_addr.clone(),
+    };
+    let outcome = send_email(&em, &job.subject, &job.body).await;
+    (outcome.to_email_audit_metadata(&job.to_addr), "global")
+}
+
+/// `JobHandler` for `EmailJob`. Holds a cheap clone of `AppState`
+/// (everything in `AppState::inner` is `Arc`-backed) so the handler
+/// can call back into the SMTP path and write the audit row.
+pub struct EmailHandler {
+    state: AppState,
+}
+
+impl EmailHandler {
+    pub fn new(state: AppState) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait]
+impl JobHandler for EmailHandler {
+    async fn handle(&self, payload: serde_json::Value) -> Result<(), String> {
+        let job: EmailJob = serde_json::from_value(payload)
+            .map_err(|e| format!("decode EmailJob: {e}"))?;
+        let (metadata, _channel) = send_email_inner(
+            self.state.db(),
+            self.state.email_transport().as_ref(),
+            job.tenant_id,
+            &job,
+        )
+        .await;
+        let success = metadata.get("result").and_then(|v| v.as_str()) == Some("success");
+        audit::record_best_effort(
+            self.state.db(),
+            audit::Event {
+                tenant_id: job.tenant_id,
+                actor_user: None,
+                actor_token: None,
+                action: "notification.deliver",
+                target_kind: "email",
+                target_id: Some(&job.draft_id.to_string()),
+                metadata,
+                ip_addr: None,
+                user_agent: None,
+            },
+        )
+        .await;
+        if success {
+            Ok(())
+        } else {
+            // Non-success: let the queue decide retry vs DLQ. The
+            // audit row above already records the failure for this
+            // attempt; the next attempt will write its own row.
+            Err("smtp send failed".to_string())
+        }
+    }
 }
 
 /// Plain-text email body. Mirrors the webhook envelope's `text` field

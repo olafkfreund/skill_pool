@@ -98,6 +98,7 @@ async fn boot() -> Result<Harness> {
         storage_uri,
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
+        queue_enabled: None,
     };
     let embedder: SharedEmbedder = Arc::new(StubEmbedder);
     let state = state::AppState::new_with_embedder(&cfg, embedder).await?;

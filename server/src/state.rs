@@ -12,6 +12,7 @@ use crate::cache;
 use crate::config::{Config, TenancyMode};
 use crate::email_branding::TransportCache as EmailTransportCache;
 use crate::embedding::{self, SharedEmbedder};
+use crate::queue;
 use crate::storage::Storage;
 use crate::tenant::TenantCtx;
 
@@ -67,6 +68,12 @@ struct Inner {
     /// `cache::Redis` is already `Arc<ConnectionManager>`, so cloning
     /// the inner value across `.await` points is cheap.
     pub redis: Option<cache::Redis>,
+    /// Redis-backed job queue (#10 §D). Built when Redis is available
+    /// AND `cfg.queue_enabled` is unset or true. Consumers (currently
+    /// the email-notification path in `notify.rs`) branch on
+    /// `state.queue()` and fall back to inline behaviour when this is
+    /// `None`, preserving the pre-queue contract for Redis-off deploys.
+    pub queue: Option<Arc<queue::Queue>>,
 }
 
 async fn connect_pool(url: &str, max: u32) -> Result<PgPool> {
@@ -95,6 +102,20 @@ async fn maybe_redis(cfg: &Config) -> Option<cache::Redis> {
     }
 }
 
+/// Build the shared job queue. Requires a live Redis client AND
+/// `queue_enabled` either unset (default-on) or explicitly true.
+/// Returns `None` so callers naturally fall back to inline delivery.
+fn maybe_queue(redis: Option<&cache::Redis>, cfg: &Config) -> Option<Arc<queue::Queue>> {
+    let redis = redis?;
+    if matches!(cfg.queue_enabled, Some(false)) {
+        tracing::info!("queue_enabled=false; job queue disabled");
+        return None;
+    }
+    let q = queue::Queue::new(redis.clone(), "default");
+    tracing::info!(queue = "default", "job queue initialised");
+    Some(Arc::new(q))
+}
+
 /// Build the read pool when `database_read_url` is set. Failure here
 /// degrades to "no read pool" rather than killing startup — the replica
 /// being temporarily unreachable shouldn't take the primary deployment
@@ -121,6 +142,7 @@ impl AppState {
         let db = connect_pool(&cfg.database_url, cfg.db_pool_size).await?;
         let db_read = maybe_read_pool(cfg).await;
         let redis = maybe_redis(cfg).await;
+        let queue = maybe_queue(redis.as_ref(), cfg);
 
         let storage = Storage::from_uri(&cfg.storage_uri)?;
         let embedder = embedding::from_config(&cfg.embedding)?;
@@ -137,6 +159,7 @@ impl AppState {
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
                 redis,
+                queue,
             }),
         };
         // Warm the cache once synchronously so the first request after
@@ -156,6 +179,7 @@ impl AppState {
         let db = connect_pool(&cfg.database_url, cfg.db_pool_size).await?;
         let db_read = maybe_read_pool(cfg).await;
         let redis = maybe_redis(cfg).await;
+        let queue = maybe_queue(redis.as_ref(), cfg);
         let storage = Storage::from_uri(&cfg.storage_uri)?;
         let state = Self {
             inner: Arc::new(Inner {
@@ -169,6 +193,7 @@ impl AppState {
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
                 redis,
+                queue,
             }),
         };
         if let Err(e) = state.refresh_custom_domains().await {
@@ -275,6 +300,16 @@ impl AppState {
         self.inner.redis.as_ref()
     }
 
+    /// Shared Redis-backed job queue (#10 §D). `Some` when Redis is
+    /// healthy and `queue_enabled` isn't explicitly false; `None`
+    /// otherwise. Callers branch on this and use the inline
+    /// fallback path when it's `None`, identical to the pre-queue
+    /// behaviour. Cloning the `Arc` to move it across an `.await` is
+    /// cheap.
+    pub fn queue(&self) -> Option<&Arc<queue::Queue>> {
+        self.inner.queue.as_ref()
+    }
+
     /// Test-only: build an `AppState` with an explicit Redis handle.
     /// Used by `tests/rate_limits.rs` to point the limiter at a
     /// testcontainer instead of relying on `SKILL_POOL_REDIS_URL`.
@@ -284,6 +319,8 @@ impl AppState {
         let db_read = maybe_read_pool(cfg).await;
         let storage = Storage::from_uri(&cfg.storage_uri)?;
         let embedder = embedding::from_config(&cfg.embedding)?;
+        let some_redis = Some(redis);
+        let queue = maybe_queue(some_redis.as_ref(), cfg);
         let state = Self {
             inner: Arc::new(Inner {
                 db,
@@ -295,7 +332,8 @@ impl AppState {
                 custom_domains: RwLock::new(HashMap::new()),
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
-                redis: Some(redis),
+                redis: some_redis,
+                queue,
             }),
         };
         if let Err(e) = state.refresh_custom_domains().await {

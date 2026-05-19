@@ -59,6 +59,9 @@ redis = { version = "0.27", default-features = false, features = [
     "tokio-rustls-comp",
     "connection-manager",
     "tls-rustls-webpki-roots",
+    # `Script` (Lua EVAL/EVALSHA wrapper) for the queue's atomic
+    # dequeue-with-lease op (#10 §D).
+    "script",
 ] }
 
 # AES-256-GCM for at-rest encryption of per-tenant SMTP passwords
