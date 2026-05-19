@@ -167,7 +167,9 @@ Use whatever you already trust:
 - **Postgres**: managed (RDS / Cloud SQL / Crunchy) or
   zalando-postgres-operator / CloudNativePG in-cluster.
 - **Bundles**: S3 / GCS / Azure Blob via `SKILL_POOL_STORAGE_URI`. The
-  server uses opendal — no cloud-specific SDK on the path.
+  server uses opendal — no cloud-specific SDK on the path. For bucket
+  policy + IAM templates (shared and per-tenant layouts) see
+  `packaging/bucket-policy/`.
 
 ## Observability
 

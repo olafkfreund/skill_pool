@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "IAM policy attached to the `skill-pool-server` execution role.",
+    "Two variants in one file — keep one Statement and delete the other.",
+    "",
+    "  AllowAppShared    — Use when one bucket holds all tenants",
+    "                       (paired with bucket-policy-shared.json). The app",
+    "                       scopes per-tenant in `Storage::bundle_key`; this",
+    "                       role-side policy grants whole-bucket RW.",
+    "",
+    "  AllowAppDedicated — Use when each tenant has their own bucket",
+    "                       (paired with bucket-policy-dedicated.json).",
+    "                       Restricts the role to one bucket per Statement,",
+    "                       so the app cannot accidentally cross buckets.",
+    "                       Duplicate this Statement per tenant bucket.",
+    "",
+    "Replace placeholders before applying:",
+    "  <BUCKET_NAME>             — shared bucket name (Shared variant)",
+    "  <BUCKET_NAME_TENANT>      — per-tenant bucket name (Dedicated variant)",
+    "Apply with:",
+    "  aws iam put-role-policy --role-name skill-pool-server \\",
+    "      --policy-name skill-pool-storage --policy-document file://iam-policy-app.json"
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowAppShared",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::<BUCKET_NAME>/*"
+    },
+    {
+      "Sid": "AllowAppSharedListBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<BUCKET_NAME>"
+    },
+    {
+      "Sid": "AllowAppDedicated",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::<BUCKET_NAME_TENANT>/*"
+    },
+    {
+      "Sid": "AllowAppDedicatedListBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<BUCKET_NAME_TENANT>"
+    }
+  ]
+}

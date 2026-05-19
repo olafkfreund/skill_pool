@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "Bucket policy for the 'one bucket, many tenants' (Team / shared) layout.",
+    "All tenants' bundles live in this bucket under per-tenant prefixes",
+    "(`{tenant_id}/*`). The app role (skill-pool-server) is the only principal",
+    "that can read or write objects; deny rules below stop everything else.",
+    "Apply with:",
+    "  aws s3api put-bucket-policy --bucket <BUCKET> --policy file://bucket-policy-shared.json",
+    "Replace placeholders before applying:",
+    "  <BUCKET_NAME>     — e.g. skill-pool-prod",
+    "  <APP_ROLE_ARN>    — IAM role assumed by the skill-pool-server process",
+    "                       (e.g. arn:aws:iam::123456789012:role/skill-pool-server)",
+    "Tenant isolation between prefixes is enforced server-side by the app's",
+    "`Storage::bundle_key(tenant_id, …)` (see server/src/storage.rs) — the",
+    "bucket policy is the defence-in-depth layer that stops a leaked credential",
+    "or a misconfigured client from reaching another tenant's objects."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyInsecureTransport",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::<BUCKET_NAME>",
+        "arn:aws:s3:::<BUCKET_NAME>/*"
+      ],
+      "Condition": {
+        "Bool": { "aws:SecureTransport": "false" }
+      }
+    },
+    {
+      "Sid": "AllowSkillPoolAppObjectAccess",
+      "Effect": "Allow",
+      "Principal": { "AWS": "<APP_ROLE_ARN>" },
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::<BUCKET_NAME>/*"
+    },
+    {
+      "Sid": "AllowSkillPoolAppListBucket",
+      "Effect": "Allow",
+      "Principal": { "AWS": "<APP_ROLE_ARN>" },
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<BUCKET_NAME>"
+    },
+    {
+      "Sid": "DenyEverythingElse",
+      "Effect": "Deny",
+      "NotPrincipal": { "AWS": "<APP_ROLE_ARN>" },
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::<BUCKET_NAME>",
+        "arn:aws:s3:::<BUCKET_NAME>/*"
+      ]
+    }
+  ]
+}

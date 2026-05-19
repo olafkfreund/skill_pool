@@ -114,7 +114,7 @@ egress per download collapses to a few hundred bytes of HTTP headers.
 | sqlx pool size        | `SKILL_POOL_DB_POOL_SIZE` (default 20); 50–100 typical for this tier  |
 | App replicas          | HPA `minReplicas=2`, `maxReplicas=20`, CPU target 70% (from `docs/deploy/kubernetes.md`) |
 | Network bandwidth     | 1 Gbps cluster ingress, CDN absorbs bundle egress |
-| Deploy path           | `docs/deploy/kubernetes.md` + per-region buckets |
+| Deploy path           | `docs/deploy/kubernetes.md` + per-region buckets (templates: `packaging/bucket-policy/`) |
 
 Assumption: bundles are fronted by a CDN (CloudFront / Cloudflare /
 Fastly) configured to follow the 307 redirect from `get_bundle` and
