@@ -42,6 +42,12 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills/{slug}/deps", get(skills::get_deps))
         .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
         .route(
+            "/v1/theme/logo",
+            get(theme::get_logo)
+                .post(theme::post_logo)
+                .delete(theme::delete_logo),
+        )
+        .route(
             "/v1/tenant/session-policy",
             get(session_policy::get_session_policy),
         )

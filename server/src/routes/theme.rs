@@ -3,10 +3,17 @@
 //! - GET /v1/theme — tenant-scoped, no auth needed (login page renders the
 //!   tenant's brand before any user has authenticated).
 //! - PUT /v1/theme — requires `tenant:admin` scope.
+//! - POST /v1/theme/logo — multipart upload, requires `tenant:admin`. Bytes
+//!   are sanitized (`logo_sanitize`) before they ever touch storage.
+//! - DELETE /v1/theme/logo — removes the stored logo blob + clears columns.
+//! - GET /v1/theme/logo — public (matches `/v1/theme`'s auth model). Streams
+//!   the sanitized bytes back with the stored content-type.
 
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{Multipart, State};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
+use bytes::Bytes;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -14,7 +21,9 @@ use std::sync::OnceLock;
 use crate::audit;
 use crate::auth::AuthedCaller;
 use crate::error::{AppError, AppResult};
+use crate::logo_sanitize::{self, LogoKind, MAX_LOGO_BYTES};
 use crate::state::AppState;
+use crate::storage::Storage;
 use crate::tenant::TenantCtx;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -267,6 +276,255 @@ impl From<ThemeRow> for Theme {
         }
     }
 }
+
+// --- logo upload / serve --------------------------------------------------
+
+/// `POST /v1/theme/logo` — multipart upload, single field `file`.
+///
+/// We deliberately read the `Content-Type` from the multipart part header
+/// (not from `Authorization` or any client-controlled state) and feed it to
+/// `logo_sanitize::sanitize` along with the raw bytes. The sanitizer is the
+/// only thing standing between an admin user and persisted XSS, so it runs
+/// **before** anything hits storage.
+pub async fn post_logo(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+    mut multipart: Multipart,
+) -> AppResult<(StatusCode, Json<Theme>)> {
+    require_scope(&caller.scope, "tenant:admin")?;
+
+    let mut content_type: Option<String> = None;
+    let mut bytes: Option<Bytes> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("multipart: {e}")))?
+    {
+        if field.name() == Some("file") {
+            content_type = field.content_type().map(|s| s.to_string());
+            let body = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(format!("file: {e}")))?;
+            bytes = Some(body);
+        }
+    }
+
+    let ct = content_type
+        .ok_or_else(|| AppError::BadRequest("multipart `file` part missing Content-Type".into()))?;
+    let raw = bytes.ok_or_else(|| AppError::BadRequest("missing `file` field".into()))?;
+
+    if raw.len() > MAX_LOGO_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "logo too large: {} bytes (max {})",
+            raw.len(),
+            MAX_LOGO_BYTES
+        )));
+    }
+
+    let sanitized = logo_sanitize::sanitize(&ct, raw.as_ref())
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    // One key per tenant, named by extension so the file is recognisable on
+    // disk. If a tenant uploads SVG then later PNG, the SVG blob is left
+    // orphaned — clear it out so storage stays tidy.
+    let key = Storage::logo_key(caller.tenant.tenant_id, sanitized.kind.extension());
+    let storage = state
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    // Best-effort cleanup of any previously-stored logo for this tenant
+    // (different extension → different key). Failing to delete an orphan
+    // shouldn't block the upload.
+    let prev: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT logo_storage_key FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .fetch_optional(state.db())
+    .await?;
+    if let Some((Some(prev_key),)) = prev {
+        if prev_key != key {
+            let _ = storage.delete_object(&prev_key).await;
+        }
+    }
+
+    storage
+        .put_object(&key, Bytes::from(sanitized.bytes.clone()))
+        .await
+        .map_err(AppError::Anyhow)?;
+
+    let size: i32 = sanitized.bytes.len() as i32;
+    sqlx::query(
+        "INSERT INTO tenant_theme (tenant_id, brand_name, logo_storage_key, logo_content_type, logo_bytes_size) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (tenant_id) DO UPDATE SET \
+            logo_storage_key  = EXCLUDED.logo_storage_key, \
+            logo_content_type = EXCLUDED.logo_content_type, \
+            logo_bytes_size   = EXCLUDED.logo_bytes_size",
+    )
+    .bind(caller.tenant.tenant_id)
+    .bind(&caller.tenant.tenant_slug)
+    .bind(&key)
+    .bind(sanitized.kind.content_type())
+    .bind(size)
+    .execute(state.db())
+    .await?;
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: None,
+            actor_token: Some(caller.token_id),
+            action: "theme.logo.upload",
+            target_kind: "theme",
+            target_id: None,
+            metadata: serde_json::json!({
+                "content_type": sanitized.kind.content_type(),
+                "size_bytes": size,
+            }),
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    // Return the freshly-updated theme so the UI can re-render.
+    let theme = read_theme(state.db(), &caller.tenant).await?;
+    Ok((StatusCode::OK, Json(theme)))
+}
+
+/// `DELETE /v1/theme/logo` — clear the stored logo + delete the storage
+/// object. 204 on success (mirrors common REST conventions). Returns 200 +
+/// empty JSON if no logo was set, since the column was already null.
+pub async fn delete_logo(
+    State(state): State<AppState>,
+    caller: AuthedCaller,
+) -> AppResult<StatusCode> {
+    require_scope(&caller.scope, "tenant:admin")?;
+
+    let prev: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT logo_storage_key FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .fetch_optional(state.db())
+    .await?;
+
+    if let Some((Some(key),)) = prev {
+        let storage = state
+            .storage_for(&caller.tenant)
+            .await
+            .map_err(AppError::Anyhow)?;
+        storage
+            .delete_object(&key)
+            .await
+            .map_err(AppError::Anyhow)?;
+    }
+
+    sqlx::query(
+        "UPDATE tenant_theme \
+            SET logo_storage_key = NULL, logo_content_type = NULL, logo_bytes_size = NULL \
+          WHERE tenant_id = $1",
+    )
+    .bind(caller.tenant.tenant_id)
+    .execute(state.db())
+    .await?;
+
+    audit::record_best_effort(
+        state.db(),
+        audit::Event {
+            tenant_id: caller.tenant.tenant_id,
+            actor_user: None,
+            actor_token: Some(caller.token_id),
+            action: "theme.logo.delete",
+            target_kind: "theme",
+            target_id: None,
+            metadata: serde_json::Value::Null,
+            ip_addr: None,
+            user_agent: None,
+        },
+    )
+    .await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /v1/theme/logo` — public; serves the stored bytes with the matching
+/// content-type. 404 when no upload exists (caller should fall back to the
+/// `logo_uri` field of `GET /v1/theme`).
+///
+/// Cache headers: `Cache-Control: public, max-age=300`. Five minutes is the
+/// sweet spot — long enough to dodge load on the login page, short enough
+/// that a logo replace is visible across the org within minutes.
+pub async fn get_logo(State(state): State<AppState>, tenant: TenantCtx) -> AppResult<Response> {
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT logo_storage_key, logo_content_type FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(tenant.tenant_id)
+    .fetch_optional(state.db_read())
+    .await?;
+
+    let (key, ct) = match row {
+        Some((Some(k), Some(c))) => (k, c),
+        _ => return Err(AppError::NotFound),
+    };
+
+    let storage = state
+        .storage_for(&tenant)
+        .await
+        .map_err(AppError::Anyhow)?;
+    let bytes = storage
+        .read_object(&key)
+        .await
+        .map_err(AppError::Anyhow)?
+        .ok_or(AppError::NotFound)?;
+
+    let mut resp = (StatusCode::OK, bytes).into_response();
+    let headers = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&ct) {
+        headers.insert(header::CONTENT_TYPE, v);
+    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    Ok(resp)
+}
+
+/// Helper for `post_logo` to re-fetch the theme after writing. Mirrors
+/// `get_theme` but takes a `TenantCtx` directly so we don't have to thread
+/// the extractor through.
+async fn read_theme(db: &sqlx::PgPool, tenant: &TenantCtx) -> AppResult<Theme> {
+    let row: Option<ThemeRow> = sqlx::query_as(
+        "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
+                border, radius, logo_uri, footer_branding \
+         FROM tenant_theme WHERE tenant_id = $1",
+    )
+    .bind(tenant.tenant_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row
+        .map(Theme::from)
+        .unwrap_or_else(|| Theme::default_for(&tenant.tenant_slug)))
+}
+
+// Tiny compile-time assurance that `LogoKind`'s content-type matches the
+// values our DB CHECK constraint accepts. If anyone adds a new variant we
+// want a visible failure here rather than a runtime constraint violation.
+const _: () = {
+    // Force usage of LogoKind in a `match` so a new variant is a build error.
+    fn _exhaustive(k: LogoKind) -> &'static str {
+        match k {
+            LogoKind::Svg => "image/svg+xml",
+            LogoKind::Png => "image/png",
+            LogoKind::Jpeg => "image/jpeg",
+            LogoKind::Webp => "image/webp",
+        }
+    }
+    let _ = _exhaustive;
+};
 
 #[cfg(test)]
 mod tests {

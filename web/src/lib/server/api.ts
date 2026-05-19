@@ -215,6 +215,52 @@ export async function putTheme(
   return { ok: false, status: resp.status, error };
 }
 
+/**
+ * Upload a tenant logo. The server sanitizes the bytes (`logo_sanitize`) and
+ * stores them under a per-tenant key. Returns the freshly-updated theme on
+ * success.
+ *
+ * Accepted MIME types match the server's allow-list: `image/svg+xml`,
+ * `image/png`, `image/jpeg`, `image/webp`. 256 KiB cap.
+ */
+export async function uploadLogo(
+  auth: Auth,
+  file: File,
+): Promise<{ ok: true; theme: ServerTheme } | { ok: false; status: number; error: string }> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+
+  const headers = new Headers();
+  headers.set('X-Skill-Pool-Tenant', auth.tenant);
+  if (auth.token) headers.set('Authorization', `Bearer ${auth.token}`);
+
+  const resp = await fetch(`${base()}/v1/theme/logo`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+  if (resp.ok) return { ok: true, theme: (await resp.json()) as ServerTheme };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+/** Delete the tenant's uploaded logo. 204 on success. */
+export async function deleteLogo(
+  auth: Auth,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', '/v1/theme/logo', auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+/**
+ * Public URL for the tenant's logo. The endpoint is tenant-resolved via the
+ * `X-Skill-Pool-Tenant` header server-side; in the browser we just point an
+ * `<img>` at it and let SvelteKit's proxy / the API gateway route by host.
+ */
+export function logoUrl(): string {
+  return `${base()}/v1/theme/logo`;
+}
+
 /** Server-side translation helper — fold the API shape into the client's. */
 export function toClientTheme(s: ServerTheme): Theme {
   return {

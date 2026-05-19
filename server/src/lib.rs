@@ -11,6 +11,7 @@ pub mod bundle;
 pub mod config;
 pub mod embedding;
 pub mod error;
+pub mod logo_sanitize;
 pub mod metrics;
 pub mod notify;
 pub mod routes;

@@ -61,6 +61,19 @@ impl Storage {
         format!("{tenant_id}/drafts/{draft_id}.tar.gz")
     }
 
+    /// Object key for a tenant's uploaded brand logo. One key per tenant —
+    /// we overwrite on every upload rather than versioning, because:
+    ///   * the column on `tenant_theme` is single-valued anyway,
+    ///   * old logos don't need to be retrievable,
+    ///   * having a single key keeps deletion trivial.
+    ///
+    /// `ext` is the canonical extension (`svg`, `png`, `jpg`, `webp`) so the
+    /// stored blob can be recognised on disk by humans without a database
+    /// lookup.
+    pub fn logo_key(tenant_id: Uuid, ext: &str) -> String {
+        format!("{tenant_id}/theme/logo.{ext}")
+    }
+
     pub async fn put_bundle(&self, key: &str, bytes: Bytes) -> Result<()> {
         self.op
             .write(key, bytes)
@@ -76,6 +89,39 @@ impl Storage {
             .await
             .with_context(|| format!("read bundle {key}"))?;
         Ok(buf.to_bytes())
+    }
+
+    /// Write an arbitrary object (used by the theme-logo endpoints — the
+    /// "bundle" naming on `put_bundle` is misleading for those, so we expose
+    /// a neutrally-named wrapper that reuses the same operator).
+    pub async fn put_object(&self, key: &str, bytes: Bytes) -> Result<()> {
+        self.op
+            .write(key, bytes)
+            .await
+            .with_context(|| format!("write object {key}"))?;
+        Ok(())
+    }
+
+    /// Read an arbitrary object. Returns `Ok(None)` when the key is missing
+    /// (a 404 surface for the GET logo endpoint); other opendal errors
+    /// propagate. The fs and S3 adapters both report a `NotFound` error
+    /// kind on missing keys.
+    pub async fn read_object(&self, key: &str) -> Result<Option<Bytes>> {
+        match self.op.read(key).await {
+            Ok(buf) => Ok(Some(buf.to_bytes())),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("read object {key}"))?,
+        }
+    }
+
+    /// Delete an arbitrary object. Idempotent: deleting a missing key is a
+    /// no-op (mirrors `rm -f`). Other errors propagate.
+    pub async fn delete_object(&self, key: &str) -> Result<()> {
+        match self.op.delete(key).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("delete object {key}"))?,
+        }
     }
 
     /// Returns a short-lived signed URL when the backend supports it,
