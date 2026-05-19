@@ -35,12 +35,44 @@ in {
   options.services.skill-pool-capturer = {
     enable = mkEnableOption "skill-pool capturer (Phase 4.6 LLM draft generator)";
 
+    daemon = mkEnableOption ''
+      Run the capturer as a long-lived daemon (`skill-pool-capturer`)
+      instead of the hourly timer-driven single-shot. The daemon polls
+      ~/.skill-pool/queue and ~/.skill-pool/sessions every
+      `pollSecs` seconds and drafts new candidates within one cycle.
+
+      The two modes are mutually exclusive: when `daemon = true`, the
+      timer is suppressed and a `Type=simple` user service is emitted
+      instead. When `daemon = false` (default), behaviour matches the
+      previous releases — hourly oneshot timer
+    '';
+
     package = mkOption {
       type = types.package;
       defaultText = literalExpression "skill-pool-cli";
       description = ''
         The skill-pool CLI package. Must expose a `skill-pool` binary
-        on its bin path.
+        on its bin path (and, when `daemon = true`, also a
+        `skill-pool-capturer` binary).
+      '';
+    };
+
+    pollSecs = mkOption {
+      type = types.ints.positive;
+      default = 30;
+      description = ''
+        Daemon-mode poll interval. Ignored when `daemon = false`.
+      '';
+    };
+
+    noNotify = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Suppress the per-draft desktop notification. Useful when the
+        unit runs in a context without `DBUS_SESSION_BUS_ADDRESS` (e.g.
+        a headless dev box) so the daemon doesn't try and log a libdbus
+        error. Equivalent to setting `SKILL_POOL_CAPTURE_NO_NOTIFY=1`.
       '';
     };
 
@@ -108,33 +140,79 @@ in {
     };
   };
 
-  config = mkIf cfg.enable {
-    systemd.user.services.skill-pool-capturer = {
-      description = "skill-pool capturer (Phase 4.6 LLM draft generator)";
-      after = [ "network-online.target" ];
-      wantedBy = [ "default.target" ];
+  config = mkIf cfg.enable (lib.mkMerge [
+    # ---- Shared environment between the two modes ----------------------
+    {
+      # Make sure the binary the user picked is on PATH in the unit env.
+      # Both modes need it; the unit's ExecStart resolves via the package
+      # path, but downstream `systemctl --user status` is friendlier when
+      # the bin is also discoverable interactively. Harmless extra cost.
+    }
 
-      environment = cfg.extraEnvironment;
+    # ---- Mode A: hourly timer-driven single-shot (default) -------------
+    (lib.mkIf (!cfg.daemon) {
+      systemd.user.services.skill-pool-capturer = {
+        description = "skill-pool capturer (Phase 4.6 LLM draft generator)";
+        after = [ "network-online.target" ];
+        wantedBy = [ "default.target" ];
 
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${cfg.package}/bin/skill-pool capture-run --limit ${toString cfg.limit}";
-        MemoryMax = cfg.memoryMax;
-        TimeoutStartSec = "300";
-      } // (lib.optionalAttrs (cfg.environmentFile != null) {
-        EnvironmentFile = cfg.environmentFile;
-      });
-    };
+        environment = cfg.extraEnvironment
+          // (lib.optionalAttrs cfg.noNotify {
+            SKILL_POOL_CAPTURE_NO_NOTIFY = "1";
+          });
 
-    systemd.user.timers.skill-pool-capturer = {
-      description = "skill-pool capturer schedule";
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnCalendar = cfg.onCalendar;
-        Persistent = true;
-        RandomizedDelaySec = cfg.randomizedDelaySec;
-        Unit = "skill-pool-capturer.service";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${cfg.package}/bin/skill-pool capture-run --limit ${toString cfg.limit}";
+          MemoryMax = cfg.memoryMax;
+          TimeoutStartSec = "300";
+        } // (lib.optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        });
       };
-    };
-  };
+
+      systemd.user.timers.skill-pool-capturer = {
+        description = "skill-pool capturer schedule";
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnCalendar = cfg.onCalendar;
+          Persistent = true;
+          RandomizedDelaySec = cfg.randomizedDelaySec;
+          Unit = "skill-pool-capturer.service";
+        };
+      };
+    })
+
+    # ---- Mode B: long-lived daemon (opt-in via daemon = true) ----------
+    (lib.mkIf cfg.daemon {
+      systemd.user.services.skill-pool-capturer-daemon = {
+        description = "skill-pool capturer daemon (Phase 4.6, long-lived)";
+        after = [ "network-online.target" ];
+        wantedBy = [ "default.target" ];
+        # Belt-and-braces: if a user flips between modes mid-cycle, the
+        # systemd unit conflict prevents both running at once. The
+        # `daemon` switch already suppresses the timer at evaluation
+        # time; this is the runtime safety net.
+        conflicts = [ "skill-pool-capturer.timer" "skill-pool-capturer.service" ];
+
+        environment = cfg.extraEnvironment
+          // {
+            SKILL_POOL_CAPTURER_POLL_SECS = toString cfg.pollSecs;
+          }
+          // (lib.optionalAttrs cfg.noNotify {
+            SKILL_POOL_CAPTURE_NO_NOTIFY = "1";
+          });
+
+        serviceConfig = {
+          Type = "simple";
+          ExecStart = "${cfg.package}/bin/skill-pool-capturer";
+          Restart = "on-failure";
+          RestartSec = "10s";
+          MemoryMax = cfg.memoryMax;
+        } // (lib.optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        });
+      };
+    })
+  ]);
 }

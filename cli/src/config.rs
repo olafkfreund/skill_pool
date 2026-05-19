@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub registry: Option<RegistryConfig>,
+    /// Optional URL of the web portal. When set, the capturer attaches a
+    /// `web_url/drafts/<id>` deep-link to the desktop notification so the
+    /// developer can click straight into the curator inbox. Not required
+    /// for the registry API; pure UX sugar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
