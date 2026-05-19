@@ -20,6 +20,7 @@ mod mcp;
 mod members;
 mod notifications;
 mod oidc;
+mod profile;
 mod saml;
 mod scim;
 mod session_policy;
@@ -53,6 +54,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/tenant/session-policy",
             get(session_policy::get_session_policy),
         )
+        // Per-tenant CLI startup banner (#9 / Enterprise). No auth —
+        // same model as `/v1/theme`. CLI fetches this once per shell
+        // session and prints `text` + optional `url` to stderr.
+        .route("/v1/tenant/profile/banner", get(profile::get_banner))
         // Bootstrap (Phase 3)
         .route("/v1/bootstrap", get(bootstrap::bootstrap))
         // Drafts (Phase 4 — retrospective capture)
