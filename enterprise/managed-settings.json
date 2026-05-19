@@ -1,0 +1,92 @@
+{
+  "$schema": "https://docs.claude.com/_schemas/claude-code-managed-settings.json",
+  "_comment": [
+    "skill-pool managed-settings.json — IT-deployable template.",
+    "",
+    "PLACEHOLDERS (all <ANGLE_BRACKETED> — `grep '<'` this file after rendering",
+    "to catch anything you missed):",
+    "  <TENANT_SLUG>         tenant identifier minted by `skill-pool-server admin",
+    "                        tenant-create` (lower-case, kebab-case, e.g. `acme`).",
+    "  <REGISTRY_BASE_URL>   https origin of the tenant registry, no trailing /,",
+    "                        e.g. `https://acme.skill-pool.example.com`.",
+    "  <TENANT_LIBRARY_PATH> absolute path to the per-tenant skills root that",
+    "                        skill-pool keeps in sync, e.g. `/var/lib/skill-pool/library/<TENANT_SLUG>`.",
+    "",
+    "INSTALL PATHS (machine-wide, MDM-pushed):",
+    "  Linux/WSL : /etc/claude-code/managed-settings.json                 0644 root:root",
+    "  macOS     : /Library/Application Support/ClaudeCode/managed-settings.json   0644 root:wheel",
+    "  Windows   : C:\\ProgramData\\ClaudeCode\\managed-settings.json     Administrators",
+    "",
+    "VALIDATE BEFORE DEPLOY:",
+    "  jq 'del(._comment)' enterprise/managed-settings.json > /tmp/ms.json && jq . /tmp/ms.json",
+    "",
+    "See docs/enterprise/managed-settings.md for the section-by-section walkthrough."
+  ],
+  "apiKeyHelper": "/usr/local/bin/skill-pool-bootstrap",
+  "env": {
+    "SKILL_POOL_REGISTRY": "<REGISTRY_BASE_URL>",
+    "SKILL_POOL_TENANT": "<TENANT_SLUG>",
+    "SKILL_POOL_TOKEN_FILE": "/etc/skill-pool/token",
+    "SKILL_POOL_AUDIT_URL": "<REGISTRY_BASE_URL>/v1/tenant/audit-siem"
+  },
+  "additionalDirectories": [
+    "<TENANT_LIBRARY_PATH>",
+    "/var/lib/skill-pool/skills"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(skill-pool *)",
+      "Bash(skill-pool-server admin *)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf $HOME)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)",
+      "Bash(wget * | bash)",
+      "Bash(sudo *)",
+      "Bash(ssh *)",
+      "Bash(scp *)",
+      "Bash(rsync *)",
+      "WebFetch",
+      "WebSearch"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "skill-pool ensure --quiet",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "skill-pool capture-score",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

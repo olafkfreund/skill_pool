@@ -24,7 +24,13 @@ HTTPS on demand.
 |---|---|
 | macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
 | Linux / WSL | `/etc/claude-code/managed-settings.json` |
-| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+| Windows | `C:\ProgramData\ClaudeCode\managed-settings.json` |
+
+> For a deployable template plus a section-by-section walkthrough of
+> every block (`apiKeyHelper`, `env`, `additionalDirectories`,
+> `permissions`, `hooks`), see
+> [`docs/enterprise/managed-settings.md`](enterprise/managed-settings.md)
+> and the JSON at [`enterprise/managed-settings.json`](../enterprise/managed-settings.json).
 
 ## Bootstrap (1 minute, one machine)
 
