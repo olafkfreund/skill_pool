@@ -50,6 +50,12 @@ enum Cmd {
         /// Used by the direnv hook to stay silent on the happy path.
         #[arg(long)]
         quiet: bool,
+        /// Skip the best-effort `view` event POST per installed skill.
+        /// Default is to send (the CLI already trusts the registry
+        /// with auth tokens). Use on air-gapped deploys or when the
+        /// network policy forbids outbound POSTs from `ensure`.
+        #[arg(long)]
+        no_telemetry: bool,
     },
     /// Add a skill to the manifest and install it.
     Add { slug: String },
@@ -228,7 +234,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Cmd::Init => cmd::init::run(&cfg),
         Cmd::Login { registry, tenant } => cmd::login::run(&cfg, &registry, &tenant).await,
-        Cmd::Ensure { quiet } => cmd::ensure::run_with_quiet(&cfg, quiet).await,
+        Cmd::Ensure { quiet, no_telemetry } => {
+            cmd::ensure::run_with_opts(&cfg, quiet, !no_telemetry).await
+        }
         Cmd::Add { slug } => cmd::add::run(&cfg, &slug).await,
         Cmd::AddAgent { slug } => cmd::add::run_with_kind(&cfg, &slug, "agent").await,
         Cmd::AddCommand { slug } => cmd::add::run_with_kind(&cfg, &slug, "command").await,

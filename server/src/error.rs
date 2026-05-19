@@ -24,6 +24,9 @@ pub enum AppError {
     #[error("not implemented")]
     NotImplemented,
 
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 
@@ -40,6 +43,7 @@ impl IntoResponse for AppError {
             Self::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             Self::TenantResolution(_) => (StatusCode::BAD_REQUEST, "tenant_resolution_failed"),
             Self::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "not_implemented"),
+            Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             Self::Sqlx(e) => {
                 tracing::error!(error = ?e, "sqlx error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")

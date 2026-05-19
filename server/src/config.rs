@@ -66,6 +66,13 @@ pub struct Config {
     /// inline path on every consumer even when Redis is available.
     #[serde(default)]
     pub queue_enabled: Option<bool>,
+
+    /// Interval (in seconds) between background decay sweeps that flip
+    /// long-stale skills to `status = 'archive_candidate'` (#7 lifecycle).
+    /// Defaults to 24h. Set to `0` to disable the sweep entirely — the
+    /// on-demand `/v1/tenant/skills/decay` endpoint continues to work.
+    #[serde(default = "default_decay_interval")]
+    pub decay_check_interval_secs: u32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -98,6 +105,9 @@ fn default_origin_pattern() -> String {
 }
 fn default_mode() -> String {
     "shared".into()
+}
+fn default_decay_interval() -> u32 {
+    86_400
 }
 
 impl Config {

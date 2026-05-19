@@ -88,6 +88,7 @@ async fn boot() -> Result<Harness> {
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
     let state = state::AppState::new(&cfg).await?;
     let app = routes::router(state);
@@ -257,6 +258,61 @@ async fn usage_telemetry_end_to_end() -> Result<()> {
         &h.acme_reader,
     ).send().await?;
     assert_eq!(resp.status().as_u16(), 403);
+
+    // 7. CLI-driven `POST /v1/usage` lands a `view` event in the same
+    //    table as server-side download/view records. The reader token
+    //    has `skills:read` → can post (no admin scope required).
+    let before: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM skill_usage_events e \
+         JOIN tenants t ON t.id = e.tenant_id \
+         WHERE t.slug = 'acme' AND e.event_kind = 'view'",
+    ).fetch_one(&h.db).await?;
+    let resp = authed(
+        req(&c, reqwest::Method::POST, &h.base, "/v1/usage", "acme"),
+        &h.acme_reader,
+    )
+    .json(&serde_json::json!({
+        "skill_id": "alpha",
+        "kind": "skill",
+        "event": "view",
+        "project_hash": "deadbeefcafebabe",
+    }))
+    .send()
+    .await?;
+    assert_eq!(resp.status().as_u16(), 202, "{}", resp.text().await?);
+    let after: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM skill_usage_events e \
+         JOIN tenants t ON t.id = e.tenant_id \
+         WHERE t.slug = 'acme' AND e.event_kind = 'view'",
+    ).fetch_one(&h.db).await?;
+    assert_eq!(after.0, before.0 + 1, "CLI usage POST must add one view row");
+
+    // 8. Unknown slug → 404 so a stale manifest entry surfaces.
+    let resp = authed(
+        req(&c, reqwest::Method::POST, &h.base, "/v1/usage", "acme"),
+        &h.acme_reader,
+    )
+    .json(&serde_json::json!({
+        "skill_id": "never-existed",
+        "kind": "skill",
+        "event": "view",
+    }))
+    .send()
+    .await?;
+    assert_eq!(resp.status().as_u16(), 404);
+
+    // 9. Bad event kind → 400 (CHECK constraint can't be bypassed via API).
+    let resp = authed(
+        req(&c, reqwest::Method::POST, &h.base, "/v1/usage", "acme"),
+        &h.acme_reader,
+    )
+    .json(&serde_json::json!({
+        "skill_id": "alpha",
+        "event": "click",
+    }))
+    .send()
+    .await?;
+    assert_eq!(resp.status().as_u16(), 400);
 
     Ok(())
 }

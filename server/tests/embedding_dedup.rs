@@ -118,6 +118,7 @@ async fn boot() -> Result<Harness> {
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
 
     // KEY DIFFERENCE FROM THE OTHER INTEGRATION TESTS: we inject the

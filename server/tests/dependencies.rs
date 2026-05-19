@@ -69,6 +69,7 @@ async fn boot() -> Result<Harness> {
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
     let state = state::AppState::new(&cfg).await?;
     let app = routes::router(state);
@@ -305,6 +306,30 @@ async fn dependency_graph_round_trip() -> Result<()> {
     .send()
     .await?;
     assert_eq!(resp.status().as_u16(), 404);
+
+    // 10. Version-range conflict detection (#7 lifecycle).
+    //     Publish `lib`, then conflict-a@1.0.0 requires lib@1.0.0.
+    //     Publishing conflict-b requiring lib@2.0.0 collides → 409
+    //     with both skills + ranges in the error message.
+    let (status, _) = publish(&c, &h, "lib", &[]).await?;
+    assert_eq!(status, 201);
+    let (status, _) = publish(&c, &h, "skill-conflict-a", &["lib@1.0.0"]).await?;
+    assert_eq!(status, 201);
+    let (status, body) = publish(&c, &h, "skill-conflict-b", &["lib@2.0.0"]).await?;
+    assert_eq!(status, 409, "expected conflict; got body={body}");
+    let msg = body["message"].as_str().unwrap_or_default();
+    assert!(msg.contains("skill-conflict-b"), "{msg}");
+    assert!(msg.contains("skill-conflict-a"), "{msg}");
+    assert!(msg.contains("lib"), "{msg}");
+    assert!(msg.contains("1.0.0") && msg.contains("2.0.0"), "{msg}");
+
+    // 11. `*` never conflicts — `lib@*` matches both 1.0.0 and 2.0.0.
+    let (status, body) = publish(&c, &h, "skill-conflict-c", &["lib@*"]).await?;
+    assert_eq!(status, 201, "expected `*` to dodge conflict; body={body}");
+
+    // 12. Identical exact ranges are compatible (idempotent shape).
+    let (status, _) = publish(&c, &h, "skill-conflict-d", &["lib@1.0.0"]).await?;
+    assert_eq!(status, 201);
 
     Ok(())
 }

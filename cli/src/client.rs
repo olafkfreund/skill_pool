@@ -284,6 +284,38 @@ impl Client {
         Ok(resp.json().await?)
     }
 
+    /// POST a CLI-driven usage event to `/v1/usage`. Best-effort —
+    /// the caller logs but does not propagate failures. `event` is
+    /// `view` or `download`; v1 only ever sends `view` (from
+    /// `skill-pool ensure`'s install path).
+    ///
+    /// `project_hash` is the SHA-256 (truncated) of the project root
+    /// — anonymises which project / machine sent the event so we can
+    /// dedup repeated events from the same install without storing a
+    /// reversible identifier server-side.
+    pub async fn send_usage_event(
+        &self,
+        skill_id: &str,
+        kind: &str,
+        event: &str,
+        project_hash: &str,
+    ) -> Result<()> {
+        let url = self.base.join("/v1/usage")?;
+        let body = serde_json::json!({
+            "skill_id": skill_id,
+            "kind": kind,
+            "event": event,
+            "project_hash": project_hash,
+        });
+        let resp = self.http.post(url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("send_usage_event: {status} — {body}"));
+        }
+        Ok(())
+    }
+
     pub async fn publish(&self, metadata: PublishMetadata<'_>, bundle: Bytes) -> Result<Skill> {
         let url = self.base.join("/v1/skills")?;
         let metadata_json =

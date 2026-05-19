@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use sha2::{Digest, Sha256};
 
 use crate::client::{Client, DepEntry, Skill};
 use crate::config::Config;
@@ -9,12 +10,24 @@ use crate::install::{self, SymlinkResult};
 use crate::manifest::{self, Manifest, SkillRef};
 
 pub async fn run(cfg: &Config) -> Result<()> {
-    run_with_quiet(cfg, false).await
+    run_with_opts(cfg, false, true).await
 }
 
 /// `--quiet` mode suppresses per-skill progress lines. Errors still surface.
-/// Used by the direnv hook to stay silent on the happy path.
+/// Used by the direnv hook to stay silent on the happy path. Telemetry-on by
+/// default — callers that want the opt-out wire up `run_with_opts` directly.
+#[allow(dead_code)] // kept as the historical entry point; the binary now wires `run_with_opts`
 pub async fn run_with_quiet(cfg: &Config, quiet: bool) -> Result<()> {
+    run_with_opts(cfg, quiet, true).await
+}
+
+/// Full entry point: `quiet` mirrors `--quiet`, `telemetry` mirrors
+/// the opt-out `--no-telemetry`. Telemetry defaults to ON because the
+/// CLI already trusts the registry with its API token; sending one
+/// best-effort `view` event per installed skill costs nothing and
+/// keeps the decay model honest. `--no-telemetry` is the escape hatch
+/// for air-gapped or strict-network-policy deploys.
+pub async fn run_with_opts(cfg: &Config, quiet: bool, telemetry: bool) -> Result<()> {
     let project_root = manifest::find_project_root().context("locate project root")?;
     let mf = manifest::load_in(&project_root).context("load .skill-pool/manifest.toml")?;
 
@@ -23,7 +36,28 @@ pub async fn run_with_quiet(cfg: &Config, quiet: bool) -> Result<()> {
     let tenant_dir = mf.project.tenant.as_deref().unwrap_or(&reg.tenant);
 
     let plan = build_plan(&mf, &client, quiet).await?;
-    install_plan(&project_root, tenant_dir, &client, &plan, quiet).await
+    let project_hash = project_hash(&project_root);
+    install_plan(
+        &project_root,
+        tenant_dir,
+        &client,
+        &plan,
+        quiet,
+        telemetry,
+        &project_hash,
+    )
+    .await
+}
+
+/// SHA-256 of the canonicalised project root, truncated to 16 hex chars
+/// (64 bits of entropy — enough to dedup repeat events from the same
+/// install without persisting a reversible identifier server-side).
+fn project_hash(root: &Path) -> String {
+    let canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mut h = Sha256::new();
+    h.update(canon.to_string_lossy().as_bytes());
+    let full = hex::encode(h.finalize());
+    full[..16].to_string()
 }
 
 /// One concrete catalog item to install: a manifest entry OR a transitively-
@@ -144,12 +178,15 @@ fn push_dep(
 /// `~/.skill-pool/library/`, then symlink each one into the project (or
 /// personal) scope. A failed download is logged and skipped — the rest
 /// of the plan still installs.
+#[allow(clippy::too_many_arguments)] // `telemetry` + `project_hash` are simple flags; flattening into a struct hides intent
 async fn install_plan(
     project_root: &Path,
     tenant_dir: &str,
     client: &Client,
     plan: &[InstallTarget],
     quiet: bool,
+    telemetry: bool,
+    project_hash: &str,
 ) -> Result<()> {
     if plan.is_empty() {
         if !quiet {
@@ -159,7 +196,17 @@ async fn install_plan(
     }
 
     for target in plan {
-        if let Err(e) = install_one(project_root, tenant_dir, client, target, quiet).await {
+        if let Err(e) = install_one(
+            project_root,
+            tenant_dir,
+            client,
+            target,
+            quiet,
+            telemetry,
+            project_hash,
+        )
+        .await
+        {
             // A single failure must not abort the whole `ensure`. Warn
             // and continue — the user can re-run after the registry
             // catches up (forward references stay broken until then).
@@ -177,12 +224,15 @@ async fn install_plan(
 
 /// Install one entry from the plan. Returns Err on download/extract
 /// failures so the caller can decide whether to abort or continue.
+#[allow(clippy::too_many_arguments)]
 async fn install_one(
     project_root: &Path,
     tenant_dir: &str,
     client: &Client,
     target: &InstallTarget,
     quiet: bool,
+    telemetry: bool,
+    project_hash: &str,
 ) -> Result<()> {
     let resolved_version = resolve_version(client, target).await?;
 
@@ -225,6 +275,27 @@ async fn install_one(
         ),
         SymlinkResult::AlreadyOk if !quiet => println!("  {indent}ok:       {}", target.slug),
         _ => {}
+    }
+
+    // Best-effort telemetry: post one `view` event per successful
+    // install so the server's decay model sees session-load activity
+    // alongside actual bundle downloads. Default-on because the CLI
+    // already authenticates against this registry — sending one
+    // anonymised event per skill is symmetrical with the rest of the
+    // CLI's trust posture. `--no-telemetry` is the explicit opt-out
+    // for air-gapped / strict-policy deploys.
+    if telemetry {
+        if let Err(e) = client
+            .send_usage_event(&target.slug, &target.kind, "view", project_hash)
+            .await
+        {
+            // Don't propagate. Don't print on success. Surface on
+            // failure only when not quiet — the user already knows
+            // the install worked.
+            if !quiet {
+                tracing::debug!(error = %e, slug = %target.slug, "usage telemetry POST failed");
+            }
+        }
     }
     Ok(())
 }
@@ -399,5 +470,27 @@ mod tests {
         assert_eq!(kinds.get("alpha"), Some(&"skill"));
         assert_eq!(kinds.get("reviewer"), Some(&"agent"));
         assert_eq!(kinds.get("deploy"), Some(&"command"));
+    }
+
+    /// `project_hash` must be deterministic per path (so the registry can
+    /// dedup repeat events from the same install) AND it must be 16 hex
+    /// chars wide (≈64 bits of entropy is plenty for dedup without
+    /// becoming a reversible machine identifier).
+    #[test]
+    fn project_hash_is_deterministic_and_truncated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let h1 = project_hash(tmp.path());
+        let h2 = project_hash(tmp.path());
+        assert_eq!(h1, h2, "same path → same hash");
+        assert_eq!(h1.len(), 16, "hash should be truncated to 16 hex chars");
+        assert!(
+            h1.chars().all(|c| c.is_ascii_hexdigit()),
+            "hash must be hex: {h1}"
+        );
+
+        // Different paths → different hashes (collision-resistant).
+        let tmp2 = tempfile::tempdir().unwrap();
+        let h_other = project_hash(tmp2.path());
+        assert_ne!(h1, h_other);
     }
 }

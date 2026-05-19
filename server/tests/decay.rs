@@ -72,6 +72,7 @@ async fn boot() -> Result<Harness> {
         origin_pattern: "http://{tenant}.localhost".into(),
         embedding: config::EmbeddingConfig::default(),
         queue_enabled: None,
+        decay_check_interval_secs: 0,
     };
     let state = state::AppState::new(&cfg).await?;
     let app = routes::router(state);
@@ -314,6 +315,75 @@ async fn decay_lifecycle_end_to_end() -> Result<()> {
     .send()
     .await?;
     assert_eq!(resp.status().as_u16(), 404);
+
+    Ok(())
+}
+
+/// Background sweep: a stale, low-usage skill gets flipped to
+/// `archive_candidate` so curators see it flagged proactively (#7
+/// lifecycle). We exercise the extracted `decay::sweep` directly so
+/// the test doesn't have to wait out the periodic interval.
+#[tokio::test]
+async fn decay_sweep_flips_archive_candidate() -> anyhow::Result<()> {
+    use skill_pool_server::routes::decay::{
+        sweep, DEFAULT_SWEEP_MIN_USES, DEFAULT_SWEEP_STALE_DAYS,
+    };
+
+    let h = boot().await?;
+    let c = client();
+
+    publish(&h, &c, "stale-skill").await?;
+    publish(&h, &c, "active-skill").await?;
+
+    // Make active-skill safe by bumping its use_count above the threshold.
+    sqlx::query("UPDATE skills SET use_count = $1 WHERE slug = 'active-skill'")
+        .bind(DEFAULT_SWEEP_MIN_USES + 1)
+        .execute(&h.db)
+        .await?;
+
+    // Backdate stale-skill to 200 days; use_count stays 0.
+    sqlx::query(
+        "UPDATE skills SET last_used_at = now() - INTERVAL '200 days' \
+         WHERE slug = 'stale-skill'",
+    )
+    .execute(&h.db)
+    .await?;
+
+    let flipped = sweep(&h.db, DEFAULT_SWEEP_STALE_DAYS, DEFAULT_SWEEP_MIN_USES).await?;
+    assert!(flipped >= 1, "expected at least one row flipped, got {flipped}");
+
+    // Verify the stale skill's status.
+    let (status,): (String,) =
+        sqlx::query_as("SELECT status FROM skills WHERE slug = 'stale-skill'")
+            .fetch_one(&h.db)
+            .await?;
+    assert_eq!(status, "archive_candidate");
+
+    // active-skill stays published (use_count beats the threshold).
+    let (status,): (String,) =
+        sqlx::query_as("SELECT status FROM skills WHERE slug = 'active-skill'")
+            .fetch_one(&h.db)
+            .await?;
+    assert_eq!(status, "published");
+
+    // Catalog list filters published → flagged skill drops out.
+    let list: Vec<Value> = authed(
+        req(&c, reqwest::Method::GET, &h.base, "/v1/skills", "acme"),
+        &h.acme_admin_token,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
+    assert!(
+        list.iter().all(|s| s["slug"] != "stale-skill"),
+        "archive_candidate must hide from catalog: {list:?}"
+    );
+
+    // Idempotency: running the sweep again finds no published rows in
+    // the stale window, so it flips zero.
+    let again = sweep(&h.db, DEFAULT_SWEEP_STALE_DAYS, DEFAULT_SWEEP_MIN_USES).await?;
+    assert_eq!(again, 0, "second sweep should be a no-op");
 
     Ok(())
 }
