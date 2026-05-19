@@ -1,0 +1,37 @@
+{{- if .Values.server.pdb.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "skill-pool.server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "skill-pool.server.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.server.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.server.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.server.pdb.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "skill-pool.server.selectorLabels" . | nindent 6 }}
+{{- end -}}
+{{- if .Values.web.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "skill-pool.web.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "skill-pool.web.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.web.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.web.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.web.pdb.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "skill-pool.web.selectorLabels" . | nindent 6 }}
+{{- end -}}

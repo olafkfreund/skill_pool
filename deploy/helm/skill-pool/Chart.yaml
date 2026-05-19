@@ -1,0 +1,33 @@
+apiVersion: v2
+name: skill-pool
+description: |
+  Self-hosted Claude Code skill / agent / command registry. Ships the
+  Rust HTTP server plus the SvelteKit web portal. Postgres and object
+  storage (S3 / GCS / Azure / fs) are BYO — the chart wraps a Deployment
+  for each tier, a pre-install migration Job, Service, Ingress, optional
+  HPA, optional ServiceMonitor, and optional NetworkPolicy.
+type: application
+# Chart version (changes any time templates change). Independent of appVersion.
+version: 0.1.0
+# Tracks Cargo workspace version.
+appVersion: "0.1.0"
+kubeVersion: ">=1.26.0-0"
+home: https://github.com/olafkfreund/skill_pool
+sources:
+  - https://github.com/olafkfreund/skill_pool
+keywords:
+  - skills
+  - claude-code
+  - registry
+  - rust
+  - svelte
+maintainers:
+  - name: skill-pool maintainers
+    url: https://github.com/olafkfreund/skill_pool
+icon: https://raw.githubusercontent.com/olafkfreund/skill_pool/main/docs/assets/logo.png
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://github.com/olafkfreund/skill_pool/tree/main/docs
+# No umbrella sub-charts: users bring their own Postgres + S3.

@@ -1,0 +1,125 @@
+{{- if .Values.migrate.enabled -}}
+{{- /*
+Migration Job — pre-install + pre-upgrade hook.
+
+The server binary does NOT auto-migrate (see docs/ops/rollback.md), so
+this Job is the only chart-managed migration path. It executes
+`sqlx migrate run` against the bundled migrations.
+
+Strategy:
+  * initContainer (`copy-migrations`) extracts /app/migrations from the
+    server image into an emptyDir.
+  * main container (`sqlx`) runs `sqlx migrate run --source /migrations`.
+
+Disable + run migrations from CI by setting `migrate.enabled=false`.
+*/ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "skill-pool.migrate.fullname" . }}-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "skill-pool.migrate.labels" . | nindent 4 }}
+  annotations:
+    # Hook ordering: secret-validation (-20) runs before this (-10) which
+    # runs before everything else.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "skill-pool.migrate.labels" . | nindent 8 }}
+      {{- with .Values.migrate.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "skill-pool.serviceAccountName" . }}
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.migrate.copyMigrationsFromServerImage }}
+      initContainers:
+        - name: copy-migrations
+          image: {{ include "skill-pool.server.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.server.pullPolicy }}
+          # `cp -a` preserves perms; the server image already owns /app/migrations.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              cp -a /app/migrations/. /migrations/
+              echo "Copied $(ls /migrations | wc -l) migration files."
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+            - name: tmp
+              mountPath: /tmp
+      {{- end }}
+      containers:
+        - name: sqlx
+          image: {{ include "skill-pool.migrate.image" . | quote }}
+          imagePullPolicy: {{ .Values.migrate.image.pullPolicy }}
+          # sqlx-cli reads DATABASE_URL from env. We rename
+          # SKILL_POOL_DATABASE_URL -> DATABASE_URL via a shell wrapper so
+          # the same Secret feeds both the server and the migrator.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if [ -z "${{ "{" }}{{ .Values.migrate.databaseUrlEnv }}:-{{ "}" }}" ]; then
+                echo "ERROR: {{ .Values.migrate.databaseUrlEnv }} is empty. Check the referenced Secret." >&2
+                exit 1
+              fi
+              export DATABASE_URL="${{ "{" }}{{ .Values.migrate.databaseUrlEnv }}{{ "}" }}"
+              echo "Running sqlx migrate run against $(echo "$DATABASE_URL" | sed -E 's#://[^@]*@#://***@#')"
+              exec sqlx migrate run --source /migrations
+          env:
+            {{- with .Values.migrate.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            {{- toYaml .Values.migrate.envFrom | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: migrations
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+{{- end -}}
