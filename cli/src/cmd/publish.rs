@@ -11,6 +11,7 @@ pub async fn run(
     dir: &Path,
     slug_override: Option<&str>,
     version: &str,
+    kind: &str,
 ) -> Result<()> {
     let skill_md = dir.join("SKILL.md");
     if !skill_md.exists() {
@@ -29,21 +30,28 @@ pub async fn run(
 
     let bundle = install::tar_gz_dir(dir).context("build bundle")?;
     println!(
-        "  packing:  {} bytes ({} → {}@{})",
+        "  packing:  {} bytes ({} → {}@{} [{}])",
         bundle.len(),
         dir.display(),
         slug,
-        version
+        version,
+        kind,
     );
 
     let reg = cfg.require_registry()?;
     let client = Client::new(reg)?;
+
+    // Only forward `kind` over the wire when the caller picked a
+    // non-default surface. Keeps the multipart payload byte-identical
+    // to the pre-Phase-5 shape on `--kind skill` (the default).
+    let kind_override = if kind == "skill" { None } else { Some(kind) };
 
     let metadata = PublishMetadata {
         slug: &slug,
         version,
         when_to_use: fm.when_to_use.as_deref(),
         tags: &fm.tags,
+        kind: kind_override,
     };
 
     let published = client.publish(metadata, bundle).await?;

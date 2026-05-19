@@ -83,6 +83,10 @@ enum Cmd {
         /// Required. Semver string for this publish (e.g. 1.0.0).
         #[arg(long)]
         version: String,
+        /// Catalog kind. Defaults to `skill`. Use `agent` or `command` to
+        /// publish into the parallel catalog surfaces.
+        #[arg(long, value_parser = ["skill", "agent", "command"], default_value = "skill")]
+        kind: String,
     },
     /// Capture a local skill directory as a draft (Phase 4). Drafts land in
     /// the curator inbox; a reviewer assigns a version at publish time.
@@ -219,9 +223,12 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Cmd::Publish { dir, slug, version } => {
-            cmd::publish::run(&cfg, &dir, slug.as_deref(), &version).await
-        }
+        Cmd::Publish {
+            dir,
+            slug,
+            version,
+            kind,
+        } => cmd::publish::run(&cfg, &dir, slug.as_deref(), &version, &kind).await,
         Cmd::Capture {
             dir,
             slug,

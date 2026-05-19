@@ -107,8 +107,21 @@ fn client() -> reqwest::Client {
 }
 
 async fn publish(h: &Harness, c: &reqwest::Client, slug: &str, body: &str) -> Result<()> {
+    publish_kind(h, c, slug, body, None).await
+}
+
+async fn publish_kind(
+    h: &Harness,
+    c: &reqwest::Client,
+    slug: &str,
+    body: &str,
+    kind: Option<&str>,
+) -> Result<()> {
     let bundle = build_bundle(body);
-    let meta = json!({ "slug": slug, "version": "1.0.0" });
+    let mut meta = json!({ "slug": slug, "version": "1.0.0" });
+    if let Some(k) = kind {
+        meta["kind"] = json!(k);
+    }
     let form = Form::new().text("metadata", meta.to_string()).part(
         "bundle",
         Part::bytes(bundle.to_vec())
@@ -145,12 +158,29 @@ async fn mcp_protocol_round_trip() -> Result<()> {
     let h = boot().await?;
     let c = client();
 
-    // Seed the catalog with one skill.
+    // Seed the catalog with one of each kind so the kind-aware tool
+    // calls below have something to find.
     publish(
         &h,
         &c,
         "axum-handler",
         "---\nname: axum-handler\ndescription: Pattern for axum extractors.\ntags: [rust]\n---\n\n# axum-handler\n\nBody.\n",
+    )
+    .await?;
+    publish_kind(
+        &h,
+        &c,
+        "code-reviewer",
+        "---\nname: code-reviewer\ndescription: Reviews diffs.\ntags: [agents]\n---\n\n# code-reviewer\n\nAgent body.\n",
+        Some("agent"),
+    )
+    .await?;
+    publish_kind(
+        &h,
+        &c,
+        "deploy",
+        "---\nname: deploy\ndescription: Deploys current branch.\ntags: [commands]\n---\n\n# deploy\n\nCommand body.\n",
+        Some("command"),
     )
     .await?;
 
@@ -241,20 +271,111 @@ async fn mcp_protocol_round_trip() -> Result<()> {
     let msg = missing["result"]["content"][0]["text"].as_str().unwrap();
     assert!(msg.contains("never-existed"), "{msg}");
 
-    // 6. Unknown method → JSON-RPC -32601
+    // 6. search_skills with kind=agent returns only agents (and not the
+    //    skill we published with the same fuzzy-matching tags).
+    let agent_search = rpc(
+        &h,
+        &c,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "search_skills",
+                "arguments": { "kind": "agent", "limit": 50 }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(agent_search["result"]["isError"], false);
+    let agent_content = agent_search["result"]["content"].as_array().unwrap();
+    let agent_text = agent_content
+        .iter()
+        .find_map(|c| c["text"].as_str())
+        .unwrap_or("");
+    assert!(
+        agent_text.contains("code-reviewer"),
+        "expected agent in result: {agent_text}"
+    );
+    assert!(
+        !agent_text.contains("axum-handler"),
+        "skills must not leak into agent search: {agent_text}"
+    );
+    assert!(
+        !agent_text.contains("deploy"),
+        "commands must not leak into agent search: {agent_text}"
+    );
+
+    // 7. get_skill with kind=command returns the published command's SKILL.md.
+    let cmd = rpc(
+        &h,
+        &c,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "get_skill",
+                "arguments": { "slug": "deploy", "kind": "command" }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(cmd["result"]["isError"], false);
+    let cmd_text = cmd["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(cmd_text.contains("name: deploy"), "{cmd_text}");
+    assert!(cmd_text.contains("# deploy"), "{cmd_text}");
+
+    // 7b. Default kind (omitted) on get_skill still maps to `skill`, so
+    //     fetching `deploy` without a kind must surface a tool error.
+    let cmd_default = rpc(
+        &h,
+        &c,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {
+                "name": "get_skill",
+                "arguments": { "slug": "deploy" }
+            }
+        }),
+    )
+    .await?;
+    assert!(cmd_default.get("error").is_none());
+    assert_eq!(cmd_default["result"]["isError"], true);
+
+    // 7c. Bogus kind on search_skills → INVALID_PARAMS (-32602).
+    let bad = rpc(
+        &h,
+        &c,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "search_skills",
+                "arguments": { "kind": "plugin" }
+            }
+        }),
+    )
+    .await?;
+    assert_eq!(bad["error"]["code"], -32602, "{bad}");
+
+    // 8. Unknown method → JSON-RPC -32601
     let unknown = rpc(
         &h,
         &c,
-        json!({"jsonrpc": "2.0", "id": 6, "method": "no/such/method"}),
+        json!({"jsonrpc": "2.0", "id": 10, "method": "no/such/method"}),
     )
     .await?;
     assert_eq!(unknown["error"]["code"], -32601);
 
-    // 7. Unauthenticated request → 401
+    // 9. Unauthenticated request → 401
     let resp = c
         .post(format!("{}/v1/mcp", h.base))
         .header("x-skill-pool-tenant", "acme")
-        .json(&json!({"jsonrpc": "2.0", "id": 7, "method": "initialize"}))
+        .json(&json!({"jsonrpc": "2.0", "id": 11, "method": "initialize"}))
         .send()
         .await?;
     assert_eq!(resp.status().as_u16(), 401, "{}", resp.text().await?);
