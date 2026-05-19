@@ -587,3 +587,24 @@ export async function validateAuth(auth: Auth): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Per-tenant session policy. Called by the login action so a tenant with
+ * a stricter idle-timeout (e.g. 1 hour) sees that maxAge on their cookie.
+ * Falls back to 14 days if the endpoint or call fails — never throws.
+ */
+const FALLBACK_SESSION_MAX_AGE = 60 * 60 * 24 * 14;
+export async function getSessionMaxAge(tenant: string): Promise<number> {
+  try {
+    const resp = await call('GET', '/v1/tenant/session-policy', { tenant });
+    if (!resp.ok) return FALLBACK_SESSION_MAX_AGE;
+    const body = (await resp.json()) as { max_age_secs: number };
+    const n = Number(body?.max_age_secs);
+    if (!Number.isFinite(n) || n < 60 || n > 60 * 60 * 24 * 30) {
+      return FALLBACK_SESSION_MAX_AGE;
+    }
+    return Math.floor(n);
+  } catch {
+    return FALLBACK_SESSION_MAX_AGE;
+  }
+}

@@ -20,6 +20,7 @@ mod notifications;
 mod oidc;
 mod saml;
 mod scim;
+mod session_policy;
 mod skills;
 mod stack_mappings;
 mod theme;
@@ -40,6 +41,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills/{slug}/skill-md", get(skills::get_skill_md))
         .route("/v1/skills/{slug}/deps", get(skills::get_deps))
         .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
+        .route(
+            "/v1/tenant/session-policy",
+            get(session_policy::get_session_policy),
+        )
         // Bootstrap (Phase 3)
         .route("/v1/bootstrap", get(bootstrap::bootstrap))
         // Drafts (Phase 4 — retrospective capture)

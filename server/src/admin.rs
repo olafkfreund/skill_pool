@@ -118,6 +118,50 @@ pub async fn set_tenant_residency(
     Ok(())
 }
 
+/// Set or clear a tenant's session idle-timeout policy.
+///
+/// `max_age_secs = Some(n)` sets the per-tenant cap on the web's session
+/// cookie maxAge. `None` clears the column (falls back to web's 14-day
+/// default at next login). The DB CHECK constraint enforces the
+/// 60..2_592_000 range so callers don't need to.
+///
+/// Sessions in flight are not invalidated — policy applies at next login.
+pub async fn set_session_max_age(db: &PgPool, slug: &str, max_age_secs: Option<i32>) -> Result<()> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+
+    let result = sqlx::query("UPDATE tenants SET session_max_age_secs = $2 WHERE id = $1")
+        .bind(tenant_id)
+        .bind(max_age_secs)
+        .execute(db)
+        .await
+        .with_context(|| {
+            // The CHECK constraint will reject out-of-range values; surface
+            // that as a clean error message instead of a raw sqlx message.
+            format!("set session_max_age_secs for `{slug}` (range 60..2592000 seconds)")
+        })?;
+    if result.rows_affected() != 1 {
+        return Err(anyhow!(
+            "expected 1 row updated, got {}",
+            result.rows_affected()
+        ));
+    }
+
+    match max_age_secs {
+        None => println!("session policy cleared for `{slug}` (falls back to 14d default)"),
+        Some(n) => println!(
+            "session policy set for `{slug}`: maxAge = {n} seconds (~{:.1} days)",
+            n as f64 / 86_400.0
+        ),
+    }
+    println!("\n→ applies at next login. Sessions already in flight keep their old maxAge.");
+    Ok(())
+}
+
 /// Hard-delete a tenant by slug. Relies on `ON DELETE CASCADE` on every
 /// business table (audit_events, skills, skill_drafts, skill_usage_events,
 /// tenant_theme, tenant_api_tokens, tenant_users, tenant_oidc, tenant_saml,

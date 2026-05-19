@@ -38,6 +38,20 @@ enum AdminAction {
         #[arg(long, default_value = "team")]
         plan: String,
     },
+    /// Set or clear a tenant's session idle-timeout policy. Applies to
+    /// the web portal's session cookie at next login. Range: 1 minute
+    /// to 30 days (CHECK-enforced). Use `--clear` to revert to the
+    /// 14-day default. See `docs/enterprise/session-policy.md`.
+    TenantSessionPolicy {
+        #[arg(long)]
+        slug: String,
+        /// Set the maximum session age in days (1..=30). Conflicts with `--clear`.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=30))]
+        max_age_days: Option<u32>,
+        /// Clear any custom policy on this tenant; revert to system default.
+        #[arg(long, conflicts_with = "max_age_days")]
+        clear: bool,
+    },
     /// Set or clear a tenant's data-residency fields (region tag,
     /// per-tenant bundle storage URI override). Either or both may be
     /// passed per call; omitted fields are unchanged. To clear a value,
@@ -186,6 +200,27 @@ async fn main() -> Result<()> {
                     admin::create_tenant(&db, &slug, &name, &plan).await?;
                     println!("\nnext: skill-pool-server admin token-create --tenant {slug} --name bootstrap");
                     Ok(())
+                }
+                AdminAction::TenantSessionPolicy {
+                    slug,
+                    max_age_days,
+                    clear,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    let secs = if clear {
+                        None
+                    } else {
+                        Some(
+                            max_age_days
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("pass --max-age-days N or --clear")
+                                })? as i32
+                                * 24
+                                * 60
+                                * 60,
+                        )
+                    };
+                    admin::set_session_max_age(&db, &slug, secs).await
                 }
                 AdminAction::TenantResidency {
                     slug,

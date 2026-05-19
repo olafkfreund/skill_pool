@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import {
   discoverOidc,
   discoverSaml,
+  getSessionMaxAge,
   oidcStartUrl,
   samlMetadataUrl,
   validateAuth,
@@ -42,19 +43,24 @@ export const actions: Actions = {
       return fail(401, { error: 'token rejected by registry' });
     }
 
+    // Per-tenant idle-timeout policy: a tenant may have a stricter
+    // session lifetime than the 14-day default (e.g. 1 hour for
+    // regulated workloads). getSessionMaxAge falls back to 14 days on
+    // any error so the login never blocks on the policy fetch.
+    const maxAge = await getSessionMaxAge(locals.tenant.slug);
     cookies.set('sp_token', token, {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',
       secure: url.protocol === 'https:',
-      maxAge: 60 * 60 * 24 * 14,
+      maxAge,
     });
     cookies.set('sp_tenant', locals.tenant.slug, {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',
       secure: url.protocol === 'https:',
-      maxAge: 60 * 60 * 24 * 14,
+      maxAge,
     });
 
     throw redirect(303, url.searchParams.get('next') ?? '/');
