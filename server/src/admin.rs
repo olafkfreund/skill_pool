@@ -632,3 +632,125 @@ pub async fn backfill_embeddings(
     );
     Ok(())
 }
+
+/// Inputs for `set_email_branding`. Bundled in a struct so the
+/// helper signature is stable as the column list grows.
+pub struct EmailBrandingArgs<'a> {
+    pub from_addr: &'a str,
+    pub from_name: Option<&'a str>,
+    pub reply_to: Option<&'a str>,
+    pub smtp_url: &'a str,
+    pub smtp_password: &'a str,
+    pub footer_html: Option<&'a str>,
+}
+
+/// Configure (or update) per-tenant branded transactional email. The
+/// SMTP password is encrypted at rest with AES-256-GCM via
+/// `email_branding::encrypt_password`. See `docs/enterprise/branded-emails.md`.
+pub async fn set_email_branding(
+    db: &PgPool,
+    tenant_slug: &str,
+    args: EmailBrandingArgs<'_>,
+) -> Result<()> {
+    if !crate::email_branding::looks_like_email(args.from_addr.trim()) {
+        return Err(anyhow!("from_addr must be a valid email address"));
+    }
+    if let Some(rt) = args.reply_to {
+        if !rt.trim().is_empty() && !crate::email_branding::looks_like_email(rt.trim()) {
+            return Err(anyhow!("reply_to must be a valid email address or omitted"));
+        }
+    }
+    if !(args.smtp_url.starts_with("smtp://") || args.smtp_url.starts_with("smtps://")) {
+        return Err(anyhow!("smtp_url must start with smtp:// or smtps://"));
+    }
+    if args.smtp_password.is_empty() {
+        return Err(anyhow!("smtp_password must not be empty"));
+    }
+
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) =
+        tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found or suspended"))?;
+
+    let enc = crate::email_branding::encrypt_password(args.smtp_password);
+
+    sqlx::query(
+        "INSERT INTO tenant_email_branding \
+            (tenant_id, from_addr, from_name, reply_to, smtp_url, smtp_password_enc, footer_html, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
+         ON CONFLICT (tenant_id) DO UPDATE SET \
+            from_addr = EXCLUDED.from_addr, \
+            from_name = EXCLUDED.from_name, \
+            reply_to = EXCLUDED.reply_to, \
+            smtp_url = EXCLUDED.smtp_url, \
+            smtp_password_enc = EXCLUDED.smtp_password_enc, \
+            footer_html = EXCLUDED.footer_html, \
+            updated_at = now()",
+    )
+    .bind(tenant_id)
+    .bind(args.from_addr.trim())
+    .bind(args.from_name.map(str::trim).filter(|s| !s.is_empty()))
+    .bind(args.reply_to.map(str::trim).filter(|s| !s.is_empty()))
+    .bind(args.smtp_url)
+    .bind(&enc)
+    .bind(args.footer_html.filter(|s| !s.is_empty()))
+    .execute(db)
+    .await
+    .context("upsert tenant_email_branding")?;
+
+    println!("email branding configured for `{tenant_slug}`");
+    println!("  from:      {}", args.from_addr);
+    if let Some(n) = args.from_name {
+        println!("  from_name: {n}");
+    }
+    if let Some(rt) = args.reply_to {
+        println!("  reply_to:  {rt}");
+    }
+    println!("  smtp_url:  {}", args.smtp_url);
+    if std::env::var(crate::email_branding::ENCRYPTION_KEY_ENV).is_err() {
+        println!(
+            "\n[WARN] {} is unset — password stored as base64 (NOT encrypted). \
+             Set this env in production deployments.",
+            crate::email_branding::ENCRYPTION_KEY_ENV
+        );
+    }
+    Ok(())
+}
+
+/// One-shot: send a test message through the tenant's branded SMTP
+/// transport, mirroring the `POST /v1/tenant/email-branding/test`
+/// endpoint. Useful from a deploy console without minting an admin
+/// token first.
+pub async fn email_branding_test(db: &PgPool, tenant_slug: &str, recipient: &str) -> Result<()> {
+    if !crate::email_branding::looks_like_email(recipient) {
+        return Err(anyhow!("recipient must be a valid email address"));
+    }
+    let tenant: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
+        .bind(tenant_slug)
+        .fetch_optional(db)
+        .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+
+    let row = crate::email_branding::load_row(db, tenant_id)
+        .await?
+        .ok_or_else(|| anyhow!("no email branding configured for `{tenant_slug}`"))?;
+
+    let cache = crate::email_branding::TransportCache::new();
+    let subject = format!("[skill-pool] Branded-email test for tenant {tenant_slug}");
+    let body = format!(
+        "This is a CLI-initiated test message confirming that branded transactional \
+         email is wired correctly for `{tenant_slug}`.\n",
+    );
+    match crate::email_branding::send_branded(&cache, &row, recipient, &subject, &body).await {
+        crate::email_branding::SendOutcome::Success => {
+            println!("test email queued to {recipient} via {}", row.smtp_url);
+            Ok(())
+        }
+        crate::email_branding::SendOutcome::Failed(e) => {
+            Err(anyhow!("send failed: {e}"))
+        }
+    }
+}

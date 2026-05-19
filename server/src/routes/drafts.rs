@@ -339,6 +339,7 @@ pub async fn create(
     // has no webhook configured.
     crate::notify::draft_created(
         state.db().clone(),
+        state.email_transport().clone(),
         crate::notify::DraftCreatedEvent {
             tenant_id: caller.tenant.tenant_id,
             tenant_slug: caller.tenant.tenant_slug.clone(),

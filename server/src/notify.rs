@@ -13,6 +13,7 @@
 //! are signed with HMAC-SHA256 and the hex digest is shipped in
 //! `X-Skill-Pool-Signature: sha256=<hex>`. Matches GitHub/Stripe convention.
 
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::audit;
+use crate::email_branding::{self, TransportCache as EmailTransportCache};
 
 const DELIVERY_TIMEOUT_SECS: u64 = 5;
 const SIGNATURE_HEADER: &str = "X-Skill-Pool-Signature";
@@ -180,7 +182,17 @@ pub struct DraftCreatedEvent {
 /// Fire-and-forget delivery. Returns immediately; outcome is audit-logged
 /// from inside the spawned task. Both webhook + email channels fan out
 /// from a single tokio task — neither blocks the other.
-pub fn draft_created(db: PgPool, ev: DraftCreatedEvent) {
+///
+/// `email_transport` is the per-tenant branded SMTP cache. When a tenant
+/// has a `tenant_email_branding` row configured, the email branch sends
+/// through that cached transport with the branded From / Reply-To /
+/// footer. When the row is absent, the legacy global SMTP path
+/// (`notification_smtp_*` columns) is used unchanged.
+pub fn draft_created(
+    db: PgPool,
+    email_transport: Arc<EmailTransportCache>,
+    ev: DraftCreatedEvent,
+) {
     let DraftCreatedEvent {
         tenant_id,
         tenant_slug,
@@ -260,7 +272,37 @@ pub fn draft_created(db: PgPool, ev: DraftCreatedEvent) {
                 &origin,
                 merge_proposal_slug.as_deref(),
             );
-            let outcome = send_email(em, &subject, &body).await;
+
+            // Branded path: tenant has per-tenant SMTP + From override.
+            // We still respect `cfg.email.to_addr` from the legacy table
+            // as the recipient — that's where curators expect to be
+            // notified. Only the transport + From line are branded.
+            let branded_row = match email_branding::load_row(&db, tenant_id).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "load tenant_email_branding failed; falling back to global SMTP");
+                    None
+                }
+            };
+
+            let (metadata, _channel) = if let Some(row) = branded_row {
+                let outcome = email_branding::send_branded(
+                    email_transport.as_ref(),
+                    &row,
+                    &em.to_addr,
+                    &subject,
+                    &body,
+                )
+                .await;
+                (
+                    outcome.to_audit_metadata(&em.to_addr, &row.from_addr),
+                    "branded",
+                )
+            } else {
+                let outcome = send_email(em, &subject, &body).await;
+                (outcome.to_email_audit_metadata(&em.to_addr), "global")
+            };
+
             audit::record_best_effort(
                 &db,
                 audit::Event {
@@ -270,7 +312,7 @@ pub fn draft_created(db: PgPool, ev: DraftCreatedEvent) {
                     action: "notification.deliver",
                     target_kind: "email",
                     target_id: Some(&draft_id.to_string()),
-                    metadata: outcome.to_email_audit_metadata(&em.to_addr),
+                    metadata,
                     ip_addr: None,
                     user_agent: None,
                 },

@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::config::{Config, TenancyMode};
+use crate::email_branding::TransportCache as EmailTransportCache;
 use crate::embedding::{self, SharedEmbedder};
 use crate::storage::Storage;
 use crate::tenant::TenantCtx;
@@ -32,6 +33,11 @@ struct Inner {
     /// number of distinct tenants with overrides, which is tiny in
     /// practice (an `opendal::Operator` is ~1 KB resident).
     pub tenant_storage: Mutex<HashMap<Uuid, Arc<Storage>>>,
+    /// Lazy cache of per-tenant branded SMTP transports
+    /// (`tenant_email_branding`). Built on first send. Same eviction
+    /// story as `tenant_storage`: never automatic; admin endpoints
+    /// invalidate after a PUT/DELETE.
+    pub email_transport: Arc<EmailTransportCache>,
     pub embedder: SharedEmbedder,
     #[allow(dead_code)]
     pub origin_pattern: String,
@@ -80,6 +86,7 @@ impl AppState {
                 tenancy: cfg.resolved_tenancy(),
                 storage,
                 tenant_storage: Mutex::new(HashMap::new()),
+                email_transport: Arc::new(EmailTransportCache::new()),
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
             }),
@@ -100,6 +107,7 @@ impl AppState {
                 tenancy: cfg.resolved_tenancy(),
                 storage,
                 tenant_storage: Mutex::new(HashMap::new()),
+                email_transport: Arc::new(EmailTransportCache::new()),
                 embedder,
                 origin_pattern: cfg.origin_pattern.clone(),
             }),
@@ -192,6 +200,11 @@ impl AppState {
 
     pub fn embedder(&self) -> &SharedEmbedder {
         &self.inner.embedder
+    }
+
+    /// Shared cache of per-tenant branded SMTP transports.
+    pub fn email_transport(&self) -> &Arc<EmailTransportCache> {
+        &self.inner.email_transport
     }
 
     #[allow(dead_code)]

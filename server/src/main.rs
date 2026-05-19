@@ -164,6 +164,44 @@ enum AdminAction {
         #[arg(long)]
         skill: String,
     },
+    /// Configure (or update) per-tenant branded transactional email
+    /// (#9). Sets the From line, optional Reply-To / footer, and the
+    /// dedicated SMTP relay URL. The SMTP password is read from stdin
+    /// (so it doesn't show up in shell history) and stored encrypted
+    /// at rest under the `SKILL_POOL_EMAIL_SECRET_KEY` env. See
+    /// `docs/enterprise/branded-emails.md`.
+    EmailBrandingSet {
+        #[arg(long)]
+        tenant: String,
+        /// From address, e.g. `noreply@acme.example.com`. May include
+        /// a display name like `"Acme" <noreply@acme.example.com>` but
+        /// `--from-name` is preferred.
+        #[arg(long)]
+        from_addr: String,
+        /// Optional display name. Combined with from_addr at send time.
+        #[arg(long)]
+        from_name: Option<String>,
+        /// Optional Reply-To address.
+        #[arg(long)]
+        reply_to: Option<String>,
+        /// SMTP URL with no password baked in, e.g.
+        /// `smtps://user@smtp.eu.example.com:465`. The scheme must be
+        /// `smtp://` or `smtps://`.
+        #[arg(long)]
+        smtp_url: String,
+        /// Optional plain-text footer appended to each outbound mail.
+        #[arg(long)]
+        footer_html: Option<String>,
+    },
+    /// Send a probe email through the tenant's branded SMTP transport.
+    /// Useful for verifying configuration before relying on it for
+    /// real notifications.
+    EmailBrandingTest {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        to: String,
+    },
     /// Backfill description_embedding for skills that pre-date Phase 5.
     /// Walks `skills` rows with NULL embedding, computes one via the
     /// configured Embedder, and updates the column. Skipped silently on
@@ -355,6 +393,43 @@ async fn main() -> Result<()> {
                 } => {
                     let db = admin::connect(&cfg).await?;
                     admin::remove_stack_mapping(&db, &tenant, &stack, &skill).await
+                }
+                AdminAction::EmailBrandingSet {
+                    tenant,
+                    from_addr,
+                    from_name,
+                    reply_to,
+                    smtp_url,
+                    footer_html,
+                } => {
+                    use std::io::{BufRead, Write};
+                    eprint!("SMTP password (will be encrypted at rest): ");
+                    std::io::stderr().flush().ok();
+                    let stdin = std::io::stdin();
+                    let mut line = String::new();
+                    stdin.lock().read_line(&mut line)?;
+                    let smtp_password = line.trim_end_matches(['\r', '\n']).to_string();
+                    if smtp_password.is_empty() {
+                        return Err(anyhow::anyhow!("SMTP password must not be empty"));
+                    }
+                    let db = admin::connect(&cfg).await?;
+                    admin::set_email_branding(
+                        &db,
+                        &tenant,
+                        admin::EmailBrandingArgs {
+                            from_addr: &from_addr,
+                            from_name: from_name.as_deref(),
+                            reply_to: reply_to.as_deref(),
+                            smtp_url: &smtp_url,
+                            smtp_password: &smtp_password,
+                            footer_html: footer_html.as_deref(),
+                        },
+                    )
+                    .await
+                }
+                AdminAction::EmailBrandingTest { tenant, to } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::email_branding_test(&db, &tenant, &to).await
                 }
                 AdminAction::BackfillEmbeddings {
                     tenant,
