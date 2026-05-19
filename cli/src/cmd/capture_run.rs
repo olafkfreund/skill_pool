@@ -28,6 +28,7 @@ use crate::config::Config;
 use crate::scorer::{
     self, CaptureStage, CaptureState, SessionScore,
 };
+use crate::secret_scan;
 
 /// Server submit seam. Production uses `Client`; tests inject a stub that
 /// captures the call without an HTTP round-trip.
@@ -56,6 +57,7 @@ pub async fn run(
     dry_run: bool,
     stage1_model: Option<&str>,
     stage2_model: Option<&str>,
+    allow_secret: bool,
 ) -> Result<()> {
     let stage1 = stage1_model.unwrap_or(DEFAULT_STAGE1_MODEL);
     let stage2 = stage2_model.unwrap_or(DEFAULT_STAGE2_MODEL);
@@ -109,7 +111,15 @@ pub async fn run(
     let mut errored = 0;
 
     for s in work {
-        match process_one(&stages, &registry, &s, find_transcript_for_session).await {
+        match process_one(
+            &stages,
+            &registry,
+            &s,
+            find_transcript_for_session,
+            allow_secret,
+        )
+        .await
+        {
             Ok(state) => {
                 let drafted_now = matches!(state.stage, CaptureStage::Drafted);
                 let rejected_now = matches!(
@@ -153,6 +163,7 @@ async fn process_one<S, D, F>(
     registry: &D,
     s: &SessionScore,
     resolve_transcript: F,
+    allow_secret: bool,
 ) -> Result<CaptureState>
 where
     S: Stages,
@@ -204,6 +215,38 @@ where
         });
     }
 
+    // 2b. Pre-stage-2 secret scan. A transcript dense with credentials is
+    // unlikely to produce a clean draft anyway; bail before we burn the
+    // Sonnet call. `--allow-secret` downgrades this to a warning.
+    let pre_findings = secret_scan::scan_text(&trimmed);
+    if !pre_findings.is_empty() {
+        let summary = secret_scan::summarise(&pre_findings);
+        if allow_secret {
+            tracing::warn!(
+                session = %s.session_id,
+                "pre-stage-2 secret findings (proceeding under --allow-secret): {summary}",
+            );
+            println!(
+                "    ! pre-stage-2 secrets found ({} finding{}); proceeding under --allow-secret",
+                pre_findings.len(),
+                if pre_findings.len() == 1 { "" } else { "s" },
+            );
+        } else {
+            println!(
+                "    skipping session: {} secret finding{} in transcript",
+                pre_findings.len(),
+                if pre_findings.len() == 1 { "" } else { "s" },
+            );
+            return Ok(CaptureState {
+                stage: CaptureStage::Stage1Rejected,
+                completed_at: Utc::now(),
+                draft_id: None,
+                slug: None,
+                reason: Some(format!("transcript contained secrets: {summary}")),
+            });
+        }
+    }
+
     // 3. Stage 2 — drafter.
     println!("  [{}] stage2…", short(&s.session_id));
     let md = stages.stage2(&stage1, &trimmed).await?;
@@ -222,6 +265,40 @@ where
 
     // 4. Bundle + POST.
     let bundle = capturer::bundle_skill_md(&md)?;
+
+    // 4a. Pre-POST secret scan. Sonnet can introduce strings that were
+    // never in the transcript (hallucinated tokens, mirrored values), so
+    // the bundle scan is the real safety net.
+    let bundle_findings = secret_scan::scan_bundle(&bundle)
+        .context("scan generated bundle for secrets")?;
+    if !bundle_findings.is_empty() {
+        let summary = secret_scan::summarise(&bundle_findings);
+        if allow_secret {
+            tracing::warn!(
+                session = %s.session_id,
+                "pre-POST secret findings (proceeding under --allow-secret): {summary}",
+            );
+            println!(
+                "    ! pre-POST secrets found ({} finding{}); proceeding under --allow-secret",
+                bundle_findings.len(),
+                if bundle_findings.len() == 1 { "" } else { "s" },
+            );
+        } else {
+            println!(
+                "    skipping POST: {} secret finding{} in bundle",
+                bundle_findings.len(),
+                if bundle_findings.len() == 1 { "" } else { "s" },
+            );
+            return Ok(CaptureState {
+                stage: CaptureStage::Stage2Rejected,
+                completed_at: Utc::now(),
+                draft_id: None,
+                slug: None,
+                reason: Some(format!("bundle contained secrets: {summary}")),
+            });
+        }
+    }
+
     let notes = build_capture_notes(s, &stage1);
     let metadata = CaptureMetadata {
         slug: &validated.slug,
@@ -430,7 +507,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage1Rejected));
         assert!(state.reason.unwrap().contains("too specific"));
         assert!(submit.calls.lock().unwrap().is_empty(), "no draft POST expected");
@@ -448,7 +525,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage1ParseFailure));
         assert!(state.reason.unwrap().contains("malformed JSON"));
     }
@@ -469,7 +546,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage2Rejected));
         assert!(state.reason.unwrap().to_lowercase().contains("absolute path"));
         assert!(submit.calls.lock().unwrap().is_empty(), "no POST after Stage2 reject");
@@ -487,7 +564,7 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::Drafted));
         assert_eq!(state.draft_id.as_deref(), Some("stub-draft-id"));
         assert_eq!(state.slug.as_deref(), Some("foo"));
@@ -508,9 +585,79 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: true,
         };
-        let state = process_one(&stages, &submit, &s, resolver).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
         assert!(matches!(state.stage, CaptureStage::ServerRejected));
         assert!(state.reason.unwrap().contains("server rejected"));
+    }
+
+    /// A transcript whose user message includes a credential should short-
+    /// circuit at the pre-stage-2 gate, recording Stage1Rejected with a
+    /// secrets reason. Crucially, Stage 2 must NOT run (queue stays full).
+    const SECRET_JSONL: &str = r#"{"type":"user","message":{"content":"my key is AKIAIOSFODNN7EXAMPLE please help"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}
+"#;
+
+    #[tokio::test]
+    async fn pre_stage2_secret_skips_session_and_does_not_call_stage2() {
+        let s = make_session("s-secret-transcript");
+        let (_tmp, resolver) = fixture_transcript(SECRET_JSONL, &s.session_id);
+        let stages = StubStages {
+            stage1: Mutex::new(vec![Ok(ok_analysis(true))]),
+            stage2: Mutex::new(vec![]), // panics if Stage 2 runs
+        };
+        let submit = StubSubmit {
+            calls: Mutex::new(vec![]),
+            fail: false,
+        };
+        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        assert!(matches!(state.stage, CaptureStage::Stage1Rejected));
+        let reason = state.reason.unwrap();
+        assert!(reason.contains("secrets"), "reason: {reason}");
+        assert!(reason.contains("aws-access-key"), "reason: {reason}");
+        assert!(submit.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn allow_secret_overrides_pre_stage2_gate() {
+        let s = make_session("s-secret-allow");
+        let (_tmp, resolver) = fixture_transcript(SECRET_JSONL, &s.session_id);
+        let stages = StubStages {
+            stage1: Mutex::new(vec![Ok(ok_analysis(true))]),
+            stage2: Mutex::new(vec![Ok(valid_md())]),
+        };
+        let submit = StubSubmit {
+            calls: Mutex::new(vec![]),
+            fail: false,
+        };
+        // allow_secret = true → pipeline should proceed past the gate.
+        let state = process_one(&stages, &submit, &s, resolver, true).await.unwrap();
+        assert!(matches!(state.stage, CaptureStage::Drafted));
+    }
+
+    /// Stage 2 may "hallucinate" a token that wasn't in the transcript and
+    /// that the narrow `validate_skill_md` rules don't catch. The pre-POST
+    /// bundle scan is the safety net for those cases.
+    #[tokio::test]
+    async fn pre_post_bundle_secret_blocks_submit() {
+        let s = make_session("s-secret-bundle");
+        let (_tmp, resolver) = fixture_transcript(TINY_JSONL, &s.session_id);
+        // A Slack token: validate_skill_md doesn't know about it, but
+        // secret_scan does. This isolates the pre-POST gate.
+        let md_with_slack = "---\nname: foo\ndescription: A captured pattern.\n---\n\n# foo\n\nuse SLACK=xoxb-12345-abcdef-67890-zzzaaa\n";
+        let stages = StubStages {
+            stage1: Mutex::new(vec![Ok(ok_analysis(true))]),
+            stage2: Mutex::new(vec![Ok(md_with_slack.to_string())]),
+        };
+        let submit = StubSubmit {
+            calls: Mutex::new(vec![]),
+            fail: false,
+        };
+        let state = process_one(&stages, &submit, &s, resolver, false).await.unwrap();
+        assert!(matches!(state.stage, CaptureStage::Stage2Rejected));
+        let reason = state.reason.unwrap();
+        assert!(reason.contains("bundle contained secrets"), "reason: {reason}");
+        assert!(reason.contains("slack-token"), "reason: {reason}");
+        assert!(submit.calls.lock().unwrap().is_empty());
     }
 }
 

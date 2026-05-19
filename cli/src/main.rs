@@ -11,6 +11,7 @@ mod detect;
 mod install;
 mod manifest;
 mod scorer;
+mod secret_scan;
 
 #[derive(Parser)]
 #[command(
@@ -102,6 +103,11 @@ enum Cmd {
         /// Extra tags to attach (comma-separated). Merged with frontmatter tags.
         #[arg(long, value_delimiter = ',')]
         tags: Vec<String>,
+        /// Skip the secret-scan quality gate. Findings are logged but the
+        /// capture proceeds. Use when the skill is *about* secret handling
+        /// (e.g. rotation runbook) and a regex false-positive would block it.
+        #[arg(long)]
+        allow_secret: bool,
     },
     /// Score a session for "this was worth capturing" signals (Phase 4.5).
     /// Designed to run as the Claude Code Stop hook — reads the hook payload
@@ -136,6 +142,11 @@ enum Cmd {
         /// Override the Stage 2 (drafter) model.
         #[arg(long)]
         stage2_model: Option<String>,
+        /// Skip the secret-scan quality gate. Findings are logged as
+        /// warnings but the pipeline proceeds. Use only when triaging a
+        /// regex false-positive — the server runs its own scan too.
+        #[arg(long)]
+        allow_secret: bool,
     },
     /// Diagnose: list loaded skills, dangling symlinks, drift.
     Doctor {
@@ -234,7 +245,18 @@ async fn main() -> Result<()> {
             slug,
             notes,
             tags,
-        } => cmd::capture::run(&cfg, &dir, slug.as_deref(), notes.as_deref(), &tags).await,
+            allow_secret,
+        } => {
+            cmd::capture::run(
+                &cfg,
+                &dir,
+                slug.as_deref(),
+                notes.as_deref(),
+                &tags,
+                allow_secret,
+            )
+            .await
+        }
         Cmd::CaptureScore { from_file } => match from_file {
             Some(p) => cmd::capture_score::run_from_file(&p),
             None => cmd::capture_score::run(),
@@ -245,6 +267,7 @@ async fn main() -> Result<()> {
             dry_run,
             stage1_model,
             stage2_model,
+            allow_secret,
         } => {
             cmd::capture_run::run(
                 &cfg,
@@ -252,6 +275,7 @@ async fn main() -> Result<()> {
                 dry_run,
                 stage1_model.as_deref(),
                 stage2_model.as_deref(),
+                allow_secret,
             )
             .await
         }
