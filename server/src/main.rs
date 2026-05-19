@@ -38,6 +38,19 @@ enum AdminAction {
         #[arg(long, default_value = "team")]
         plan: String,
     },
+    /// Set or clear a tenant's data-residency fields (region tag,
+    /// per-tenant bundle storage URI override). Either or both may be
+    /// passed per call; omitted fields are unchanged. To clear a value,
+    /// pass an empty string. The storage URI is validated synchronously.
+    /// See `docs/enterprise/data-residency.md`.
+    TenantResidency {
+        #[arg(long)]
+        slug: String,
+        #[arg(long)]
+        region: Option<String>,
+        #[arg(long)]
+        storage_uri: Option<String>,
+    },
     /// Hard-delete a tenant and all its data via ON DELETE CASCADE.
     /// Bundle storage is NOT swept — the command prints the storage prefix
     /// for a separate operator sweep (or retention). Pair with SIEM export
@@ -173,6 +186,20 @@ async fn main() -> Result<()> {
                     admin::create_tenant(&db, &slug, &name, &plan).await?;
                     println!("\nnext: skill-pool-server admin token-create --tenant {slug} --name bootstrap");
                     Ok(())
+                }
+                AdminAction::TenantResidency {
+                    slug,
+                    region,
+                    storage_uri,
+                } => {
+                    let db = admin::connect(&cfg).await?;
+                    admin::set_tenant_residency(
+                        &db,
+                        &slug,
+                        region.as_deref(),
+                        storage_uri.as_deref(),
+                    )
+                    .await
                 }
                 AdminAction::TenantDelete { slug, confirm } => {
                     if !confirm {

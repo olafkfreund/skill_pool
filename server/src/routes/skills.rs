@@ -251,7 +251,9 @@ pub async fn get_skill_md(
     .await;
 
     let bytes = state
-        .storage()
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?
         .read_bundle(&key)
         .await
         .map_err(AppError::Anyhow)?;
@@ -310,17 +312,21 @@ pub async fn get_bundle(
     )
     .await;
 
+    let storage = state
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?;
+
     // Redirect to a short-lived signed URL when the backend supports it
     // (S3 / GCS / Azure) and the caller hasn't asked for bytes explicitly.
     // fs:// backends always fall through to streaming.
     if !bq.bytes {
-        if let Ok(Some(url)) = state.storage().presign_read(&key).await {
+        if let Ok(Some(url)) = storage.presign_read(&key).await {
             return Ok(Redirect::temporary(&url).into_response());
         }
     }
 
-    let bytes = state
-        .storage()
+    let bytes = storage
         .read_bundle(&key)
         .await
         .map_err(AppError::Anyhow)?;
@@ -442,7 +448,9 @@ pub async fn publish(
     // mean a successful DB row pointing at non-existent storage.
     let key = Storage::bundle_key(caller.tenant.tenant_id, &meta.slug, &meta.version);
     state
-        .storage()
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?
         .put_bundle(&key, bytes.clone())
         .await
         .map_err(AppError::Anyhow)?;

@@ -120,3 +120,4 @@ testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full", "test-util"] }
+walkdir = "2"

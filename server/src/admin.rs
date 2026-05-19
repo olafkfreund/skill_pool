@@ -58,6 +58,66 @@ pub async fn create_tenant(
     Ok(CreatedTenant { id: row.0 })
 }
 
+/// Set or clear a tenant's data-residency fields.
+///
+/// Pass `region = Some` to tag the tenant with a free-form region marker
+/// (`"eu-west-1"`, `"us-east-1"`, …). Pass `storage_uri = Some` to override
+/// the global bundle backend for this tenant only. Either or both can be
+/// `Some` per call; `None` leaves the column unchanged.
+///
+/// `storage_uri` is validated by attempting to construct a `Storage` from
+/// it — typos are caught here, not at first bundle write. A successful
+/// return guarantees the URI resolves; reachability of a remote backend
+/// (S3 credentials, DNS) is still verified on first use.
+pub async fn set_tenant_residency(
+    db: &PgPool,
+    slug: &str,
+    region: Option<&str>,
+    storage_uri: Option<&str>,
+) -> Result<()> {
+    let tenant: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(slug)
+            .fetch_optional(db)
+            .await?;
+    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+
+    if let Some(uri) = storage_uri {
+        crate::storage::Storage::from_uri(uri)
+            .with_context(|| format!("validate storage_uri {uri:?}"))?;
+    }
+
+    // COALESCE so a single-field update doesn't clobber the other.
+    // Sentinel `''` distinguishes "leave alone" (NULL) from "explicitly
+    // clear" (empty string treated as NULL by NULLIF).
+    let result = sqlx::query(
+        "UPDATE tenants
+           SET region      = COALESCE(NULLIF($2, ''), region),
+               storage_uri = COALESCE(NULLIF($3, ''), storage_uri)
+         WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .bind(region.unwrap_or(""))
+    .bind(storage_uri.unwrap_or(""))
+    .execute(db)
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(anyhow!("expected 1 row updated, got {}", result.rows_affected()));
+    }
+
+    println!("residency updated for `{slug}`");
+    if let Some(r) = region {
+        println!("  region:      {r}");
+    }
+    if let Some(u) = storage_uri {
+        println!("  storage_uri: {u}");
+    }
+    println!(
+        "\n→ restart the server (or wait for cache TTL) so per-tenant storage rebuilds from the new URI."
+    );
+    Ok(())
+}
+
 /// Hard-delete a tenant by slug. Relies on `ON DELETE CASCADE` on every
 /// business table (audit_events, skills, skill_drafts, skill_usage_events,
 /// tenant_theme, tenant_api_tokens, tenant_users, tenant_oidc, tenant_saml,

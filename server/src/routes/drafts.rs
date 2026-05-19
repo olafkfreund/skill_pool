@@ -132,7 +132,9 @@ pub async fn get_skill_md(
     let (key,) = row.ok_or(AppError::NotFound)?;
 
     let bytes = state
-        .storage()
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?
         .read_bundle(&key)
         .await
         .map_err(AppError::Anyhow)?;
@@ -241,7 +243,9 @@ pub async fn create(
     let key = Storage::draft_bundle_key(caller.tenant.tenant_id, draft_id);
 
     state
-        .storage()
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?
         .put_bundle(&key, bytes.clone())
         .await
         .map_err(AppError::Anyhow)?;
@@ -409,14 +413,18 @@ pub async fn publish(
 
     // Copy bundle to the canonical skill key. The opendal Operator doesn't
     // support cheap server-side copy on the FS backend, so read+write.
-    let bundle_bytes = state
-        .storage()
+    // Same per-tenant storage for both read and write — a draft and its
+    // promoted skill always live on the same backend.
+    let storage = state
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(AppError::Anyhow)?;
+    let bundle_bytes = storage
         .read_bundle(&draft.bundle_uri)
         .await
         .map_err(AppError::Anyhow)?;
     let skill_key = Storage::bundle_key(caller.tenant.tenant_id, &final_slug, body.version.trim());
-    state
-        .storage()
+    storage
         .put_bundle(&skill_key, bundle_bytes)
         .await
         .map_err(AppError::Anyhow)?;

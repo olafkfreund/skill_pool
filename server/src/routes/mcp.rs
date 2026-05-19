@@ -468,7 +468,9 @@ async fn call_get_skill(
     };
 
     let bytes = state
-        .storage()
+        .storage_for(&caller.tenant)
+        .await
+        .map_err(|e| ToolError::Internal(e.to_string()))?
         .read_bundle(&key)
         .await
         .map_err(|e| ToolError::Internal(e.to_string()))?;
