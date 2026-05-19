@@ -30,13 +30,29 @@ http:
     # Per-tenant custom domains: any host that isn't skill-pool.example.com
     # is treated as a custom-domain tenant. Traefik issues a cert via
     # HTTP-01 on first request (after DNS is pointed at us).
+    #
+    # The `custom-domain-allow` middleware gates the request on the
+    # registry's `cert-ok` allow-list — unverified hosts get 404'd
+    # before Traefik attempts ACME issuance, defending against
+    # cert-flood from random hosts pointed at us.
     skill-pool-custom-domain:
       rule: "!HostRegexp(`{any:.*}.skill-pool.example.com`) && !Host(`skill-pool.example.com`)"
       entryPoints: [websecure]
       service: skill-pool-web
+      middlewares: [custom-domain-allow]
       tls:
         certResolver: letsencrypt
       priority: 1
+
+  middlewares:
+    # Calls the registry's cert-ok endpoint before forwarding a request.
+    # 200 = host is in `verified`/`active` status (claimed via
+    # /v1/tenant/custom-domains); anything else = refuse the request.
+    # See `docs/enterprise/custom-domains.md`.
+    custom-domain-allow:
+      forwardAuth:
+        address: "http://127.0.0.1:8080/v1/tenant/custom-domains/{Host}/cert-ok"
+        trustForwardHeader: true
 
   services:
     skill-pool-web:

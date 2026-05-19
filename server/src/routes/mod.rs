@@ -10,6 +10,7 @@ use crate::tracing_setup;
 
 mod audit_siem;
 mod bootstrap;
+mod custom_domains;
 mod decay;
 mod drafts;
 mod enterprise;
@@ -88,6 +89,28 @@ pub fn router(state: AppState) -> Router {
         // Telemetry dashboards (Phase 5)
         .route("/v1/tenant/usage/timeline", get(usage::timeline))
         .route("/v1/tenant/usage/top", get(usage::top))
+        // Custom domains (Phase 5 / Enterprise) — tenant-side admin flow
+        // for mapping `skills.acme.com` at this backend with ACME
+        // issuance handled by the reverse proxy.
+        .route(
+            "/v1/tenant/custom-domains",
+            get(custom_domains::list).post(custom_domains::create),
+        )
+        .route(
+            "/v1/tenant/custom-domains/{id}/verify",
+            post(custom_domains::verify),
+        )
+        .route(
+            "/v1/tenant/custom-domains/{id}",
+            axum::routing::delete(custom_domains::remove),
+        )
+        // No auth, no tenant ctx — called by Caddy `on_demand_tls.ask`.
+        // 200 = host is verified/active, 404 = unknown. See
+        // `docs/enterprise/custom-domains.md`.
+        .route(
+            "/v1/tenant/custom-domains/{host}/cert-ok",
+            get(custom_domains::cert_ok),
+        )
         // Stack mappings — curated stack-tag → skill-slug recommendations
         // that drive `skill-pool bootstrap` (Phase 3 finish-up).
         .route(

@@ -57,6 +57,17 @@ pub fn slug_from_request(parts: &Parts, tenancy: &TenancyMode) -> Result<String,
     }
 }
 
+/// Strip the optional `:port` suffix and lowercase a Host header value.
+/// Used by both the subdomain fallback in `slug_from_request` and the
+/// custom-domain cache lookup in `TenantCtx`.
+pub(crate) fn normalize_host(host: &str) -> String {
+    host.split(':')
+        .next()
+        .unwrap_or(host)
+        .trim()
+        .to_lowercase()
+}
+
 impl<S> FromRequestParts<S> for TenantCtx
 where
     S: Send + Sync,
@@ -66,6 +77,36 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let state = AppState::from_ref(state);
+
+        // Custom-domain shortcut: in shared mode, before falling through
+        // to the subdomain/header logic, check whether the exact Host
+        // matches a verified/active row in `tenant_custom_domains` (via
+        // the in-process cache populated by `AppState::refresh_custom_domains`).
+        // A hit resolves directly to a tenant_id; we still load `slug`
+        // for logging/audit.
+        if matches!(state.tenancy(), crate::config::TenancyMode::Shared) {
+            if let Some(host_raw) = parts.headers.get("host").and_then(|h| h.to_str().ok()) {
+                let host = normalize_host(host_raw);
+                if let Some(tenant_id) = state.custom_domain_tenant(&host).await {
+                    let row: Option<(String,)> = sqlx::query_as(
+                        "SELECT slug FROM tenants WHERE id = $1 AND status = 'active'",
+                    )
+                    .bind(tenant_id)
+                    .fetch_optional(state.db())
+                    .await?;
+                    if let Some((tenant_slug,)) = row {
+                        return Ok(TenantCtx {
+                            tenant_id,
+                            tenant_slug,
+                        });
+                    }
+                    // Cache hit pointed at a tenant that's been suspended
+                    // or deleted; fall through so subdomain logic handles
+                    // it. The next refresh will purge the stale entry.
+                }
+            }
+        }
+
         let slug = slug_from_request(parts, state.tenancy())?;
 
         let row: Option<(Uuid, String)> =

@@ -164,6 +164,16 @@ enum AdminAction {
         #[arg(long)]
         skill: String,
     },
+    /// Per-tenant custom domain admin. Lets a tenant pin
+    /// `skills.acme.com` at this backend; cert issuance is the reverse
+    /// proxy's job (Caddy `on_demand_tls` / Traefik HTTP-01). See
+    /// `docs/enterprise/custom-domains.md`.
+    CustomDomain {
+        #[arg(long)]
+        tenant: String,
+        #[command(subcommand)]
+        action: CustomDomainAction,
+    },
     /// Backfill description_embedding for skills that pre-date Phase 5.
     /// Walks `skills` rows with NULL embedding, computes one via the
     /// configured Embedder, and updates the column. Skipped silently on
@@ -178,6 +188,36 @@ enum AdminAction {
         /// Show what would happen without writing.
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CustomDomainAction {
+    /// Claim a hostname on behalf of a tenant. Prints the DNS TXT
+    /// record the tenant admin needs to add.
+    Add {
+        #[arg(long)]
+        hostname: String,
+    },
+    /// List all custom domains for a tenant with their status.
+    List,
+    /// Print the verify command for a pending domain. Actual DNS lookup
+    /// happens via the HTTP endpoint (single code path).
+    Verify {
+        #[arg(long)]
+        id: uuid::Uuid,
+    },
+    /// Operator override: skip DNS, flip status straight to `active`.
+    /// Use for private CAs / air-gapped deploys.
+    Activate {
+        #[arg(long)]
+        id: uuid::Uuid,
+    },
+    /// Withdraw a custom-domain claim. Removes the row; the next cache
+    /// refresh will drop it from the in-process map.
+    Remove {
+        #[arg(long)]
+        id: uuid::Uuid,
     },
 }
 
@@ -356,6 +396,26 @@ async fn main() -> Result<()> {
                     let db = admin::connect(&cfg).await?;
                     admin::remove_stack_mapping(&db, &tenant, &stack, &skill).await
                 }
+                AdminAction::CustomDomain { tenant, action } => {
+                    let db = admin::connect(&cfg).await?;
+                    match action {
+                        CustomDomainAction::Add { hostname } => {
+                            admin::add_custom_domain(&db, &tenant, &hostname).await
+                        }
+                        CustomDomainAction::List => {
+                            admin::list_custom_domains(&db, &tenant).await
+                        }
+                        CustomDomainAction::Verify { id } => {
+                            admin::verify_custom_domain(&db, &tenant, id).await
+                        }
+                        CustomDomainAction::Activate { id } => {
+                            admin::activate_custom_domain(&db, &tenant, id).await
+                        }
+                        CustomDomainAction::Remove { id } => {
+                            admin::remove_custom_domain(&db, &tenant, id).await
+                        }
+                    }
+                }
                 AdminAction::BackfillEmbeddings {
                     tenant,
                     limit,
@@ -375,6 +435,11 @@ async fn serve(cfg: config::Config) -> Result<()> {
     tracing::info!(addr = %cfg.bind, "skill-pool-server starting");
 
     let state = state::AppState::new(&cfg).await?;
+    // Start the background custom-domain cache refresher so admins see
+    // verified/active domains flow into request routing without manual
+    // server reloads. Detached: the JoinHandle is dropped, the task
+    // ends when the runtime shuts down.
+    let _refresher = state.spawn_custom_domain_refresher();
     let app = routes::router(state);
 
     let addr: SocketAddr = cfg.bind.parse()?;

@@ -523,6 +523,159 @@ pub async fn set_sso(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Custom domains (Phase 5 / Enterprise)
+// ---------------------------------------------------------------------------
+
+/// CLI helper: add a hostname for a tenant, returning the verification
+/// record the operator should hand back to the tenant admin to paste
+/// into DNS.
+pub async fn add_custom_domain(db: &PgPool, tenant_slug: &str, hostname: &str) -> Result<()> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+    let host = normalize_admin_hostname(hostname)?;
+    let mut buf = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut buf);
+    let token = hex::encode(buf);
+
+    let row: (Uuid,) = sqlx::query_as(
+        "INSERT INTO tenant_custom_domains (tenant_id, hostname, verification_token) \
+         VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(&host)
+    .bind(&token)
+    .fetch_one(db)
+    .await
+    .with_context(|| format!("insert tenant_custom_domains row for {host}"))?;
+
+    println!("custom domain added for tenant `{tenant_slug}`:");
+    println!("  id:       {}", row.0);
+    println!("  hostname: {host}");
+    println!();
+    println!("Ask the tenant admin to add this DNS record:");
+    println!("  _skill-pool-verify.{host} TXT {token}");
+    println!();
+    println!("Then run:");
+    println!("  skill-pool-server admin custom-domain --tenant {tenant_slug} verify --id {}", row.0);
+    Ok(())
+}
+
+pub async fn list_custom_domains(db: &PgPool, tenant_slug: &str) -> Result<()> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+    let rows: Vec<(Uuid, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, hostname, status, last_error FROM tenant_custom_domains \
+         WHERE tenant_id = $1 ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(db)
+    .await?;
+
+    if rows.is_empty() {
+        println!("(no custom domains for tenant `{tenant_slug}`)");
+    } else {
+        println!("custom domains for tenant `{tenant_slug}`:");
+        for (id, hostname, status, last_error) in rows {
+            print!("  {hostname:<40} {status:<10} {id}");
+            if let Some(e) = last_error {
+                if status == "failed" {
+                    print!("  — {e}");
+                }
+            }
+            println!();
+        }
+    }
+    Ok(())
+}
+
+pub async fn verify_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) -> Result<()> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT hostname, verification_token FROM tenant_custom_domains \
+         WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .fetch_optional(db)
+    .await?;
+    let (hostname, _token) = row.ok_or_else(|| anyhow!("custom domain {id} not found"))?;
+    // The route handler does the heavy lifting; the CLI just nudges the
+    // tenant admin to call the endpoint. We could re-implement the
+    // hickory lookup here, but keeping a single code path means one
+    // place to fix bugs.
+    println!(
+        "verification is performed at runtime via the HTTP endpoint:\n\
+         \n\
+         curl -X POST -H 'Authorization: Bearer $TOKEN' \\\n\
+              -H 'x-skill-pool-tenant: {tenant_slug}' \\\n\
+              http://<host>/v1/tenant/custom-domains/{id}/verify\n\
+         \n\
+         (host = {hostname})"
+    );
+    Ok(())
+}
+
+/// Operator override: skip DNS, flip status straight to `active`. Used
+/// when a tenant has provided their own certificate via a private CA or
+/// when DNS verification is impractical (air-gapped deploys).
+pub async fn activate_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) -> Result<()> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+    let result = sqlx::query(
+        "UPDATE tenant_custom_domains \
+            SET status = 'active', \
+                last_checked_at = now(), \
+                last_error = NULL, \
+                activated_at = COALESCE(activated_at, now()) \
+          WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .execute(db)
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(anyhow!("custom domain {id} not found"));
+    }
+    println!("custom domain {id} for tenant `{tenant_slug}` marked active");
+    println!("(running server processes will pick this up on the next refresh tick, ~60s)");
+    Ok(())
+}
+
+pub async fn remove_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) -> Result<()> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+    let result = sqlx::query(
+        "DELETE FROM tenant_custom_domains WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .execute(db)
+    .await?;
+    if result.rows_affected() == 0 {
+        println!("(no custom domain {id} for tenant `{tenant_slug}`)");
+    } else {
+        println!("removed custom domain {id} from tenant `{tenant_slug}`");
+    }
+    Ok(())
+}
+
+async fn lookup_tenant_id(db: &PgPool, tenant_slug: &str) -> Result<Uuid> {
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
+            .bind(tenant_slug)
+            .fetch_optional(db)
+            .await?;
+    Ok(row.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.0)
+}
+
+fn normalize_admin_hostname(raw: &str) -> Result<String> {
+    let h = raw.trim().trim_end_matches('.').to_lowercase();
+    if h.is_empty() {
+        return Err(anyhow!("hostname is empty"));
+    }
+    if !h.contains('.') {
+        return Err(anyhow!("hostname must be fully qualified"));
+    }
+    Ok(h)
+}
+
 /// Phase 5+ operational task: compute and store description_embedding
 /// for skills that pre-date the embedding column (or were published
 /// before the operator turned the feature on). Idempotent — only rows
