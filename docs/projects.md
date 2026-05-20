@@ -161,6 +161,88 @@ Both are `Option<String>`, omitted from serialization when None. Existing manife
 | Git auto-discovery fails | `git` not on PATH, no `origin` remote, or stored `git_remote` doesn't normalize-equal to repo's origin |
 | Items appear in wrong order | The `PUT /items` call replaces the full list — re-PUT with the desired order |
 
+## Plans
+
+A project's **plan** is a markdown document — architecture, roadmap, current sprint, design notes — that all developers working on that codebase should share. Plans are authored OUTSIDE skill-pool (Confluence, Notion, GitHub, a local file) and imported via the CLI. The web portal is read-only for plans.
+
+### Lifecycle
+
+| Phase | Mechanism |
+|---|---|
+| **Author** | Whatever tool the architect/owner uses (Confluence, Notion, Google Doc, local Markdown, etc.) |
+| **Import** | `skill-pool plan import <project-slug> --file ./plan.md` or `--url https://confluence.acme.com/plan` |
+| **Store** | Each import creates an immutable version row. Body + sha256 + source URL + who/when. Importing identical content is a dedup no-op. |
+| **Active version** | Newest non-superseded version. Exactly one per project (enforced by partial-unique index). |
+| **Sync to developers** | `skill-pool ensure` (existing install command) writes the active body to `<project>/.claude/PROJECT_PLAN.md`. Opt-out via `--skip-plan`. SessionStart hook + direnv keep it fresh. |
+| **Refresh** | `skill-pool plan refresh <slug>` re-fetches the `source_url` of the active version. Server hashes; only creates a new version if changed. |
+| **Auto-refresh** | Per-project opt-in: `PATCH /v1/tenant/projects/{slug}` with `{plan_auto_refresh_interval_secs: 3600}`. Background sweep wakes every 60s, refreshes due projects (max 4 in parallel). Failures keep the last-good version active. |
+| **Revert** | `skill-pool plan activate <slug> --version N` — flips the active pointer back to version N. |
+| **History** | `skill-pool plan history <slug>` lists all versions with importer + source. |
+| **View** | `skill-pool plan show <slug>` prints to stdout. Web portal renders read-only on the project detail page. |
+
+### CLI commands
+
+```bash
+# Import a local markdown file (architect just exported from Confluence to .md)
+skill-pool plan import acme-billing-service --file ./design.md
+
+# Or fetch from a public HTTPS URL — server fetches + converts HTML→markdown
+skill-pool plan import acme-billing-service --url https://design.acme.com/billing.html
+
+# View
+skill-pool plan show acme-billing-service
+skill-pool plan show acme-billing-service --version 3
+
+# History
+skill-pool plan history acme-billing-service
+skill-pool plan history acme-billing-service --json | jq
+
+# Refresh from source
+skill-pool plan refresh acme-billing-service
+
+# Revert to an older version
+skill-pool plan activate acme-billing-service --version 2 --yes
+```
+
+### Importing during a Claude session
+
+> *"Import the design doc at https://confluence.acme.com/billing into project acme-billing-service"*
+
+Claude runs `skill-pool plan import acme-billing-service --url https://confluence.acme.com/billing` via Bash. The plan is now centralized; every developer running `skill-pool ensure` gets it. No further config needed.
+
+### How Claude sees the plan
+
+After `ensure`, the plan lives at `<project>/.claude/PROJECT_PLAN.md`. Claude reads it like any file. For projects that benefit from Claude always knowing the plan up-front, add this to the project's `.claude/settings.json`:
+
+```json
+{
+  "additionalDirectories": [".claude"]
+}
+```
+
+### Failure modes
+
+| Symptom | Cause |
+|---|---|
+| `plan refresh` says "failed" but `plan show` still works | Source URL unreachable at refresh time; active version is preserved. Check the warning chip on the project detail page in the portal. |
+| `.claude/PROJECT_PLAN.md` not updating | The project's `slug` isn't set in `.skill-pool/manifest.toml` — run `skill-pool project link <slug>` to pin it, then `skill-pool ensure` to sync. |
+| Import fails with "unsupported content-type" | URL didn't return `text/html`, `text/markdown`, or `text/plain`. Download the file manually and use `--file` instead. |
+| Import fails with "body too large" | 5 MB cap. Split the plan into multiple linked docs or compress the prose. |
+| HTTP URL rejected | HTTPS is required (both client + server enforce). |
+
+### Authorization
+
+| Path | Scope |
+|---|---|
+| `POST /v1/tenant/projects/{slug}/plan` (import) | `tenant:admin` |
+| `POST /v1/tenant/projects/{slug}/plan/refresh` | `tenant:admin` |
+| `POST /v1/tenant/projects/{slug}/plan/activate` | `tenant:admin` |
+| `GET /v1/tenant/projects/{slug}/plan` (active) | Any authenticated member |
+| `GET /v1/tenant/projects/{slug}/plan/versions` | Any authenticated member |
+| `GET /v1/tenant/projects/{slug}/plan/versions/{v}` | Any authenticated member |
+
+Curators (admins) import + revert; everyone reads. The same scope model as projects themselves.
+
 ## Related
 
 - `docs/bootstrap.md` — full bootstrap algorithm including the curated/tagged/semantic tiers
