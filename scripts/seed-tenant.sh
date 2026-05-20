@@ -272,6 +272,65 @@ END\$\$;
 COMMIT;
 SQL
 
+  # --- Tenant projects ----------------------------------------------------
+  # Seeds two demo projects so /admin/projects/ has clickable content in the
+  # live portal. Items reference skills/agents from the imported borghei
+  # catalog. Idempotent: project rows use ON CONFLICT (tenant_id, slug); item
+  # rows use ON CONFLICT on the composite PK (project_id, skill_slug, kind).
+  log "  tenant_projects + tenant_project_items..."
+  psql_run -v ON_ERROR_STOP=1 -v tenant_id="$tenant_id" <<'SQL'
+INSERT INTO tenant_projects (tenant_id, slug, name, description, git_remote, stack_tags)
+VALUES (
+    :'tenant_id'::uuid,
+    'acme-billing-service',
+    'Acme Billing Service',
+    'Internal billing service — handles invoicing, subscription management, and dunning workflows.',
+    'https://github.com/acme/billing-service',
+    ARRAY['rust','axum','postgres']
+)
+ON CONFLICT (tenant_id, slug) DO NOTHING;
+
+INSERT INTO tenant_projects (tenant_id, slug, name, description, git_remote, stack_tags)
+VALUES (
+    :'tenant_id'::uuid,
+    'acme-marketing-site',
+    'Acme Marketing Site',
+    'Public-facing Astro site for marketing pages.',
+    'https://github.com/acme/marketing-site',
+    ARRAY['nodejs','astro']
+)
+ON CONFLICT (tenant_id, slug) DO NOTHING;
+
+-- Items for acme-billing-service (6 items, explicit position ordering)
+INSERT INTO tenant_project_items (project_id, skill_slug, kind, position)
+SELECT p.id, v.skill_slug, v.kind, v.position
+  FROM (SELECT id FROM tenant_projects
+         WHERE tenant_id = :'tenant_id'::uuid
+           AND slug = 'acme-billing-service') p
+  CROSS JOIN (VALUES
+      ('code-reviewer',       'skill', 0),
+      ('api-design-reviewer', 'skill', 1),
+      ('database-designer',   'skill', 2),
+      ('cs-backend-engineer', 'agent', 3),
+      ('cs-database-engineer','agent', 4),
+      ('terraform-patterns',  'skill', 5)
+  ) AS v(skill_slug, kind, position)
+ON CONFLICT (project_id, skill_slug, kind) DO NOTHING;
+
+-- Items for acme-marketing-site (3 items)
+INSERT INTO tenant_project_items (project_id, skill_slug, kind, position)
+SELECT p.id, v.skill_slug, v.kind, v.position
+  FROM (SELECT id FROM tenant_projects
+         WHERE tenant_id = :'tenant_id'::uuid
+           AND slug = 'acme-marketing-site') p
+  CROSS JOIN (VALUES
+      ('code-reviewer',        'skill', 0),
+      ('design-auditor',       'skill', 1),
+      ('cs-frontend-engineer', 'agent', 2)
+  ) AS v(skill_slug, kind, position)
+ON CONFLICT (project_id, skill_slug, kind) DO NOTHING;
+SQL
+
   log "done."
   log ""
   log "tenant state for '$TENANT':"
@@ -283,7 +342,11 @@ SELECT
     (SELECT count(*) FROM tenant_custom_domains WHERE tenant_id = :'tenant_id'::uuid)     AS domains,
     (SELECT count(*) FROM skill_drafts   WHERE tenant_id = :'tenant_id'::uuid)            AS drafts,
     (SELECT count(*) FROM tenant_stack_mappings WHERE tenant_id = :'tenant_id'::uuid)     AS mappings,
-    (SELECT count(*) FROM skill_usage_events    WHERE tenant_id = :'tenant_id'::uuid)     AS usage_events;
+    (SELECT count(*) FROM skill_usage_events    WHERE tenant_id = :'tenant_id'::uuid)     AS usage_events,
+    (SELECT count(*) FROM tenant_projects       WHERE tenant_id = :'tenant_id'::uuid)     AS projects,
+    (SELECT count(*) FROM tenant_project_items
+       WHERE project_id IN (SELECT id FROM tenant_projects
+                             WHERE tenant_id = :'tenant_id'::uuid))                       AS project_items;
 SQL
 }
 
