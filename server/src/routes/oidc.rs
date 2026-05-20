@@ -22,10 +22,10 @@ use base64::Engine;
 use chrono::{Duration, Utc};
 use hmac::{Hmac, Mac};
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
-use openidconnect::reqwest::async_http_client;
 use openidconnect::{
-    AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
+    AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
+    EndpointNotSet, EndpointSet, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
+    RedirectUrl, Scope,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,22 @@ use crate::state::AppState;
 use crate::tenant::TenantCtx;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// The concrete `CoreClient` type returned by `CoreClient::from_provider_metadata`.
+///
+/// `from_provider_metadata` always sets the auth URL (`EndpointSet`). The
+/// token URL and user-info URL are conditional (`EndpointMaybeSet`) because
+/// they may or may not appear in the provider's OIDC discovery document.
+/// Device-auth, introspection, and revocation URLs are not part of OIDC Core
+/// discovery metadata and are left `EndpointNotSet` by `from_provider_metadata`.
+type DiscoveredCoreClient = CoreClient<
+    EndpointSet,      // HasAuthUrl           — always present in OIDC Core discovery
+    EndpointNotSet,   // HasDeviceAuthUrl     — not part of OIDC Core discovery
+    EndpointNotSet,   // HasIntrospectionUrl  — not part of OIDC Core discovery
+    EndpointNotSet,   // HasRevocationUrl     — not part of OIDC Core discovery
+    EndpointMaybeSet, // HasTokenUrl          — present in all conformant providers
+    EndpointMaybeSet, // HasUserInfoUrl       — present in all conformant providers
+>;
 
 const STATE_COOKIE: &str = "sp_oidc_state";
 const STATE_TTL: i64 = 600; // 10 minutes
@@ -79,7 +95,9 @@ pub async fn start(
     Query(q): Query<StartQuery>,
 ) -> AppResult<Response> {
     let sso = load_sso(&state, tenant.tenant_id).await?;
-    let client = build_client(&sso, &tenant.tenant_slug).await?;
+    // The http client is not needed here (no token exchange), but we keep the
+    // tuple destructure consistent with callback's usage.
+    let (client, _http) = build_client(&sso, &tenant.tenant_slug).await?;
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let (auth_url, csrf_state, nonce) = client
@@ -136,12 +154,16 @@ pub async fn callback(
     }
 
     let sso = load_sso(&state, tenant.tenant_id).await?;
-    let client = build_client(&sso, &tenant.tenant_slug).await?;
+    let (client, http) = build_client(&sso, &tenant.tenant_slug).await?;
 
+    // In openidconnect 4.x, `exchange_code` returns `Result<_, ConfigurationError>`
+    // when the client was built from provider metadata (`EndpointMaybeSet`), because
+    // the token URL may not be present in the discovery document.
     let token_response = client
         .exchange_code(AuthorizationCode::new(q.code))
+        .map_err(|e| AppError::BadRequest(format!("oidc token endpoint not configured: {e}")))?
         .set_pkce_verifier(PkceCodeVerifier::new(blob.pkce))
-        .request_async(async_http_client)
+        .request_async(&http)
         .await
         .map_err(|e| AppError::BadRequest(format!("oidc code exchange failed: {e}")))?;
 
@@ -221,11 +243,31 @@ async fn load_sso(state: &AppState, tenant_id: Uuid) -> AppResult<SsoConfig> {
     })
 }
 
-async fn build_client(sso: &SsoConfig, tenant_slug: &str) -> AppResult<CoreClient> {
+/// Build a `reqwest::Client` configured for OIDC use.
+///
+/// Redirects are disabled per the openidconnect 4.x recommendation to prevent
+/// SSRF: <https://docs.rs/openidconnect/4.0.1/openidconnect/#openid-connect-discovery>
+fn make_http_client() -> AppResult<reqwest::Client> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| AppError::Anyhow(anyhow::anyhow!("failed to build HTTP client: {e}")))
+}
+
+/// Run OIDC Discovery and construct a `CoreClient` ready for the auth-code flow.
+///
+/// Returns both the discovered client and the `reqwest::Client` so the same
+/// HTTP connection pool can be reused for the subsequent token exchange without
+/// creating a second client.
+async fn build_client(
+    sso: &SsoConfig,
+    tenant_slug: &str,
+) -> AppResult<(DiscoveredCoreClient, reqwest::Client)> {
+    let http = make_http_client()?;
     let metadata = CoreProviderMetadata::discover_async(
         IssuerUrl::new(sso.issuer_url.clone())
             .map_err(|e| AppError::BadRequest(format!("bad issuer URL: {e}")))?,
-        async_http_client,
+        &http,
     )
     .await
     .map_err(|e| AppError::BadRequest(format!("oidc discovery failed: {e}")))?;
@@ -238,12 +280,16 @@ async fn build_client(sso: &SsoConfig, tenant_slug: &str) -> AppResult<CoreClien
         tenant_slug
     );
 
-    Ok(CoreClient::from_provider_metadata(
+    let client = CoreClient::from_provider_metadata(
         metadata,
         ClientId::new(sso.client_id.clone()),
         Some(ClientSecret::new(sso.client_secret.clone())),
     )
-    .set_redirect_uri(RedirectUrl::new(redirect).map_err(|e| AppError::BadRequest(e.to_string()))?))
+    .set_redirect_uri(
+        RedirectUrl::new(redirect).map_err(|e| AppError::BadRequest(e.to_string()))?,
+    );
+
+    Ok((client, http))
 }
 
 fn extract_groups_from_jwt(jwt: &str) -> Vec<String> {
