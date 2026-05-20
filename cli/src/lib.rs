@@ -13,6 +13,7 @@ pub mod client;
 pub mod cmd;
 pub mod config;
 pub mod detect;
+pub mod git;
 pub mod install;
 pub mod manifest;
 pub mod notify;

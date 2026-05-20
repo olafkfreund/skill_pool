@@ -10,6 +10,7 @@ use crate::client::Client;
 use crate::cmd::ensure;
 use crate::config::Config;
 use crate::detect;
+use crate::git;
 use crate::manifest::{find_project_root, load_in, manifest_path_in, save_in, Manifest, SkillRef};
 
 pub async fn run(cfg: &Config, force_detect: bool, assume_yes: bool, dry_run: bool) -> Result<()> {
@@ -36,10 +37,22 @@ pub async fn run(cfg: &Config, force_detect: bool, assume_yes: bool, dry_run: bo
 
     println!("stack: {}", stack.join(", "));
 
-    // 3. Ask the server which skills are recommended for that stack.
+    // 3. Resolve project (tier 0).
+    //    Priority: explicit slug in manifest > git-remote lookup > none.
     let reg = cfg.require_registry()?;
     let client = Client::new(reg)?;
-    let recommended = client.bootstrap(&stack).await?.skills;
+    let resolved_project = resolve_project(&mut mf, &client, &project_root, dry_run).await?;
+
+    // 3a. Ask the server which skills are recommended.
+    let recommended = match &resolved_project {
+        Some((slug, _name)) => {
+            client
+                .bootstrap_with_project(slug, &stack)
+                .await?
+                .skills
+        }
+        None => client.bootstrap(&stack).await?.skills,
+    };
 
     if recommended.is_empty() {
         println!(
@@ -140,6 +153,75 @@ pub async fn run(cfg: &Config, force_detect: bool, assume_yes: bool, dry_run: bo
     println!();
     println!("Installing…");
     ensure::run(cfg).await
+}
+
+/// Attempt to resolve a curator-defined project for the current workspace.
+///
+/// Resolution order:
+/// 1. `manifest.project.slug` is set → use it directly (already pinned).
+/// 2. `manifest.project.remote` is cached → use that URL for the server lookup.
+/// 3. Call `git::detect_origin_url()` → if non-empty, query the server.
+///    On success: pin both `slug` and `remote` into the manifest and save
+///    before the install (the "one-time pin" so future runs skip the lookup).
+/// 4. None of the above → fall back to stack detection only.
+///
+/// Returns `Some((slug, name))` when a project is resolved, `None` otherwise.
+/// Manifest mutations (pinning) are written to disk only when `dry_run` is false.
+async fn resolve_project(
+    mf: &mut crate::manifest::Manifest,
+    client: &Client,
+    project_root: &std::path::Path,
+    dry_run: bool,
+) -> Result<Option<(String, String)>> {
+    // Branch 1: explicit slug already in manifest.
+    if let Some(slug) = mf.project.slug.clone() {
+        println!("Using project: {slug} (pinned in manifest)");
+        return Ok(Some((slug, String::new())));
+    }
+
+    // Determine which remote URL to try.
+    let remote_url: Option<String> = if let Some(cached) = mf.project.remote.clone() {
+        // Branch 2: cached remote from a previous bootstrap.
+        Some(cached)
+    } else {
+        // Branch 3: ask git.
+        git::detect_origin_url()
+    };
+
+    let url = match remote_url {
+        Some(u) => u,
+        None => {
+            println!("No matching project, using stack detection");
+            return Ok(None);
+        }
+    };
+
+    // Query the server.
+    match client.resolve_project_by_remote(&url).await {
+        Ok(Some(resolved)) => {
+            println!("Using project: {} ({})", resolved.name, resolved.slug);
+
+            // One-time pin: write slug + remote into manifest.
+            if !dry_run {
+                mf.project.slug = Some(resolved.slug.clone());
+                mf.project.remote = Some(url);
+                save_in(project_root, mf)?;
+                println!("  pinned project.slug and project.remote in manifest");
+            }
+
+            Ok(Some((resolved.slug, resolved.name)))
+        }
+        Ok(None) => {
+            println!("No matching project, using stack detection");
+            Ok(None)
+        }
+        Err(e) => {
+            // Non-fatal: remote lookup failure should not break bootstrap.
+            tracing::warn!("project resolve failed (continuing with stack detection): {e:#}");
+            println!("No matching project, using stack detection");
+            Ok(None)
+        }
+    }
 }
 
 /// Pure-data helper: split recommended slugs into "to add" vs "already present".

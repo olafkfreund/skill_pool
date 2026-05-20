@@ -93,6 +93,52 @@ pub struct DepEntry {
     pub depth: i32,
 }
 
+/// A project record as returned by `GET /v1/tenant/projects`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Project {
+    pub slug: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub git_remote: Option<String>,
+    #[serde(default)]
+    pub stack_tags: Vec<String>,
+    #[serde(default)]
+    pub item_count: u32,
+}
+
+/// An item within a project (skill, agent, or command).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectItem {
+    pub skill_slug: String,
+    pub kind: String,
+    #[serde(default)]
+    pub position: i32,
+}
+
+/// A project with its full item list, returned by `GET /v1/tenant/projects/{slug}`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectWithItems {
+    pub slug: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub git_remote: Option<String>,
+    #[serde(default)]
+    pub stack_tags: Vec<String>,
+    #[serde(default)]
+    pub items: Vec<ProjectItem>,
+}
+
+/// Minimal response from `GET /v1/projects/resolve?remote=<url>`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResolvedProject {
+    pub slug: String,
+    pub name: String,
+}
+
 impl Client {
     pub fn new(reg: &RegistryConfig) -> Result<Self> {
         let mut headers = HeaderMap::new();
@@ -314,6 +360,77 @@ impl Client {
             return Err(anyhow!("send_usage_event: {status} — {body}"));
         }
         Ok(())
+    }
+
+    // ── Project endpoints ────────────────────────────────────────────────────
+
+    /// `GET /v1/tenant/projects` — list all projects for the tenant.
+    pub async fn list_projects(&self) -> Result<Vec<Project>> {
+        let url = self.base.join("/v1/tenant/projects")?;
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("list_projects: {status} — {body}"));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// `GET /v1/tenant/projects/{slug}` — fetch one project with its items.
+    pub async fn get_project(&self, slug: &str) -> Result<ProjectWithItems> {
+        let url = self.base.join(&format!("/v1/tenant/projects/{slug}"))?;
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(anyhow!("project `{slug}` not found"));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("get_project: {status} — {body}"));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// `GET /v1/projects/resolve?remote=<url>` — resolve a project slug from
+    /// a git remote URL. Returns `None` on 404 (no matching project).
+    pub async fn resolve_project_by_remote(&self, remote: &str) -> Result<Option<ResolvedProject>> {
+        let mut url = self.base.join("/v1/projects/resolve")?;
+        url.query_pairs_mut().append_pair("remote", remote);
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("resolve_project: {status} — {body}"));
+        }
+        Ok(Some(resp.json().await?))
+    }
+
+    /// `GET /v1/bootstrap?project=<slug>&stack=<tags>` — project-aware bootstrap.
+    /// Passes both project slug and stack tags so the server can apply project-tier
+    /// precedence and backfill with stack mappings.
+    pub async fn bootstrap_with_project(
+        &self,
+        project_slug: &str,
+        stack: &[String],
+    ) -> Result<BootstrapResponse> {
+        let mut url = self.base.join("/v1/bootstrap")?;
+        {
+            let mut q = url.query_pairs_mut();
+            q.append_pair("project", project_slug);
+            if !stack.is_empty() {
+                q.append_pair("stack", &stack.join(","));
+            }
+        }
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("bootstrap_with_project: {status} — {body}"));
+        }
+        Ok(resp.json().await?)
     }
 
     pub async fn publish(&self, metadata: PublishMetadata<'_>, bundle: Bytes) -> Result<Skill> {

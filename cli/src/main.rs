@@ -26,7 +26,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Write a starter .skill-pool/manifest.toml in the current directory.
-    Init,
+    Init(cmd::init::InitArgs),
     /// Authenticate against a registry and persist the token.
     Login {
         #[arg(long)]
@@ -229,6 +229,11 @@ enum Cmd {
         #[arg(long)]
         with_scorer: bool,
     },
+    /// Manage curator-defined projects: list, inspect, link, and unlink.
+    Project {
+        #[command(subcommand)]
+        cmd: cmd::project::ProjectCmd,
+    },
 }
 
 #[tokio::main]
@@ -250,7 +255,7 @@ async fn main() -> Result<()> {
     banner::show_if_due(&cfg).await;
 
     match cli.command {
-        Cmd::Init => cmd::init::run(&cfg),
+        Cmd::Init(args) => cmd::init::run(&cfg, &args),
         Cmd::Login { registry, tenant } => {
             cmd::login::run(&cfg, cli.config.as_deref(), &registry, &tenant).await
         }
@@ -343,5 +348,6 @@ async fn main() -> Result<()> {
             print,
             with_scorer,
         } => cmd::hook_install::run(remove, print, with_scorer),
+        Cmd::Project { cmd: project_cmd } => cmd::project::run(&cfg, project_cmd).await,
     }
 }

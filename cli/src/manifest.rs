@@ -23,6 +23,15 @@ pub struct ProjectMeta {
     /// Override the tenant for this project (rare; usually inherits from CLI config).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tenant: Option<String>,
+    /// Optional curator-assigned project identifier.
+    /// Resolved server-side via /v1/projects/resolve or set manually
+    /// by `skill-pool project link <slug>` / `skill-pool init --project <slug>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// Cached git remote URL (auto-discovered on first bootstrap).
+    /// Lets future bootstrap calls skip the `git remote get-url` shell-out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,5 +149,72 @@ mod tests {
     fn add_to_manifest_rejects_unknown_kind() {
         let mut mf = Manifest::default();
         assert!(add_to_manifest(&mut mf, "foo", "plugin").is_err());
+    }
+
+    #[test]
+    fn project_meta_round_trip_with_slug_and_remote() {
+        let toml_in = r#"
+[project]
+stack = ["rust", "axum"]
+slug = "acme-billing-service"
+remote = "git@github.com:acme/billing.git"
+
+[[skills]]
+slug = "code-review-mastery"
+version = "*"
+scope = "project"
+"#;
+        let mf: Manifest = toml::from_str(toml_in).expect("parse");
+        assert_eq!(mf.project.slug.as_deref(), Some("acme-billing-service"));
+        assert_eq!(
+            mf.project.remote.as_deref(),
+            Some("git@github.com:acme/billing.git")
+        );
+        assert_eq!(mf.project.stack, vec!["rust", "axum"]);
+
+        // Re-serialise and re-parse: slug + remote survive the round-trip.
+        let toml_out = toml::to_string_pretty(&mf).expect("serialize");
+        let mf2: Manifest = toml::from_str(&toml_out).expect("re-parse");
+        assert_eq!(mf2.project.slug, mf.project.slug);
+        assert_eq!(mf2.project.remote, mf.project.remote);
+    }
+
+    #[test]
+    fn project_meta_round_trip_without_slug() {
+        // A legacy manifest with no [project].slug or [project].remote
+        // must parse successfully with both fields defaulting to None.
+        let toml_in = r#"
+[project]
+stack = ["python"]
+
+[[skills]]
+slug = "clean-code"
+version = "1.0.0"
+scope = "project"
+"#;
+        let mf: Manifest = toml::from_str(toml_in).expect("parse legacy manifest");
+        assert!(mf.project.slug.is_none(), "slug should be None");
+        assert!(mf.project.remote.is_none(), "remote should be None");
+
+        // When serialised, [project] must not have a `slug =` or `remote =` key.
+        let toml_out = toml::to_string_pretty(&mf).expect("serialize");
+        // "slug" can appear inside [[skills]] entries; we specifically check
+        // that the [project] section does not emit a `slug` key of its own.
+        // The simplest way: re-parse and confirm the fields are still None.
+        let mf2: Manifest = toml::from_str(&toml_out).expect("re-parse");
+        assert!(mf2.project.slug.is_none(), "project.slug must stay None after round-trip");
+        assert!(mf2.project.remote.is_none(), "project.remote must stay None after round-trip");
+        // Also confirm the [project] block itself has no `slug =` line.
+        // We look for `slug =` appearing *before* the first `[[skills]]` line.
+        let project_section_end = toml_out.find("[[skills]]").unwrap_or(toml_out.len());
+        let project_section = &toml_out[..project_section_end];
+        assert!(
+            !project_section.contains("\nslug ="),
+            "project section must not contain 'slug =': {project_section}"
+        );
+        assert!(
+            !project_section.contains("\nremote ="),
+            "project section must not contain 'remote =': {project_section}"
+        );
     }
 }

@@ -12,5 +12,6 @@ pub mod ensure;
 pub mod hook_install;
 pub mod init;
 pub mod login;
+pub mod project;
 pub mod publish;
 pub mod search;
