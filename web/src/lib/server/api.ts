@@ -996,3 +996,97 @@ export async function revokeMyToken(
   if (resp.ok) return { ok: true };
   return { ok: false, status: resp.status, error: await resp.text() };
 }
+
+// --- Admin Projects CRUD -------------------------------------------------
+
+export interface Project {
+  slug: string;
+  name: string;
+  description: string | null;
+  git_remote: string | null;
+  stack_tags: string[];
+  /** Item count returned by the list endpoint for display purposes. */
+  item_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectItem {
+  skill_slug: string;
+  kind: 'skill' | 'agent' | 'command';
+}
+
+export interface ProjectDetail extends Project {
+  items: ProjectItem[];
+}
+
+export interface CreateProjectBody {
+  slug: string;
+  name: string;
+  description?: string | null;
+  git_remote?: string | null;
+}
+
+export interface UpdateProjectBody {
+  name?: string;
+  description?: string | null;
+  git_remote?: string | null;
+  stack_tags?: string[];
+}
+
+export async function listProjects(auth: Auth): Promise<Project[]> {
+  const resp = await call('GET', '/v1/tenant/projects', auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function createProject(
+  auth: Auth,
+  body: CreateProjectBody,
+): Promise<{ ok: true; project: Project } | { ok: false; status: number; error: string }> {
+  const resp = await call('POST', '/v1/tenant/projects', auth, { jsonBody: body });
+  if (resp.ok) return { ok: true, project: (await resp.json()) as Project };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function getProject(auth: Auth, slug: string): Promise<ProjectDetail> {
+  const resp = await call('GET', `/v1/tenant/projects/${encodeURIComponent(slug)}`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function updateProject(
+  auth: Auth,
+  slug: string,
+  patch: UpdateProjectBody,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('PATCH', `/v1/tenant/projects/${encodeURIComponent(slug)}`, auth, {
+    jsonBody: patch,
+  });
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function deleteProject(
+  auth: Auth,
+  slug: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call('DELETE', `/v1/tenant/projects/${encodeURIComponent(slug)}`, auth);
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function setProjectItems(
+  auth: Auth,
+  slug: string,
+  items: ProjectItem[],
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call(
+    'PUT',
+    `/v1/tenant/projects/${encodeURIComponent(slug)}/items`,
+    auth,
+    { jsonBody: items },
+  );
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
