@@ -46,6 +46,11 @@ enum Cmd {
         /// network policy forbids outbound POSTs from `ensure`.
         #[arg(long)]
         no_telemetry: bool,
+        /// Skip syncing the active project plan to `.claude/PROJECT_PLAN.md`.
+        /// Use when you manage that file by other means (e.g. a separate
+        /// Confluence sync job) and don't want `ensure` to overwrite it.
+        #[arg(long)]
+        skip_plan: bool,
     },
     /// Add a skill to the manifest and install it.
     Add { slug: String },
@@ -234,6 +239,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: cmd::project::ProjectCmd,
     },
+    /// Import, inspect, and manage project plans (externally-authored markdown
+    /// documents from Confluence, Notion, GitHub, or local files).
+    Plan {
+        #[command(subcommand)]
+        cmd: cmd::plan::PlanCmd,
+    },
 }
 
 #[tokio::main]
@@ -259,8 +270,12 @@ async fn main() -> Result<()> {
         Cmd::Login { registry, tenant } => {
             cmd::login::run(&cfg, cli.config.as_deref(), &registry, &tenant).await
         }
-        Cmd::Ensure { quiet, no_telemetry } => {
-            cmd::ensure::run_with_opts(&cfg, quiet, !no_telemetry).await
+        Cmd::Ensure {
+            quiet,
+            no_telemetry,
+            skip_plan,
+        } => {
+            cmd::ensure::run_with_opts(&cfg, quiet, !no_telemetry, !skip_plan).await
         }
         Cmd::Add { slug } => cmd::add::run(&cfg, &slug).await,
         Cmd::AddAgent { slug } => cmd::add::run_with_kind(&cfg, &slug, "agent").await,
@@ -349,5 +364,6 @@ async fn main() -> Result<()> {
             with_scorer,
         } => cmd::hook_install::run(remove, print, with_scorer),
         Cmd::Project { cmd: project_cmd } => cmd::project::run(&cfg, project_cmd).await,
+        Cmd::Plan { cmd: plan_cmd } => cmd::plan::run(&cfg, plan_cmd).await,
     }
 }

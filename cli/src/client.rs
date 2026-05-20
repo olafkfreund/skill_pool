@@ -139,6 +139,30 @@ pub struct ResolvedProject {
     pub name: String,
 }
 
+/// One entry in the `GET /v1/tenant/projects/{slug}/plan/versions` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanVersion {
+    pub version: u32,
+    pub status: String,
+    pub source_type: String,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    pub imported_at: String,
+    #[serde(default)]
+    pub imported_by_email: Option<String>,
+}
+
+/// Outcome from `POST /v1/tenant/projects/{slug}/plan/refresh`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RefreshOutcome {
+    /// `"unchanged"` or `"updated"`.
+    pub outcome: String,
+    #[serde(default)]
+    pub new_version: Option<u32>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 impl Client {
     pub fn new(reg: &RegistryConfig) -> Result<Self> {
         let mut headers = HeaderMap::new();
@@ -431,6 +455,154 @@ impl Client {
             return Err(anyhow!("bootstrap_with_project: {status} — {body}"));
         }
         Ok(resp.json().await?)
+    }
+
+    // ── Plan endpoints ───────────────────────────────────────────────────────
+
+    /// `POST /v1/tenant/projects/{slug}/plan` with `source_type = "file"`.
+    ///
+    /// Reads `path` in streaming chunks so a 5 MB file does not require
+    /// 5 MB + 1 byte of RAM before the size check triggers.  Returns the
+    /// version number assigned by the server.
+    pub async fn import_plan_file(&self, project_slug: &str, path: &std::path::Path) -> Result<u32> {
+        const MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+        // Stream-read up to MAX_BYTES + 1 so we can distinguish "exactly
+        // at the limit" from "too large" without loading the entire file.
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("open {}", path.display()))?;
+        let mut buf = Vec::with_capacity(MAX_BYTES as usize + 1);
+        use std::io::Read as _;
+        file.take(MAX_BYTES + 1).read_to_end(&mut buf)?;
+        if buf.len() as u64 > MAX_BYTES {
+            return Err(anyhow!(
+                "file exceeds the 5 MB plan limit: {}",
+                path.display()
+            ));
+        }
+
+        let body_md = String::from_utf8(buf)
+            .with_context(|| format!("plan file is not valid UTF-8: {}", path.display()))?;
+
+        let source_url = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+
+        let url = self
+            .base
+            .join(&format!("/v1/tenant/projects/{project_slug}/plan"))?;
+        let body = serde_json::json!({
+            "source_type": "file",
+            "source_url": source_url,
+            "body_md": body_md,
+        });
+        let resp = self.http.post(url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("import_plan_file: {status} — {text}"));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let version = v["version"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("import_plan_file: server response missing `version`"))?;
+        Ok(version as u32)
+    }
+
+    /// `POST /v1/tenant/projects/{slug}/plan` with `source_type = "url"`.
+    ///
+    /// The server performs the fetch; the CLI validates that the scheme is
+    /// HTTPS as a client-side defence-in-depth guard before sending.
+    pub async fn import_plan_url(&self, project_slug: &str, source_url: &str) -> Result<u32> {
+        let url = self
+            .base
+            .join(&format!("/v1/tenant/projects/{project_slug}/plan"))?;
+        let body = serde_json::json!({
+            "source_type": "url",
+            "source_url": source_url,
+        });
+        let resp = self.http.post(url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("import_plan_url: {status} — {text}"));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let version = v["version"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("import_plan_url: server response missing `version`"))?;
+        Ok(version as u32)
+    }
+
+    /// `GET /v1/tenant/projects/{slug}/plan` — fetch the active plan body.
+    ///
+    /// Returns `None` when the server responds 404 (no plan imported yet).
+    pub async fn get_active_plan(&self, project_slug: &str) -> Result<Option<String>> {
+        let url = self
+            .base
+            .join(&format!("/v1/tenant/projects/{project_slug}/plan"))?;
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("get_active_plan: {status} — {text}"));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let body = v["body_md"]
+            .as_str()
+            .ok_or_else(|| anyhow!("get_active_plan: server response missing `body_md`"))?
+            .to_string();
+        Ok(Some(body))
+    }
+
+    /// `GET /v1/tenant/projects/{slug}/plan/versions` — list all plan versions.
+    pub async fn list_plan_versions(&self, project_slug: &str) -> Result<Vec<PlanVersion>> {
+        let url = self
+            .base
+            .join(&format!("/v1/tenant/projects/{project_slug}/plan/versions"))?;
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("list_plan_versions: {status} — {text}"));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// `POST /v1/tenant/projects/{slug}/plan/refresh` — re-fetch from the
+    /// original source URL and store a new version if the content changed.
+    pub async fn refresh_plan(&self, project_slug: &str) -> Result<RefreshOutcome> {
+        let url = self
+            .base
+            .join(&format!("/v1/tenant/projects/{project_slug}/plan/refresh"))?;
+        let resp = self.http.post(url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("refresh_plan: {status} — {text}"));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// `POST /v1/tenant/projects/{slug}/plan/activate` — promote a specific
+    /// version to be the active plan.
+    pub async fn activate_plan_version(&self, project_slug: &str, version: u32) -> Result<()> {
+        let url = self
+            .base
+            .join(&format!("/v1/tenant/projects/{project_slug}/plan/activate"))?;
+        let body = serde_json::json!({ "version": version });
+        let resp = self.http.post(url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("activate_plan_version: {status} — {text}"));
+        }
+        Ok(())
     }
 
     pub async fn publish(&self, metadata: PublishMetadata<'_>, bundle: Bytes) -> Result<Skill> {

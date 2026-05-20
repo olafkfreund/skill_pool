@@ -10,7 +10,7 @@ use crate::install::{self, SymlinkResult};
 use crate::manifest::{self, Manifest, SkillRef};
 
 pub async fn run(cfg: &Config) -> Result<()> {
-    run_with_opts(cfg, false, true).await
+    run_with_opts(cfg, false, true, true).await
 }
 
 /// `--quiet` mode suppresses per-skill progress lines. Errors still surface.
@@ -18,16 +18,22 @@ pub async fn run(cfg: &Config) -> Result<()> {
 /// default — callers that want the opt-out wire up `run_with_opts` directly.
 #[allow(dead_code)] // kept as the historical entry point; the binary now wires `run_with_opts`
 pub async fn run_with_quiet(cfg: &Config, quiet: bool) -> Result<()> {
-    run_with_opts(cfg, quiet, true).await
+    run_with_opts(cfg, quiet, true, true).await
 }
 
-/// Full entry point: `quiet` mirrors `--quiet`, `telemetry` mirrors
-/// the opt-out `--no-telemetry`. Telemetry defaults to ON because the
-/// CLI already trusts the registry with its API token; sending one
-/// best-effort `view` event per installed skill costs nothing and
-/// keeps the decay model honest. `--no-telemetry` is the escape hatch
-/// for air-gapped or strict-network-policy deploys.
-pub async fn run_with_opts(cfg: &Config, quiet: bool, telemetry: bool) -> Result<()> {
+/// Full entry point.
+///
+/// - `quiet`     — mirrors `--quiet`; suppresses per-skill progress lines.
+/// - `telemetry` — mirrors the inverse of `--no-telemetry`.
+/// - `sync_plan` — mirrors the inverse of `--skip-plan`; when `true` the
+///   active project plan is fetched from the registry and written to
+///   `.claude/PROJECT_PLAN.md` (or deleted if the project has no plan yet).
+pub async fn run_with_opts(
+    cfg: &Config,
+    quiet: bool,
+    telemetry: bool,
+    sync_plan: bool,
+) -> Result<()> {
     let project_root = manifest::find_project_root().context("locate project root")?;
     let mf = manifest::load_in(&project_root).context("load .skill-pool/manifest.toml")?;
 
@@ -46,7 +52,116 @@ pub async fn run_with_opts(cfg: &Config, quiet: bool, telemetry: bool) -> Result
         telemetry,
         &project_hash,
     )
-    .await
+    .await?;
+
+    // ── Plan sync ────────────────────────────────────────────────────────────
+    // After the skill/agent/command symlink loop, optionally sync the active
+    // project plan to `.claude/PROJECT_PLAN.md`.  This is opt-out via
+    // `--skip-plan`; the default is to keep the file in sync so Claude Code
+    // can always find the latest plan in its context window.
+    if sync_plan {
+        if let Some(slug) = &mf.project.slug {
+            sync_project_plan(&project_root, &client, slug, quiet).await;
+        }
+    }
+
+    Ok(())
+}
+
+/// Fetch the active plan for `project_slug` and write it to
+/// `<project_root>/.claude/PROJECT_PLAN.md`.
+///
+/// Idempotent: skips the write when the file content already matches
+/// (SHA-256 comparison mirrors the existing install pattern).  On 404
+/// (no plan imported yet) any existing file is deleted so the directory
+/// reflects "no plan" rather than a stale one.
+///
+/// Errors are logged but NOT propagated — a plan-sync failure must never
+/// abort a successful skill install.
+async fn sync_project_plan(
+    project_root: &Path,
+    client: &Client,
+    project_slug: &str,
+    quiet: bool,
+) {
+    let plan_path = project_root.join(".claude").join("PROJECT_PLAN.md");
+
+    match client.get_active_plan(project_slug).await {
+        Ok(Some(body)) => {
+            // Compute the sha256 of what we'd write.
+            let new_hash = sha256_of(body.as_bytes());
+
+            // Compare against the existing file's hash (if any).
+            let existing_hash = std::fs::read(&plan_path)
+                .ok()
+                .map(|b| sha256_of(&b));
+
+            if existing_hash.as_deref() == Some(&new_hash) {
+                if !quiet {
+                    println!("  plan:     PROJECT_PLAN.md up to date");
+                }
+                return;
+            }
+
+            // Parent directory (.claude/) might not exist yet.
+            if let Some(parent) = plan_path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    if !quiet {
+                        println!(
+                            "  warn:     could not create {} for plan sync: {e}",
+                            parent.display()
+                        );
+                    }
+                    return;
+                }
+            }
+
+            match std::fs::write(&plan_path, &body) {
+                Ok(()) => {
+                    if !quiet {
+                        println!("  plan:     wrote PROJECT_PLAN.md");
+                    }
+                }
+                Err(e) => {
+                    if !quiet {
+                        println!(
+                            "  warn:     could not write PROJECT_PLAN.md: {e}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(None) => {
+            // 404 — project has no plan.  Remove any stale file.
+            if plan_path.exists() {
+                match std::fs::remove_file(&plan_path) {
+                    Ok(()) => {
+                        if !quiet {
+                            println!("  plan:     removed stale PROJECT_PLAN.md (no plan on server)");
+                        }
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            println!("  warn:     could not remove stale PROJECT_PLAN.md: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            // Network or parse error — log and continue.
+            if !quiet {
+                println!("  warn:     plan sync failed for `{project_slug}`: {e}");
+            }
+        }
+    }
+}
+
+/// Return the lowercase hex SHA-256 of `data`.
+fn sha256_of(data: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(data);
+    hex::encode(h.finalize())
 }
 
 /// SHA-256 of the canonicalised project root, truncated to 16 hex chars
