@@ -48,7 +48,7 @@ regex = "1"
 # SHA-256 of the project root for the anonymised `project_hash` in
 # CLI-driven usage events (#7 lifecycle). The hash is truncated
 # client-side; the server doesn't try to reverse it.
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 # Desktop notifications for the capturer pipeline. On Linux this goes
 # through libdbus / org.freedesktop.Notifications; on macOS through the

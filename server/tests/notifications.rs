@@ -25,7 +25,7 @@ use axum::Router;
 use bytes::Bytes;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::multipart::{Form, Part};
 use serde_json::{json, Value};
 use sha2::Sha256;

@@ -412,7 +412,7 @@ async fn mcp_protocol_round_trip() -> Result<()> {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     hasher.update(&raw);
-    let want = format!("{:x}", hasher.finalize());
+    let want = hex::encode(hasher.finalize());
     assert_eq!(want, payload["sha256"].as_str().unwrap());
 
     // 7e. install_skill against a missing slug → tool error.
