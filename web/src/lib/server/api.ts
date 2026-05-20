@@ -734,8 +734,11 @@ export interface SsoSamlView {
   default_role: SsoRole;
 }
 
-export type SsoRole = 'viewer' | 'publisher' | 'curator' | 'admin';
-export const SSO_ROLES: SsoRole[] = ['viewer', 'publisher', 'curator', 'admin'];
+// Re-exported from the public `$lib/sso-roles` module so `+page.svelte`
+// can import them without crossing the `$lib/server/*` boundary.
+import type { SsoRole as _SsoRole } from '$lib/sso-roles';
+export type SsoRole = _SsoRole;
+export { SSO_ROLES } from '$lib/sso-roles';
 
 export interface SsoConfigView {
   kind: 'oidc' | 'saml' | null;

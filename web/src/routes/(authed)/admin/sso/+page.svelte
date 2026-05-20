@@ -10,7 +10,7 @@
     ShieldCheck,
     Trash2,
   } from '@lucide/svelte';
-  import { SSO_ROLES } from '$lib/server/api';
+  import { SSO_ROLES } from '$lib/sso-roles';
 
   let { data, form } = $props();
 
