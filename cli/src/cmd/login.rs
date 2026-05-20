@@ -1,10 +1,16 @@
 use std::io::{IsTerminal, Read};
+use std::path::Path;
 
 use anyhow::Result;
 
 use crate::config::{Config, RegistryConfig};
 
-pub async fn run(cfg: &Config, registry: &str, tenant: &str) -> Result<()> {
+pub async fn run(
+    cfg: &Config,
+    config_path: Option<&Path>,
+    registry: &str,
+    tenant: &str,
+) -> Result<()> {
     let token = if std::io::stdin().is_terminal() {
         rpassword::prompt_password("API token: ")?
     } else {
@@ -23,7 +29,7 @@ pub async fn run(cfg: &Config, registry: &str, tenant: &str) -> Result<()> {
         tenant: tenant.to_string(),
         token: Some(token),
     });
-    new_cfg.save()?;
+    new_cfg.save(config_path)?;
     println!("saved credentials for tenant `{tenant}` at {registry}");
     Ok(())
 }

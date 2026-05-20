@@ -493,6 +493,7 @@ async fn create_token_inner(
 /// List API tokens minted by `user_id` in `tenant_slug`. Includes both
 /// active and revoked rows so the UI can render history. The `hashed_token`
 /// column is intentionally excluded from the projection — see `TokenSummary`.
+#[allow(clippy::type_complexity)] // sqlx query_as tuple type, one-off
 pub async fn list_user_tokens(
     db: &PgPool,
     tenant_slug: &str,

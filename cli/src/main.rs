@@ -251,7 +251,9 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Cmd::Init => cmd::init::run(&cfg),
-        Cmd::Login { registry, tenant } => cmd::login::run(&cfg, &registry, &tenant).await,
+        Cmd::Login { registry, tenant } => {
+            cmd::login::run(&cfg, cli.config.as_deref(), &registry, &tenant).await
+        }
         Cmd::Ensure { quiet, no_telemetry } => {
             cmd::ensure::run_with_opts(&cfg, quiet, !no_telemetry).await
         }

@@ -30,11 +30,15 @@ impl Config {
         Ok(dirs.config_dir().join("config.toml"))
     }
 
+    fn resolve_path(explicit: Option<&Path>) -> Result<PathBuf> {
+        match explicit {
+            Some(p) => Ok(p.to_path_buf()),
+            None => Self::default_path(),
+        }
+    }
+
     pub fn load(explicit: Option<&Path>, registry_override: Option<&str>) -> Result<Self> {
-        let path = match explicit {
-            Some(p) => p.to_path_buf(),
-            None => Self::default_path()?,
-        };
+        let path = Self::resolve_path(explicit)?;
 
         let mut cfg = if path.exists() {
             let raw = std::fs::read_to_string(&path)
@@ -66,13 +70,45 @@ impl Config {
         })
     }
 
-    pub fn save(&self) -> Result<()> {
-        let path = Self::default_path()?;
+    /// Persist the config. Honors the `--config` / `SKILL_POOL_CONFIG`
+    /// override path so `save` is symmetric with `load` — a CLI invoked
+    /// with `--config /tmp/x.toml login …` writes to `/tmp/x.toml` and
+    /// later `--config /tmp/x.toml search …` reads back the same file.
+    pub fn save(&self, explicit: Option<&Path>) -> Result<()> {
+        let path = Self::resolve_path(explicit)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let raw = toml::to_string_pretty(self)?;
         std::fs::write(&path, raw).with_context(|| format!("write config {}", path.display()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_honors_explicit_path_for_round_trip_with_load() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("custom.toml");
+
+        let cfg = Config {
+            registry: Some(RegistryConfig {
+                url: "https://example.test".into(),
+                tenant: "acme".into(),
+                token: Some("sp_test_token".into()),
+            }),
+            web_url: None,
+        };
+        cfg.save(Some(&path)).expect("save honors explicit path");
+        assert!(path.exists(), "save wrote to the override path");
+
+        let loaded = Config::load(Some(&path), None).expect("load honors explicit path");
+        let reg = loaded.registry.expect("registry persisted");
+        assert_eq!(reg.url, "https://example.test");
+        assert_eq!(reg.tenant, "acme");
+        assert_eq!(reg.token.as_deref(), Some("sp_test_token"));
     }
 }
