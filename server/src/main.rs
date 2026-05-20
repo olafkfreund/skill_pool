@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use skill_pool_server::{admin, config, notify, routes, state, telemetry, tracing_setup, worker};
@@ -587,6 +587,20 @@ async fn serve(cfg: config::Config) -> Result<()> {
     tracing::info!(addr = %cfg.bind, "skill-pool-server starting");
 
     let state = state::AppState::new(&cfg).await?;
+
+    // Apply any pending migrations before we start serving traffic.
+    // Today's failure mode without this: a fresh deploy connects to a
+    // Postgres that's missing the latest migrations and every query
+    // touching the new columns 500s. Running migrations at boot is the
+    // idiomatic sqlx pattern and matches what the integration-test
+    // harness does. Idempotent — sqlx's `_sqlx_migrations` table tracks
+    // applied versions so re-runs are no-ops.
+    sqlx::migrate!("./migrations")
+        .run(state.db())
+        .await
+        .context("apply pending database migrations at boot")?;
+    tracing::info!("database migrations up to date");
+
     // Start the background custom-domain cache refresher so admins see
     // verified/active domains flow into request routing without manual
     // server reloads. Detached: the JoinHandle is dropped, the task
