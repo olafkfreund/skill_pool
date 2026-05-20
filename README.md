@@ -170,7 +170,7 @@ Full subcommand list: `init`, `login`, `ensure`, `add` / `add-agent` / `add-comm
 
 ## Documentation
 
-- **Wiki** — operator and user guides: <https://github.com/olafkfreund/skill_pool/wiki>
+- **[Wiki](./docs/wiki/)** — operator and user guides (Architecture, CLI reference, API reference, SSO setup, theming, capture pipeline, lifecycle, MCP integration, decisions log, FAQ, bundled skills)
 - **[`docs/architecture.md`](docs/architecture.md)** — components, data flow, invariants
 - **[`docs/api.md`](docs/api.md)** — REST surface
 - **[`docs/web-ui.md`](docs/web-ui.md)** — portal architecture
@@ -180,7 +180,7 @@ Full subcommand list: `init`, `login`, `ensure`, `add` / `add-agent` / `add-comm
 
 ## Bundled demo content
 
-This portal ships ready to seed with 120+ curated skills, agents, and commands from [borghei/Claude-Skills](https://github.com/borghei/Claude-Skills) (License: MIT + Commons Clause — attribution preserved in each item's frontmatter). The set spans `code-reviewer`, `design-auditor`, `api-design-reviewer`, `rag-architect`, `ci-cd-pipeline-builder`, `terraform-patterns`, and dozens more. See the [Bundled Skills wiki page](https://github.com/olafkfreund/skill_pool/wiki/Bundled-Skills) for the full list.
+This portal ships ready to seed with 120+ curated skills, agents, and commands from [borghei/Claude-Skills](https://github.com/borghei/Claude-Skills) (License: MIT + Commons Clause — attribution preserved in each item's frontmatter). The set spans `code-reviewer`, `design-auditor`, `api-design-reviewer`, `rag-architect`, `ci-cd-pipeline-builder`, `terraform-patterns`, and dozens more. See the [Bundled Skills page](./docs/wiki/Bundled-Skills.md) for the full list.
 
 ```bash
 ./scripts/seed-demo.sh
