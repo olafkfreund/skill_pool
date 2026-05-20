@@ -45,8 +45,9 @@ Wherever your Claude client keeps its MCP config:
 }
 ```
 
-Restart Claude. The tool list should show **`search_skills`** and
-**`get_skill`** under the `skill-pool` server.
+Restart Claude. The tool list should show **`search_skills`**,
+**`get_skill`**, **`install_skill`**, and **`get_project_plan`**
+under the `skill-pool` server.
 
 ## 3. Use it
 
@@ -101,10 +102,21 @@ internal failures.
 | RPC -32602 | Bad arguments to a tool | Claude usually self-corrects |
 | `isError: true` | Tool ran but found nothing useful | Claude tells the user |
 
-## Why only search?
+## Fetching a project plan mid-session
+
+If a developer asks about the current direction of a project, Claude
+can call `get_project_plan` to read the active plan without the
+developer needing to run `skill-pool ensure` first:
+
+> What's the current plan for acme-billing-service?
+
+Claude calls `get_project_plan(project_slug: "acme-billing-service")`
+and uses the returned markdown to answer in context.
+
+## Why only search and plans?
 
 Per the master plan: MCP is a search adapter, not the core transport.
 Publishing skills, managing drafts, archiving, theme editing — those
 stay on the REST API + portal because they're metadata-heavy and need
-human review. Search is the one operation that benefits from being
-inside the assistant loop.
+human review. Search and read-only plan retrieval are the operations
+that benefit from being inside the assistant loop.

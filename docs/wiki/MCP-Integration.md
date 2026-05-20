@@ -17,19 +17,22 @@ flowchart LR
     CC -- "summary + rendered SKILL.md" --> USER
 ```
 
-Three tools wired today:
+Four tools wired today:
 
 | Tool | Args | Returns |
 |---|---|---|
 | `search_skills` | `{ query?, tags?, semantic?, limit? }` | Human-readable summary + fenced JSON dump |
 | `get_skill` | `{ slug }` | Rendered SKILL.md (frontmatter + body) as text |
 | `install_skill` | `{ slug, kind? }` | Bundle download + install confirmation |
+| `get_project_plan` | `{ project_slug }` | Active plan markdown + version metadata |
 
 `search_skills` mirrors `GET /v1/skills` semantics (semantic takes
 precedence over keyword; tags compose with either). `get_skill`
 returns the same SKILL.md as `GET /v1/skills/{slug}/skill-md`.
 `install_skill` walks the dep closure and downloads the bundle,
-just like `skill-pool ensure`.
+just like `skill-pool ensure`. `get_project_plan` fetches the
+active plan for a project without requiring `skill-pool ensure`
+to have run or `.claude/PROJECT_PLAN.md` to be present on disk.
 
 ## One-time setup
 
@@ -62,14 +65,14 @@ Or edit `~/.claude/settings.json` directly:
 The bearer token is the same `spk_…` your CLI uses (mint via the
 profile page or `skill-pool-server admin token-create`).
 `tenant:admin` scope is **not** required; `skills:read` is enough for
-`search_skills` + `get_skill`; `skills:publish` lets `install_skill`
-emit the usage event.
+`search_skills`, `get_skill`, and `get_project_plan`; `skills:publish`
+lets `install_skill` emit the usage event.
 
 Verify:
 
 ```bash
 claude mcp list
-# skill-pool  http  (3 tools)
+# skill-pool  http  (4 tools)
 ```
 
 ## Usage from inside a Claude session
@@ -95,6 +98,13 @@ when the conversation looks like a catalog query:
 > Installed `axum-tenant-handler@1.2.3` plus 2 transitive deps. Run
 > `skill-pool doctor` if anything looks wrong.
 
+> **You:** What's the current plan for acme-billing-service?
+>
+> **Claude:** [calls `get_project_plan({ project_slug: "acme-billing-service" })`]
+>
+> The active plan for `acme-billing-service` (v3, imported 2026-05-18) is:
+> [uses the returned plan markdown to answer in detail]
+
 ## JSON-RPC surface
 
 Methods:
@@ -102,7 +112,7 @@ Methods:
 | Method | Purpose |
 |---|---|
 | `initialize` | Returns `{ protocolVersion, capabilities: { tools: {} }, serverInfo }` |
-| `tools/list` | Returns the three tools above |
+| `tools/list` | Returns the four tools above |
 | `tools/call` | Dispatches `{ name, arguments }` |
 | `ping` | Acks health |
 | `notifications/*` | Acked silently |
