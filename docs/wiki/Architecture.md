@@ -113,7 +113,7 @@ sequenceDiagram
     Srv->>PG: INSERT INTO audit_events (publish)
     Srv-)Git: detached commit_skill (best-effort)
     Srv-->>CLI: 201 Created
-    CLI-->>Dev: ✓ axum-handler@1.0.0 published
+    CLI-->>Dev: OK axum-handler@1.0.0 published
 ```
 
 Reference: `server/src/routes/skills.rs::post_skill`.
@@ -141,7 +141,7 @@ sequenceDiagram
         CLI->>Srv: POST /v1/usage {event: view} (best-effort)
     end
     CLI->>CLI: symlink library entries into .claude/skills/
-    CLI-->>Dev: ✓ 4 skills, 2 agents installed
+    CLI-->>Dev: OK 4 skills, 2 agents installed
 ```
 
 Reference: `cli/src/cmd/ensure.rs`. The dedup/sort logic lives there;

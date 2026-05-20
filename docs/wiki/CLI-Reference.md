@@ -122,11 +122,11 @@ cd ~/projects/my-rust-app
 skill-pool bootstrap
 # detected: rust, axum, postgres
 # recommended:
-#   - rust-axum-handler@^1.2
-#   - sqlx-migrations@1.0.0
-#   - tenant-ctx@*
+# - rust-axum-handler@^1.2
+# - sqlx-migrations@1.0.0
+# - tenant-ctx@*
 # proceed? [y/N] y
-# ✓ 3 skills installed in .claude/skills/
+# OK 3 skills installed in .claude/skills/
 ```
 
 The recommendation pass is in
@@ -161,9 +161,9 @@ Behaviour:
 
 ```bash
 skill-pool ensure
-# ✓ rust-axum-handler@1.2.3
-# ✓ sqlx-migrations@1.0.0
-# ✓ tenant-ctx@2.1.0 (transitive)
+# OK rust-axum-handler@1.2.3
+# OK sqlx-migrations@1.0.0
+# OK tenant-ctx@2.1.0 (transitive)
 ```
 
 Used by the Claude Code `SessionStart` hook (`--quiet`) — see
@@ -186,13 +186,13 @@ three `kind` discriminators.
 
 ```bash
 skill-pool add rust-axum-handler
-# ✓ rust-axum-handler@1.2.3 added to manifest and installed
+# OK rust-axum-handler@1.2.3 added to manifest and installed
 
 skill-pool add-agent code-reviewer
-# ✓ code-reviewer (agent) added
+# OK code-reviewer (agent) added
 
 skill-pool add-command rebase
-# ✓ rebase (command) added
+# OK rebase (command) added
 ```
 
 Internally `add-agent` and `add-command` are convenience wrappers over
@@ -350,7 +350,7 @@ CLAUDE_SESSION_ID=… skill-pool capture-queue
 
 **Source:** `cli/src/cmd/capture_status.rs:1`
 
-List persisted session scores, ranked. The `★` marks draft-worthy
+List persisted session scores, ranked. The `*` marks draft-worthy
 sessions (score ≥ 100).
 
 | Flag     | Description                              |
@@ -361,10 +361,10 @@ sessions (score ≥ 100).
 skill-pool capture-status
 # 12 sessions scored (3 ≥ draft threshold of 100)
 #
-#   SCORE  TURNS  CWD                SESSION
-#  ★1050   3      /proj/foo          signals-1
-#  ★ 130  18      /proj/bar          a4b2c1d…
-#     5   26      /proj/baz          f8e9d2c…
+# SCORE  TURNS  CWD                SESSION
+# *1050   3      /proj/foo          signals-1
+# * 130  18      /proj/bar          a4b2c1d…
+# 5   26      /proj/baz          f8e9d2c…
 ```
 
 ---
@@ -480,12 +480,12 @@ manifest and the on-disk library, server reachability, version drift.
 ```bash
 skill-pool doctor
 # config:  ~/.skill-pool/config.toml [acme]
-# server:  https://acme.skill-pool.example.com  ✓ reachable
+# server:  https://acme.skill-pool.example.com  OK reachable
 # library: ~/.skill-pool/library/acme/  (8 skills, 0 dangling)
 # project: ~/projects/my-app
-#   manifest: 3 skills, 1 agent
-#   .claude/skills: 4 symlinks, all healthy
-#   ✓ no drift
+# manifest: 3 skills, 1 agent
+# .claude/skills: 4 symlinks, all healthy
+# OK no drift
 ```
 
 What it checks:

@@ -61,12 +61,12 @@ skill-pool-server admin token-create \
   --scope "skills:publish skills:read tenant:admin"
 
 # token created
-#   id:     1ec92531-1942-41b3-ab3d-57763377d5c6
-#   tenant: acme
-#   scope:  skills:publish skills:read tenant:admin
+# id:     1ec92531-1942-41b3-ab3d-57763377d5c6
+# tenant: acme
+# scope:  skills:publish skills:read tenant:admin
 #
 # RAW TOKEN (shown once — copy now):
-#   spk_f00ae6c8ceddad0095b9edc413f4de1c35a781b5aa45d4f201d86908897ca2ca
+# spk_f00ae6c8ceddad0095b9edc413f4de1c35a781b5aa45d4f201d86908897ca2ca
 ```
 
 The raw token is printed **once** — the DB stores only its SHA-256
@@ -211,7 +211,7 @@ skill-pool login --registry https://acme.skill-pool.example.com --tenant acme
 # Paste bootstrap token
 
 skill-pool publish ./hello-skill --version 0.1.0
-# ✓ hello-skill@0.1.0 published
+# OK hello-skill@0.1.0 published
 ```
 
 Verify:

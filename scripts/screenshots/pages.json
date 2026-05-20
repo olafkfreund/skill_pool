@@ -66,5 +66,17 @@
     "url": "/admin/decay?days=0&max_uses=100",
     "waitForSelector": "main",
     "fullPage": true
+  },
+  {
+    "name": "projects",
+    "url": "/admin/projects",
+    "waitForSelector": "main",
+    "fullPage": true
+  },
+  {
+    "name": "project-detail",
+    "url": "/admin/projects/acme-billing-service",
+    "waitForSelector": "main",
+    "fullPage": true
   }
 ]

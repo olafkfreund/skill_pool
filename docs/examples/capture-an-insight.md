@@ -64,11 +64,11 @@ Inspect what's been scored:
 skill-pool capture-status
 # 12 sessions scored (3 ≥ draft threshold of 100)
 #
-#   SCORE TURNS          CWD                                      SESSION
-#  ★1050  3              /proj/auth                               axum-tip…
-#         ↳ explicit_marker: user said `remember this`
-#  ★ 130  18             /proj/sso                                scim-debug…
-#         ↳ test_recovery: `cargo test` failed 3× then passed
+# SCORE TURNS          CWD                                      SESSION
+# *1050  3              /proj/auth                               axum-tip…
+# ↳ explicit_marker: user said `remember this`
+# * 130  18             /proj/sso                                scim-debug…
+# ↳ test_recovery: `cargo test` failed 3× then passed
 ```
 
 ## The review side

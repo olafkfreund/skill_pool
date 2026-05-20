@@ -162,7 +162,7 @@ inflates its own recurrence score.
 
 Default draft-worthy threshold: **score ≥ 100**. The capturer daemon
 (Phase 4.6) picks from `sessions/` files at or above this; for now
-the threshold drives the ★ marker in `capture-status`.
+the threshold drives the * marker in `capture-status`.
 
 ### Inspect
 
@@ -170,13 +170,13 @@ the threshold drives the ★ marker in `capture-status`.
 skill-pool capture-status
 # 12 sessions scored (3 ≥ draft threshold of 100)
 #
-#   SCORE  TURNS  CWD                SESSION
-#  ★1050   3      /proj/foo          signals-1
-#         ↳ explicit_marker: user said `remember this`
-#  ★ 130  18      /proj/bar          a4b2c1d…
-#         ↳ test_recovery: `cargo test` failed 3× then passed
-#     5   26      /proj/baz          f8e9d2c…
-#         ↳ long_session: 26 assistant turns in this session
+# SCORE  TURNS  CWD                SESSION
+# *1050   3      /proj/foo          signals-1
+# ↳ explicit_marker: user said `remember this`
+# * 130  18      /proj/bar          a4b2c1d…
+# ↳ test_recovery: `cargo test` failed 3× then passed
+# 5   26      /proj/baz          f8e9d2c…
+# ↳ long_session: 26 assistant turns in this session
 ```
 
 ### SessionEnd queueing

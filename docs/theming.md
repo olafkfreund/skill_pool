@@ -495,9 +495,9 @@ enforce it.
 
 | Favicon set | Logo set | `GET /v1/theme/favicon` |
 |-------------|----------|--------------------------|
-| ✅          | (either) | Favicon bytes            |
-| ❌          | ✅       | Logo bytes (same `Cache-Control: public, max-age=300`) |
-| ❌          | ❌       | `404`                    |
+| yes          | (either) | Favicon bytes            |
+| no          | yes       | Logo bytes (same `Cache-Control: public, max-age=300`) |
+| no          | no       | `404`                    |
 
 The fallback means a tenant can upload **just** a logo and still have a
 sensible favicon — most browsers happily scale an SVG or PNG to whatever

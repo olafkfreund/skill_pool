@@ -41,19 +41,19 @@ The full 76-skill catalog grid is also available: [`docs/images/catalog.webp`](d
 
 ## Features
 
-- 🎯 **Auto-bootstrap** — `direnv allow` detects your stack (Cargo.toml / flake.nix / package.json / pyproject.toml / go.mod / …) and prompts to install the right skills with one keystroke.
-- 📁 **Projects** — per-codebase curated bundles. Curators pin `acme-billing-service → [code-reviewer, sqlx-migrations, cs-backend-engineer, …]`; developers clone the repo and get exactly that bundle. Auto-discovers via git remote URL.
-- 📚 **Retrospective capture** — Stop-hook scorer + async Haiku → Sonnet drafter; solved problems become draft skills that a reviewer publishes from the web inbox.
-- 🪪 **Multi-tenant + SSO** — per-tenant OIDC/SAML/SCIM, scoped API tokens, audit log with SIEM-friendly export. Shared mode for a few tenants, dedicated mode for the regulated ones.
-- 🎨 **Per-tenant theming** — branded portal (logo / palette / font / favicon), white-label tier with custom domain + ACME automation via Caddy.
-- 🔄 **Version history + decay** — every publish is a new immutable version; `last_used > 6 months ∧ uses < 3` flags archive candidates for cleanup.
-- 🔍 **Semantic search** — `bge-small` embeddings computed on publish; `/v1/skills?semantic=axum middleware` ranks by meaning, not just substring.
-- 🤖 **Agents + commands too** — same registry surface, same publish/install path for subagents and slash commands. `skill-pool add-agent code-reviewer`.
-- 🌐 **MCP transport** — Claude can `search_skills` and `install_skill` inline via the registry's MCP JSON-RPC endpoint, no CLI shell-out.
-- 📦 **One-binary deploy** — Nix flake, Docker Compose, Helm chart, and Terraform AWS module are all first-class. Pick the surface that fits your platform team.
-- 🔌 **Pluggable storage** — [opendal](https://opendal.apache.org/) backend speaks S3, GCS, Azure Blob, MinIO, or plain filesystem from the same DSN-style config.
-- ⚡ **Redis queue (optional, fail-open)** — async job queue with DLQ + read-through cache for hundreds-of-tenant deploys. Server stays up if Redis is down.
-- 🛡️ **Secret scan on every publish** — server-side regex sweep rejects bundles that look like they're shipping an API key.
+- **Auto-bootstrap** — `direnv allow` detects your stack (Cargo.toml / flake.nix / package.json / pyproject.toml / go.mod / …) and prompts to install the right skills with one keystroke.
+- **Projects** — per-codebase curated bundles. Curators pin `acme-billing-service → [code-reviewer, sqlx-migrations, cs-backend-engineer, …]`; developers clone the repo and get exactly that bundle. Auto-discovers via git remote URL.
+- **Retrospective capture** — Stop-hook scorer + async Haiku → Sonnet drafter; solved problems become draft skills that a reviewer publishes from the web inbox.
+- **Multi-tenant + SSO** — per-tenant OIDC/SAML/SCIM, scoped API tokens, audit log with SIEM-friendly export. Shared mode for a few tenants, dedicated mode for the regulated ones.
+- **Per-tenant theming** — branded portal (logo / palette / font / favicon), white-label tier with custom domain + ACME automation via Caddy.
+- **Version history + decay** — every publish is a new immutable version; `last_used > 6 months ∧ uses < 3` flags archive candidates for cleanup.
+- **Semantic search** — `bge-small` embeddings computed on publish; `/v1/skills?semantic=axum middleware` ranks by meaning, not just substring.
+- **Agents + commands too** — same registry surface, same publish/install path for subagents and slash commands. `skill-pool add-agent code-reviewer`.
+- **MCP transport** — Claude can `search_skills` and `install_skill` inline via the registry's MCP JSON-RPC endpoint, no CLI shell-out.
+- **One-binary deploy** — Nix flake, Docker Compose, Helm chart, and Terraform AWS module are all first-class. Pick the surface that fits your platform team.
+- **Pluggable storage** — [opendal](https://opendal.apache.org/) backend speaks S3, GCS, Azure Blob, MinIO, or plain filesystem from the same DSN-style config.
+- **Redis queue (optional, fail-open)** — async job queue with DLQ + read-through cache for hundreds-of-tenant deploys. Server stays up if Redis is down.
+- **Secret scan on every publish** — server-side regex sweep rejects bundles that look like they're shipping an API key.
 
 ## Architecture
 
@@ -136,7 +136,7 @@ $ skill-pool detect --json
 
 $ skill-pool bootstrap --yes
 detected: rust, axum, postgres, nixos
-✓ installed 4 skills matching your stack (rust-error-handling, axum-middleware, sqlx-migrations, nixos-module-style)
+OK installed 4 skills matching your stack (rust-error-handling, axum-middleware, sqlx-migrations, nixos-module-style)
 
 $ skill-pool search "redis queue"
 SLUG                     VERSION  USED   DESCRIPTION
@@ -145,13 +145,13 @@ async-worker-skeleton    0.4.1    11×    tokio worker scaffold with graceful sh
 
 $ skill-pool publish ./my-skill --version 1.0.0 --kind skill
   packing: 4231 bytes (my-skill@1.0.0 [skill])
-  ✓ uploaded · sha256:9f4a…
+  OK uploaded · sha256:9f4a…
 
 $ skill-pool doctor
-✓ registry reachable
-✓ token valid · tenant: acme
-✓ 12 skills linked into .claude/skills/
-✓ no dangling symlinks
+OK registry reachable
+OK token valid · tenant: acme
+OK 12 skills linked into .claude/skills/
+OK no dangling symlinks
 ```
 
 Full subcommand list: `init`, `login`, `ensure`, `add` / `add-agent` / `add-command`, `search`, `publish`, `capture`, `capture-score`, `capture-status`, `capture-queue`, `capture-run`, `doctor`, `detect`, `direnv-install`, `bootstrap`, `hook-install`. Run `skill-pool <cmd> --help` for the full options on any of them.
@@ -193,17 +193,17 @@ This portal ships ready to seed with 120+ curated skills, agents, and commands f
 
 All five build phases are shipped:
 
-- ✅ **Phase 1** — server + CLI MVP (publish, list, fetch, tenant isolation)
-- ✅ **Phase 2** — web portal (catalog, editor, version history, RBAC)
-- ✅ **Phase 3** — auto-bootstrap (stack detection + direnv hook)
-- ✅ **Phase 4** — retrospective capture (Stop-hook scorer + Haiku→Sonnet drafter + drafts inbox)
-- ✅ **Phase 5** — lifecycle (embeddings/semantic search, dependency resolution, decay, agents+commands, MCP transport)
+- yes **Phase 1** — server + CLI MVP (publish, list, fetch, tenant isolation)
+- yes **Phase 2** — web portal (catalog, editor, version history, RBAC)
+- yes **Phase 3** — auto-bootstrap (stack detection + direnv hook)
+- yes **Phase 4** — retrospective capture (Stop-hook scorer + Haiku→Sonnet drafter + drafts inbox)
+- yes **Phase 5** — lifecycle (embeddings/semantic search, dependency resolution, decay, agents+commands, MCP transport)
 
 Cross-cutting tracks also shipped:
 
-- ✅ **#8 Multi-tenancy** — OIDC/SAML/SCIM, audit log, dedicated mode
-- ✅ **#9 Theming** — branded portal, white-label, custom domains + ACME
-- ✅ **#10 Scaling** — Redis job queue + DLQ + cache, Helm chart, Terraform AWS module
+- yes **#8 Multi-tenancy** — OIDC/SAML/SCIM, audit log, dedicated mode
+- yes **#9 Theming** — branded portal, white-label, custom domains + ACME
+- yes **#10 Scaling** — Redis job queue + DLQ + cache, Helm chart, Terraform AWS module
 
 Open work:
 
