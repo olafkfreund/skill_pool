@@ -76,7 +76,7 @@ bytes = "1"
 mime = "0.3"
 clap = { version = "4", features = ["derive", "env"] }
 regex = "1"
-openidconnect = "3"
+openidconnect = "4"
 hmac = "0.12"
 base64 = "0.22"
 urlencoding = "2"
