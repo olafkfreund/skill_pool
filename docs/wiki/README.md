@@ -8,6 +8,7 @@ This directory mirrors what would normally live in the GitHub repo wiki. It's se
 
 - [Tenant Onboarding](./Tenant-Onboarding.md)
 - [CLI Reference](./CLI-Reference.md)
+- [Projects](./Projects.md)
 - [Bundled Skills](./Bundled-Skills.md)
 - [FAQ](./FAQ.md)
 

@@ -501,6 +501,58 @@ What it checks:
 
 ---
 
+## `project`
+
+Manage the `Project` link for this checkout. Projects are curator-curated
+bundles of skills/agents/commands tied to a specific codebase — see
+[Projects](./Projects.md) for the full feature.
+
+### `project list`
+
+```
+skill-pool project list
+```
+
+Prints all projects in the configured registry. Columns: SLUG · NAME · ITEMS · GIT REMOTE.
+
+### `project show <slug>`
+
+```
+skill-pool project show acme-billing-service
+```
+
+Prints a project's metadata and grouped item list (skills / agents / commands).
+
+### `project link <slug>`
+
+```
+skill-pool project link acme-billing-service
+```
+
+Pins the current project to the given slug by writing `[project].slug` into
+`.skill-pool/manifest.toml`. Future `bootstrap`/`ensure` runs use that project's
+curated bundle as tier 0.
+
+### `project unlink`
+
+```
+skill-pool project unlink
+```
+
+Clears `[project].slug` from `.skill-pool/manifest.toml`. The CLI falls back
+to stack-detection bootstrap on the next run.
+
+### Related — `init --project <slug>`
+
+```
+skill-pool init --project acme-billing-service
+```
+
+Writes a starter manifest with the project slug pre-pinned. Equivalent to
+running `init` then `project link`.
+
+---
+
 ## Configuration file format
 
 `~/.skill-pool/config.toml`:

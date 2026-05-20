@@ -289,6 +289,28 @@ See [Custom-Domain-ACME](Custom-Domain-ACME.md).
 
 ---
 
+## Tenant Projects
+
+Per-codebase curated bundles of skills/agents/commands. See [Projects](Projects.md) for the full feature.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/v1/tenant/projects`                          | List projects in the tenant. Includes `item_count` per row. **Scope:** `tenant:admin`. |
+| POST   | `/v1/tenant/projects`                          | Create a project. Body: `{slug, name, description?, git_remote?}`. **Scope:** `tenant:admin`. |
+| GET    | `/v1/tenant/projects/{slug}`                   | Detail with `items: [{slug, kind, position}]`. **Scope:** `tenant:admin`. |
+| PATCH  | `/v1/tenant/projects/{slug}`                   | Partial update; body fields are all `Option<T>` — only present fields are written. **Scope:** `tenant:admin`. |
+| DELETE | `/v1/tenant/projects/{slug}`                   | Delete project + cascade items. **Scope:** `tenant:admin`. |
+| PUT    | `/v1/tenant/projects/{slug}/items`             | Replace item list. Body: `[{slug, kind}, …]`. Order is preserved as `position`. **Scope:** `tenant:admin`. |
+| GET    | `/v1/projects/resolve?remote=<url>`            | CLI auto-discovery: resolve a project by normalized git remote. Returns `{slug, name}` or 404. **Scope:** any authenticated tenant member. |
+
+### Bootstrap with project precedence
+
+`GET /v1/bootstrap?project=<slug>&stack=<tags>` — Project items load as tier 0 (highest precedence), then existing curated → tagged → semantic tiers backfill up to the 8-result cap. Response gains `project: {slug, name}`. `?debug=1` adds `tier_breakdown.project` listing the project-attributed slugs.
+
+A non-existent project slug is a soft fallback (no 404 — the response just falls through to the stack tiers).
+
+---
+
 ## Tenant SSO (admin, #4)
 
 All endpoints require `tenant:admin` scope. These power the admin

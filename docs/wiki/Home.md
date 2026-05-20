@@ -65,6 +65,7 @@ and [FAQ](FAQ.md) for what tends to bite you.
 
 - [Tenant Onboarding](Tenant-Onboarding.md) — first-tenant playbook
 - [CLI Reference](CLI-Reference.md) — every `skill-pool` subcommand
+- [Projects](Projects.md) — per-codebase curated bundles
 - [Bundled Skills](Bundled-Skills.md) — what ships in the catalog out of the box
 - [FAQ](FAQ.md) — real failure modes from the first install
 

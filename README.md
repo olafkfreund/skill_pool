@@ -42,6 +42,7 @@ The full 76-skill catalog grid is also available: [`docs/images/catalog.webp`](d
 ## Features
 
 - 🎯 **Auto-bootstrap** — `direnv allow` detects your stack (Cargo.toml / flake.nix / package.json / pyproject.toml / go.mod / …) and prompts to install the right skills with one keystroke.
+- 📁 **Projects** — per-codebase curated bundles. Curators pin `acme-billing-service → [code-reviewer, sqlx-migrations, cs-backend-engineer, …]`; developers clone the repo and get exactly that bundle. Auto-discovers via git remote URL.
 - 📚 **Retrospective capture** — Stop-hook scorer + async Haiku → Sonnet drafter; solved problems become draft skills that a reviewer publishes from the web inbox.
 - 🪪 **Multi-tenant + SSO** — per-tenant OIDC/SAML/SCIM, scoped API tokens, audit log with SIEM-friendly export. Shared mode for a few tenants, dedicated mode for the regulated ones.
 - 🎨 **Per-tenant theming** — branded portal (logo / palette / font / favicon), white-label tier with custom domain + ACME automation via Caddy.
