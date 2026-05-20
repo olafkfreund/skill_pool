@@ -147,7 +147,7 @@ otlp = [
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
-testcontainers = "0.24"
+testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres", "redis"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full", "test-util"] }
