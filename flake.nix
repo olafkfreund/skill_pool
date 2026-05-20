@@ -29,14 +29,33 @@
 
         commonBuildInputs = with pkgs; [ openssl pkg-config ];
 
+        # Extra deps the server crate needs that the CLI doesn't.
+        # samael (SAML SP) pulls libxml2 + xmlsec + libxslt at link time and
+        # libclang via bindgen at build time. Without these the standalone
+        # `nix build .#skill-pool-server` fails with `cannot find -lxmlsec1`
+        # even though the devShell builds the same crate cleanly (because the
+        # devShell carries them implicitly). Tracked: previously called out
+        # in line ~96 of this file as "not yet wired into commonBuildInputs".
+        serverBuildInputs = with pkgs; commonBuildInputs ++ [
+          xmlsec libxml2 libxml2.dev libxslt libtool
+        ];
+        # samael's build.rs runs `xmlsec1-config --cflags` at build time;
+        # that binary lives in the `.dev` output of nixpkgs xmlsec, not the
+        # default. pkg-config files there are also needed for the `xmlsec1`
+        # `.pc` discovery. The bindgenHook puts libclang on the right env
+        # vars for samael's bindgen invocation.
+        serverNativeBuildInputs = with pkgs; commonBuildInputs ++ [
+          xmlsec.dev libxml2.dev rustPlatform.bindgenHook
+        ];
+
         skill-pool-server = pkgs.rustPlatform.buildRustPackage {
           pname = "skill-pool-server";
           version = "0.1.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           cargoBuildFlags = [ "--bin" "skill-pool-server" ];
-          nativeBuildInputs = commonBuildInputs;
-          buildInputs = commonBuildInputs;
+          nativeBuildInputs = serverNativeBuildInputs;
+          buildInputs = serverBuildInputs;
           # sqlx offline metadata not yet committed; queries are runtime-checked.
           SQLX_OFFLINE = "true";
           doCheck = false;
