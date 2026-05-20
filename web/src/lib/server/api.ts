@@ -1007,6 +1007,9 @@ export interface Project {
   stack_tags: string[];
   /** Item count returned by the list endpoint for display purposes. */
   item_count?: number;
+  /** Auto-refresh interval (seconds) for the project's plan. `null` =
+   *  explicit refresh only. Integer ≥ 300 = background sweep cadence. */
+  plan_auto_refresh_interval_secs?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -1032,6 +1035,8 @@ export interface UpdateProjectBody {
   description?: string | null;
   git_remote?: string | null;
   stack_tags?: string[];
+  /** Null clears the auto-refresh schedule (import only on demand). */
+  plan_auto_refresh_interval_secs?: number | null;
 }
 
 export async function listProjects(auth: Auth): Promise<Project[]> {
@@ -1086,6 +1091,86 @@ export async function setProjectItems(
     `/v1/tenant/projects/${encodeURIComponent(slug)}/items`,
     auth,
     { jsonBody: items },
+  );
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+// --- Project Plan API -------------------------------------------------------
+
+/** Active plan version returned by GET /v1/tenant/projects/{slug}/plan */
+export interface ProjectPlan {
+  version: number;
+  body_md: string;
+  source_type: 'file' | 'url';
+  source_url: string | null;
+  imported_at: string;
+  imported_by_email?: string | null;
+  status: 'active' | 'superseded' | 'archived';
+  fetch_error?: string | null;
+  fetch_error_at?: string | null;
+}
+
+/** One row in the version history list. */
+export interface ProjectPlanVersion {
+  version: number;
+  status: 'active' | 'superseded' | 'archived';
+  source_type: 'file' | 'url';
+  source_url: string | null;
+  imported_at: string;
+  imported_by_email?: string | null;
+}
+
+/**
+ * Fetch the active plan version for a project. Returns `null` when the
+ * project has no plan imported yet (404 from the server).
+ */
+export async function getActiveProjectPlan(
+  auth: Auth,
+  slug: string,
+): Promise<ProjectPlan | null> {
+  const resp = await call(
+    'GET',
+    `/v1/tenant/projects/${encodeURIComponent(slug)}/plan`,
+    auth,
+  );
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+/**
+ * List all imported plan versions for a project in descending version order.
+ * Returns `[]` when the project has no plan history (404) or on any error.
+ */
+export async function listProjectPlanVersions(
+  auth: Auth,
+  slug: string,
+): Promise<ProjectPlanVersion[]> {
+  const resp = await call(
+    'GET',
+    `/v1/tenant/projects/${encodeURIComponent(slug)}/plan/versions`,
+    auth,
+  );
+  if (resp.status === 404) return [];
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+/**
+ * Activate a specific plan version. Returns `{ ok: true }` on success or an
+ * error object on failure.
+ */
+export async function activateProjectPlanVersion(
+  auth: Auth,
+  slug: string,
+  version: number,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call(
+    'POST',
+    `/v1/tenant/projects/${encodeURIComponent(slug)}/plan/activate`,
+    auth,
+    { jsonBody: { version } },
   );
   if (resp.ok) return { ok: true };
   return { ok: false, status: resp.status, error: await resp.text() };
