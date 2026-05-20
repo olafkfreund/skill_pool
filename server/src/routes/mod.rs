@@ -28,6 +28,7 @@ mod scim;
 mod session_policy;
 mod skills;
 mod sso_admin;
+mod projects;
 mod stack_mappings;
 mod theme;
 mod usage;
@@ -190,6 +191,24 @@ pub fn router(state: AppState) -> Router {
                 .post(stack_mappings::upsert)
                 .delete(stack_mappings::remove),
         )
+        // Projects — named bundles of skills/agents/commands (Layer 2).
+        // Write routes (create, update, delete, set-items) require tenant:admin.
+        // The resolve endpoint only requires any authenticated tenant member.
+        .route(
+            "/v1/tenant/projects",
+            get(projects::list).post(projects::create),
+        )
+        .route(
+            "/v1/tenant/projects/{slug}",
+            get(projects::detail)
+                .patch(projects::patch)
+                .delete(projects::delete),
+        )
+        .route(
+            "/v1/tenant/projects/{slug}/items",
+            axum::routing::put(projects::put_items),
+        )
+        .route("/v1/projects/resolve", get(projects::resolve))
         // MCP transport (Phase 5) — JSON-RPC adapter for skill search
         .route("/v1/mcp", post(mcp::handle))
         // OIDC

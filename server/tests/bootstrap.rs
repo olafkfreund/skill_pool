@@ -381,3 +381,153 @@ async fn bootstrap_caps_at_eight_slugs() -> Result<()> {
 
     Ok(())
 }
+
+/// `?project=acme-billing&stack=rust` — project items (tier 0) appear first,
+/// then rust-stack-mapping items backfill remaining slots up to 8.
+#[tokio::test]
+async fn bootstrap_project_tier0_precedes_stack_tiers() -> Result<()> {
+    let h = boot(Arc::new(StubEmbedder)).await?;
+    let c = client();
+
+    // Admin token (needs tenant:admin to create the project).
+    let admin_token = admin::create_token(&h.pool, "acme", "admin-tok", "tenant:admin skills:read skills:publish")
+        .await?
+        .raw_token;
+
+    // Create a project named "acme-billing" and give it 3 items.
+    let proj_body = serde_json::json!({
+        "slug": "acme-billing",
+        "name": "Acme Billing Service"
+    });
+    let r = c
+        .post(format!("{}/v1/tenant/projects", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_token)
+        .json(&proj_body)
+        .send()
+        .await?;
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().await?);
+
+    let items_body = serde_json::json!([
+        {"slug": "billing-migrations", "kind": "skill"},
+        {"slug": "billing-agent",      "kind": "agent"},
+        {"slug": "billing-cmd",        "kind": "command"}
+    ]);
+    let r = c
+        .put(format!("{}/v1/tenant/projects/acme-billing/items", h.base))
+        .header("x-skill-pool-tenant", "acme")
+        .bearer_auth(&admin_token)
+        .json(&items_body)
+        .send()
+        .await?;
+    assert_eq!(r.status().as_u16(), 204);
+
+    // Publish a skill tagged `rust` so tier 1 (curated mapping) can be set.
+    publish_skill(
+        &c,
+        &h,
+        "acme",
+        &h.acme_token,
+        "axum-handler",
+        "Pattern for axum handlers",
+        &["rust"],
+    )
+    .await?;
+    // Add a curated stack mapping for rust → axum-handler.
+    admin::set_stack_mapping(&h.pool, "acme", "rust", "axum-handler").await?;
+
+    // Bootstrap with project + stack.
+    let body = bootstrap_get(
+        &c,
+        &h,
+        "acme",
+        &admin_token,
+        "project=acme-billing&stack=rust&debug=1",
+    )
+    .await?;
+
+    let skills: Vec<String> = serde_json::from_value(body["skills"].clone())?;
+    // Project items come first.
+    assert_eq!(
+        skills[0], "billing-migrations",
+        "first skill must be first project item: {skills:?}"
+    );
+    assert_eq!(skills[1], "billing-agent");
+    assert_eq!(skills[2], "billing-cmd");
+    // Stack-mapping item follows.
+    assert!(
+        skills.contains(&"axum-handler".to_string()),
+        "axum-handler (curated) must appear after project items: {skills:?}"
+    );
+
+    // Response carries `project` field.
+    assert_eq!(body["project"]["slug"], "acme-billing");
+    assert_eq!(body["project"]["name"], "Acme Billing Service");
+
+    // Debug tier_breakdown shows project items in `project` bucket.
+    let tb = &body["tier_breakdown"];
+    let proj_tier: Vec<String> = serde_json::from_value(tb["project"].clone())?;
+    assert!(
+        proj_tier.contains(&"billing-migrations".to_string()),
+        "billing-migrations must be in project tier: {tb}"
+    );
+    // axum-handler should be in the curated bucket, not project.
+    let curated_tier: Vec<String> = serde_json::from_value(tb["curated"].clone())?;
+    assert!(
+        curated_tier.contains(&"axum-handler".to_string()),
+        "axum-handler must be in curated tier: {tb}"
+    );
+
+    Ok(())
+}
+
+/// `?project=does-not-exist&stack=rust` — unknown project slug is a soft miss:
+/// no error, just falls back to stack-based tiers normally.
+#[tokio::test]
+async fn bootstrap_project_not_found_falls_back_cleanly() -> Result<()> {
+    let h = boot(Arc::new(StubEmbedder)).await?;
+    let c = client();
+
+    // No project created. Publish a skill so tier 2 has something.
+    publish_skill(
+        &c,
+        &h,
+        "acme",
+        &h.acme_token,
+        "axum-handler",
+        "Pattern for axum handlers",
+        &["rust"],
+    )
+    .await?;
+
+    let body = bootstrap_get(
+        &c,
+        &h,
+        "acme",
+        &h.acme_token,
+        "project=does-not-exist&stack=rust&debug=1",
+    )
+    .await?;
+
+    // Must not be an error response.
+    assert!(
+        body.get("error").is_none(),
+        "non-existent project must not produce error: {body}"
+    );
+
+    // `project` field absent or null in response.
+    let proj = &body["project"];
+    assert!(
+        proj.is_null() || !proj.is_string(),
+        "project field must be absent/null for unknown project: {body}"
+    );
+
+    // Skills still populated via stack tiers.
+    let skills: Vec<String> = serde_json::from_value(body["skills"].clone())?;
+    assert!(
+        skills.contains(&"axum-handler".to_string()),
+        "stack-tier skills must still appear when project is unknown: {skills:?}"
+    );
+
+    Ok(())
+}

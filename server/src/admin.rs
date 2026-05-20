@@ -1257,3 +1257,544 @@ pub async fn email_branding_test(db: &PgPool, tenant_slug: &str, recipient: &str
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Projects (Layer 2 — schema-backed curator bundles)
+// ---------------------------------------------------------------------------
+
+/// A project row as returned by create / update / list operations.
+#[derive(Debug, Clone)]
+pub struct Project {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub git_remote: Option<String>,
+    pub stack_tags: Vec<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A single item in a project's curated list.
+#[derive(Debug, Clone)]
+pub struct ProjectItem {
+    pub skill_slug: String,
+    pub kind: String,
+    pub position: i32,
+}
+
+/// A project with its curated item list.
+#[derive(Debug, Clone)]
+pub struct ProjectWithItems {
+    pub project: Project,
+    pub items: Vec<ProjectItem>,
+}
+
+/// Partial-update patch for `update_project`. All fields are optional;
+/// `None` means "leave unchanged".
+#[derive(Debug, Default)]
+pub struct ProjectPatch {
+    pub name: Option<String>,
+    pub description: Option<Option<String>>,
+    pub git_remote: Option<Option<String>>,
+    pub stack_tags: Option<Vec<String>>,
+}
+
+// Private type alias to avoid repetitive complex tuple type annotations in
+// query_as calls. Clippy `type_complexity` lint is suppressed on the
+// functions that use it (same pattern as `list_user_tokens` above).
+//
+// Columns: (id, slug, name, description, git_remote, stack_tags, created_at, updated_at)
+type ProjectRow = (
+    Uuid,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Vec<String>,
+    chrono::DateTime<chrono::Utc>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+/// Normalise a git remote URL so that SSH and HTTPS forms of the same
+/// repository resolve to the same string, enabling reliable lookup.
+///
+/// Transformations applied (in order):
+///   1. Strip trailing `.git` suffix.
+///   2. Convert `git@host:owner/repo` SSH shorthand to `https://host/owner/repo`.
+///   3. Lowercase the scheme + host portion.
+///   4. Strip any trailing `/`.
+///
+/// The URL is returned as-is (lowercased) if it doesn't match any known
+/// pattern — this keeps forward compatibility with future VCS hostings.
+pub fn normalize_git_remote(url: &str) -> String {
+    let s = url.trim();
+
+    // Strip trailing .git before further processing.
+    let s = s.strip_suffix(".git").unwrap_or(s);
+
+    // Convert SSH shorthand: git@github.com:owner/repo → https://github.com/owner/repo
+    // Pattern: starts with an optional "git@" prefix, then host:path.
+    let normalized = if let Some(rest) = s.strip_prefix("git@") {
+        // rest = "github.com:owner/repo"
+        if let Some(colon_pos) = rest.find(':') {
+            let host = &rest[..colon_pos];
+            let path = &rest[colon_pos + 1..];
+            format!("https://{}/{}", host.to_lowercase(), path)
+        } else {
+            s.to_string()
+        }
+    } else {
+        // Already https:// or http:// or unknown — lowercase the scheme+host.
+        // We do a best-effort lowercase of the entire string for simplicity;
+        // paths are case-sensitive on some hosts (GitHub is not, but GitLab
+        // can be) so we only lowercase up to the third `/` (end of host).
+        if let Some(after_scheme) = s.find("://").map(|i| i + 3) {
+            let scheme_host_end = s[after_scheme..]
+                .find('/')
+                .map(|i| after_scheme + i)
+                .unwrap_or(s.len());
+            let scheme_host = s[..scheme_host_end].to_lowercase();
+            format!("{}{}", scheme_host, &s[scheme_host_end..])
+        } else {
+            s.to_lowercase()
+        }
+    };
+
+    // Strip trailing slash.
+    normalized.trim_end_matches('/').to_string()
+}
+
+/// Create a new project for the tenant. Returns the newly created row.
+///
+/// Returns an error if a project with the same slug already exists in the
+/// tenant (the `UNIQUE (tenant_id, slug)` constraint surfaces as a
+/// `Conflict` error).
+pub async fn create_project(
+    db: &PgPool,
+    tenant_slug: &str,
+    slug: &str,
+    name: &str,
+    description: Option<&str>,
+    git_remote: Option<&str>,
+) -> Result<Project> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+    let normalized_remote = git_remote.map(normalize_git_remote);
+
+    let row: ProjectRow = sqlx::query_as(
+            "INSERT INTO tenant_projects \
+               (tenant_id, slug, name, description, git_remote) \
+             VALUES ($1, $2, $3, $4, $5) \
+             RETURNING id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at",
+        )
+        .bind(tenant_id)
+        .bind(slug)
+        .bind(name)
+        .bind(description)
+        .bind(normalized_remote.as_deref())
+        .fetch_one(db)
+        .await
+        .with_context(|| format!("create project `{slug}` for tenant `{tenant_slug}`"))?;
+
+    Ok(Project {
+        id: row.0,
+        slug: row.1,
+        name: row.2,
+        description: row.3,
+        git_remote: row.4,
+        stack_tags: row.5,
+        created_at: row.6,
+        updated_at: row.7,
+    })
+}
+
+/// Look up a single project (without items) by its slug.
+/// Returns `None` if no project with that slug exists for the tenant.
+pub async fn get_project(
+    db: &PgPool,
+    tenant_slug: &str,
+    slug: &str,
+) -> Result<Option<ProjectWithItems>> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let project_row: Option<ProjectRow> = sqlx::query_as(
+            "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
+             FROM tenant_projects \
+             WHERE tenant_id = $1 AND slug = $2",
+        )
+        .bind(tenant_id)
+        .bind(slug)
+        .fetch_optional(db)
+        .await?;
+
+    let Some(p) = project_row else {
+        return Ok(None);
+    };
+    let project_id = p.0;
+    let project = Project {
+        id: project_id,
+        slug: p.1,
+        name: p.2,
+        description: p.3,
+        git_remote: p.4,
+        stack_tags: p.5,
+        created_at: p.6,
+        updated_at: p.7,
+    };
+
+    let item_rows: Vec<(String, String, i32)> = sqlx::query_as(
+        "SELECT skill_slug, kind, position \
+         FROM tenant_project_items \
+         WHERE project_id = $1 \
+         ORDER BY position ASC, skill_slug ASC",
+    )
+    .bind(project_id)
+    .fetch_all(db)
+    .await?;
+
+    let items = item_rows
+        .into_iter()
+        .map(|(skill_slug, kind, position)| ProjectItem { skill_slug, kind, position })
+        .collect();
+
+    Ok(Some(ProjectWithItems { project, items }))
+}
+
+/// List all projects for the tenant (without items). Ordered by slug.
+pub async fn list_projects(db: &PgPool, tenant_slug: &str) -> Result<Vec<Project>> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let rows: Vec<ProjectRow> = sqlx::query_as(
+            "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
+             FROM tenant_projects \
+             WHERE tenant_id = $1 \
+             ORDER BY slug ASC",
+        )
+        .bind(tenant_id)
+        .fetch_all(db)
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| Project {
+            id: r.0,
+            slug: r.1,
+            name: r.2,
+            description: r.3,
+            git_remote: r.4,
+            stack_tags: r.5,
+            created_at: r.6,
+            updated_at: r.7,
+        })
+        .collect())
+}
+
+/// Like `list_projects` but co-fetches the item count per project in a single
+/// query. Lets the admin list UI render an "Items" column without N+1.
+#[allow(clippy::type_complexity)] // sqlx tuple — one-off projection
+pub async fn list_projects_with_counts(
+    db: &PgPool,
+    tenant_slug: &str,
+) -> Result<Vec<(Project, i64)>> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    type Row = (
+        uuid::Uuid,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Vec<String>,
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+        i64,
+    );
+
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT tp.id, tp.slug::text, tp.name, tp.description, tp.git_remote, \
+                tp.stack_tags, tp.created_at, tp.updated_at, \
+                COALESCE(ic.cnt, 0) AS item_count \
+         FROM tenant_projects tp \
+         LEFT JOIN ( \
+             SELECT project_id, COUNT(*) AS cnt \
+             FROM tenant_project_items \
+             GROUP BY project_id \
+         ) ic ON ic.project_id = tp.id \
+         WHERE tp.tenant_id = $1 \
+         ORDER BY tp.slug ASC",
+    )
+    .bind(tenant_id)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let project = Project {
+                id: r.0,
+                slug: r.1,
+                name: r.2,
+                description: r.3,
+                git_remote: r.4,
+                stack_tags: r.5,
+                created_at: r.6,
+                updated_at: r.7,
+            };
+            (project, r.8)
+        })
+        .collect())
+}
+
+/// Apply a partial update to a project's metadata fields.
+/// Only non-`None` fields in `patch` are written; others are left unchanged.
+/// Returns the updated project row.
+pub async fn update_project(
+    db: &PgPool,
+    tenant_slug: &str,
+    slug: &str,
+    patch: ProjectPatch,
+) -> Result<Project> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    // COALESCE pattern: pass a sentinel that can never occur in valid data so
+    // we can distinguish "leave unchanged" from "set to NULL/empty".
+    // We use the same SQL CASE approach as `set_tenant_banner`.
+    //
+    // For nullable fields (description, git_remote) we need three states:
+    //   - None (patch field is None)  → keep existing value
+    //   - Some(None)                  → set to NULL
+    //   - Some(Some(v))               → set to v
+    //
+    // We encode this by using two parameters per nullable: a flag and the value.
+
+    let normalized_remote = patch
+        .git_remote
+        .as_ref()
+        .and_then(|o| o.as_deref().map(normalize_git_remote));
+
+    // Build update SQL dynamically based on which fields are set.
+    // This avoids touching unchanged columns and avoids multi-state CASE
+    // complexity by using COALESCE(NULLIF($n, sentinel), col) patterns.
+    //
+    // Simpler approach: always write all columns, using COALESCE to skip
+    // unchanged ones. We read the current row first so we can fill gaps.
+    type CurRow = (String, Option<String>, Option<String>, Vec<String>);
+    let current: Option<CurRow> = sqlx::query_as(
+        "SELECT name, description, git_remote, stack_tags \
+         FROM tenant_projects \
+         WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(slug)
+    .fetch_optional(db)
+    .await?;
+
+    let (cur_name, cur_desc, cur_remote, cur_tags) =
+        current.ok_or_else(|| anyhow!("project `{slug}` not found for tenant `{tenant_slug}`"))?;
+
+    let new_name = patch.name.as_deref().unwrap_or(&cur_name).to_string();
+    let new_desc: Option<String> = match patch.description {
+        None => cur_desc,
+        Some(v) => v,
+    };
+    let new_remote: Option<String> = match patch.git_remote {
+        None => cur_remote,
+        Some(None) => None,
+        Some(Some(_)) => normalized_remote,
+    };
+    let new_tags: Vec<String> = patch.stack_tags.unwrap_or(cur_tags);
+
+    let row: ProjectRow = sqlx::query_as(
+            "UPDATE tenant_projects \
+             SET name = $3, description = $4, git_remote = $5, stack_tags = $6, updated_at = now() \
+             WHERE tenant_id = $1 AND slug = $2 \
+             RETURNING id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at",
+        )
+        .bind(tenant_id)
+        .bind(slug)
+        .bind(&new_name)
+        .bind(&new_desc)
+        .bind(&new_remote)
+        .bind(&new_tags)
+        .fetch_one(db)
+        .await
+        .with_context(|| format!("update project `{slug}` for tenant `{tenant_slug}`"))?;
+
+    Ok(Project {
+        id: row.0,
+        slug: row.1,
+        name: row.2,
+        description: row.3,
+        git_remote: row.4,
+        stack_tags: row.5,
+        created_at: row.6,
+        updated_at: row.7,
+    })
+}
+
+/// Delete a project and all its items (cascade). Returns `Ok(false)` if the
+/// project was not found so the route can map that to a 404.
+pub async fn delete_project(db: &PgPool, tenant_slug: &str, slug: &str) -> Result<bool> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let result = sqlx::query(
+        "DELETE FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(slug)
+    .execute(db)
+    .await
+    .with_context(|| format!("delete project `{slug}` for tenant `{tenant_slug}`"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Replace the full item list for a project atomically.
+///
+/// Executes DELETE + batch INSERT in a single transaction so callers
+/// always see a consistent list. The `position` field is set to the
+/// index of each item in the input slice (0-based), preserving curator
+/// order.
+///
+/// Items are `(skill_slug, kind)` pairs. Duplicate pairs are silently
+/// deduplicated (the PK constraint would reject them anyway).
+pub async fn set_project_items(
+    db: &PgPool,
+    tenant_slug: &str,
+    project_slug: &str,
+    items: Vec<(String, String)>,
+) -> Result<()> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    // Resolve the project id within this tenant.
+    let proj: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(project_slug)
+    .fetch_optional(db)
+    .await?;
+    let (project_id,) =
+        proj.ok_or_else(|| anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`"))?;
+
+    let mut tx = db.begin().await?;
+
+    sqlx::query("DELETE FROM tenant_project_items WHERE project_id = $1")
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await?;
+
+    for (position, (skill_slug, kind)) in items.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO tenant_project_items (project_id, skill_slug, kind, position) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (project_id, skill_slug, kind) DO UPDATE SET position = EXCLUDED.position",
+        )
+        .bind(project_id)
+        .bind(skill_slug)
+        .bind(kind)
+        .bind(position as i32)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Look up a project by its (normalized) git remote URL within a tenant.
+///
+/// The `git_remote` argument is normalized before the query using
+/// [`normalize_git_remote`] so that SSH and HTTPS forms of the same
+/// repository resolve correctly.
+///
+/// Returns `None` if no project is linked to that remote URL.
+pub async fn resolve_project_by_remote(
+    db: &PgPool,
+    tenant_slug: &str,
+    git_remote: &str,
+) -> Result<Option<Project>> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+    let normalized = normalize_git_remote(git_remote);
+
+    let row: Option<ProjectRow> = sqlx::query_as(
+            "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
+             FROM tenant_projects \
+             WHERE tenant_id = $1 AND git_remote = $2",
+        )
+        .bind(tenant_id)
+        .bind(&normalized)
+        .fetch_optional(db)
+        .await?;
+
+    Ok(row.map(|r| Project {
+        id: r.0,
+        slug: r.1,
+        name: r.2,
+        description: r.3,
+        git_remote: r.4,
+        stack_tags: r.5,
+        created_at: r.6,
+        updated_at: r.7,
+    }))
+}
+
+#[cfg(test)]
+mod normalize_git_remote_tests {
+    use super::normalize_git_remote;
+
+    #[test]
+    fn strips_trailing_git_suffix() {
+        assert_eq!(
+            normalize_git_remote("https://github.com/acme/billing.git"),
+            "https://github.com/acme/billing"
+        );
+    }
+
+    #[test]
+    fn converts_ssh_shorthand_to_https() {
+        assert_eq!(
+            normalize_git_remote("git@github.com:acme/billing"),
+            "https://github.com/acme/billing"
+        );
+    }
+
+    #[test]
+    fn converts_ssh_shorthand_with_git_suffix() {
+        assert_eq!(
+            normalize_git_remote("git@github.com:acme/billing.git"),
+            "https://github.com/acme/billing"
+        );
+    }
+
+    #[test]
+    fn lowercases_host_preserves_path_case() {
+        // GitHub paths are case-sensitive on some platforms; we only lowercase host.
+        assert_eq!(
+            normalize_git_remote("https://GITHUB.COM/Acme/Billing"),
+            "https://github.com/Acme/Billing"
+        );
+    }
+
+    #[test]
+    fn strips_trailing_slash() {
+        assert_eq!(
+            normalize_git_remote("https://github.com/acme/billing/"),
+            "https://github.com/acme/billing"
+        );
+    }
+
+    #[test]
+    fn idempotent_on_already_normalized_url() {
+        let url = "https://github.com/acme/billing";
+        assert_eq!(normalize_git_remote(url), url);
+    }
+
+    #[test]
+    fn handles_gitlab_ssh() {
+        assert_eq!(
+            normalize_git_remote("git@gitlab.com:acme/svc.git"),
+            "https://gitlab.com/acme/svc"
+        );
+    }
+}
