@@ -156,19 +156,19 @@ pub async fn bootstrap(
     // tags, deduped, capped. Alphabetical order keeps two calls byte-stable.
     // Skipped when the tags list is empty (project-only bootstrap).
     let curated: Vec<String> = if !tags.is_empty() {
-        let curated_rows: Vec<(String,)> = sqlx::query_as(
+        let curated_rows = sqlx::query!(
             "SELECT DISTINCT skill_slug \
              FROM tenant_stack_mappings \
              WHERE tenant_id = $1 AND stack_tag = ANY($2) \
              ORDER BY skill_slug \
              LIMIT $3",
+            caller.tenant.tenant_id,
+            &tags,
+            PER_TIER_FETCH,
         )
-        .bind(caller.tenant.tenant_id)
-        .bind(&tags)
-        .bind(PER_TIER_FETCH)
         .fetch_all(state.db_read())
         .await?;
-        curated_rows.into_iter().map(|(s,)| s).collect()
+        curated_rows.into_iter().map(|r| r.skill_slug).collect()
     } else {
         Vec::new()
     };
@@ -179,7 +179,7 @@ pub async fn bootstrap(
     // when the intersection is empty, so the WHERE clause is what filters
     // — the ORDER BY just ranks the survivors.
     let tagged: Vec<String> = if !tags.is_empty() {
-        let tagged_rows: Vec<(String,)> = sqlx::query_as(
+        let tagged_rows = sqlx::query!(
             "SELECT DISTINCT ON (slug) slug \
              FROM ( \
                SELECT slug, created_at, \
@@ -194,13 +194,13 @@ pub async fn bootstrap(
              ) ranked \
              ORDER BY slug, overlap_count DESC, created_at DESC \
              LIMIT $3",
+            caller.tenant.tenant_id,
+            &tags,
+            PER_TIER_FETCH,
         )
-        .bind(caller.tenant.tenant_id)
-        .bind(&tags)
-        .bind(PER_TIER_FETCH)
         .fetch_all(state.db_read())
         .await?;
-        tagged_rows.into_iter().map(|(s,)| s).collect()
+        tagged_rows.into_iter().map(|r| r.slug).collect()
     } else {
         Vec::new()
     };
@@ -218,6 +218,10 @@ pub async fn bootstrap(
             .map_err(AppError::Anyhow)?;
         if let Some(vec) = embedding {
             let lit = crate::embedding::vector_to_pg_literal(&vec);
+            // JUSTIFIED runtime-checked: `$2::text::vector` casts a string
+            // literal into a pgvector `vector` type. sqlx `query!` cannot
+            // express this cast pattern for a `String` argument without a
+            // native pgvector codec dependency. Tenant-scoped via `tenant_id = $1`.
             let rows: Vec<(String,)> = sqlx::query_as(
                 "SELECT slug FROM ( \
                     SELECT DISTINCT ON (slug) slug, created_at, description_embedding \

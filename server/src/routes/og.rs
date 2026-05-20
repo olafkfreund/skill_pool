@@ -62,10 +62,8 @@ const DESCRIPTION_MAX_LINES: usize = 4;
 
 /// One row out of `tenant_theme` — only the columns the OG renderer
 /// actually consumes, plus `updated_at` for ETag composition.
-#[derive(sqlx::FromRow)]
 struct ThemeForOg {
     brand_name: String,
-    #[sqlx(rename = "primary_")]
     primary: String,
     primary_fg: String,
     bg: String,
@@ -79,7 +77,6 @@ struct ThemeForOg {
 
 /// One row out of `skills` — minimum fields needed to render. We only
 /// consider published rows, ordered to the latest version.
-#[derive(sqlx::FromRow)]
 struct SkillForOg {
     version: String,
     description: String,
@@ -102,15 +99,29 @@ pub async fn og_image(
     // Theme: defaulted when the tenant hasn't customised yet — same
     // shape as `theme::get_theme` so an empty-theme tenant still gets a
     // pleasant card.
-    let theme: Option<ThemeForOg> = sqlx::query_as(
+    let theme_row = sqlx::query!(
         "SELECT brand_name, primary_, primary_fg, bg, fg, muted_fg, border, \
                 logo_storage_key, logo_content_type, updated_at \
          FROM tenant_theme WHERE tenant_id = $1",
+        tenant.tenant_id,
     )
-    .bind(tenant.tenant_id)
     .fetch_optional(state.db_read())
     .await?;
-    let theme = theme.unwrap_or_else(|| default_theme_for(&tenant.tenant_slug));
+    let theme = match theme_row {
+        Some(r) => ThemeForOg {
+            brand_name: r.brand_name,
+            primary: r.primary_,
+            primary_fg: r.primary_fg,
+            bg: r.bg,
+            fg: r.fg,
+            muted_fg: r.muted_fg,
+            border: r.border,
+            logo_storage_key: r.logo_storage_key,
+            logo_content_type: r.logo_content_type,
+            updated_at: r.updated_at,
+        },
+        None => default_theme_for(&tenant.tenant_slug),
+    };
 
     // Skill: latest published version. A missing slug is 404 — the
     // social crawler will fall back to whatever sibling `og:image` we
@@ -118,18 +129,22 @@ pub async fn og_image(
     // found" fallback card but decided against it because crawlers
     // cache 200s aggressively; a 404 lets the page-level `og:image`
     // disappear cleanly if the skill is later deleted.
-    let skill: Option<SkillForOg> = sqlx::query_as(
+    let skill_row = sqlx::query!(
         "SELECT version, description \
          FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
+        tenant.tenant_id,
+        slug,
+        kind,
     )
-    .bind(tenant.tenant_id)
-    .bind(slug)
-    .bind(kind)
     .fetch_optional(state.db_read())
-    .await?;
-    let skill = skill.ok_or(AppError::NotFound)?;
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let skill = SkillForOg {
+        version: skill_row.version,
+        description: skill_row.description,
+    };
 
     // ETag composition. The inputs are everything that changes the
     // rendered SVG: tenant id, slug, kind, version (skill re-publish),

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenant_project_plans SET fetch_error = $1, fetch_error_at = now() WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bd6aac8d8d8d47ab3a41a617454caf461c6de124f71df2eed38a87e5de001bd1"
+}

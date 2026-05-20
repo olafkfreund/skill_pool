@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenant_projects SET plan_auto_refresh_interval_secs = $3 WHERE tenant_id = $1 AND slug = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7dacdc8e6218f369d2a3fbaa72fcf89b9f9d154be83e7e87ed3120d9fa0d7d30"
+}

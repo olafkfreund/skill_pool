@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (email, external_idp_id, display_name) VALUES ($1, $2, $3) ON CONFLICT (email) DO UPDATE SET external_idp_id = EXCLUDED.external_idp_id, display_name = COALESCE(EXCLUDED.display_name, users.display_name) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5cb89260b2c3a1385de71b547d47916a48219c28446d4bd532fcf2c5f4646494"
+}

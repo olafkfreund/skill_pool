@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT notifications_webhook_url, notifications_webhook_secret FROM tenants WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notifications_webhook_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "notifications_webhook_secret",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "7a64506b2f2610515f6f356d0202334d045109b031425fe7e124d1d401be3df3"
+}

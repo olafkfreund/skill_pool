@@ -97,38 +97,36 @@ pub async fn get_config(
 }
 
 async fn load_oidc_row(db: &sqlx::PgPool, tenant_id: Uuid) -> AppResult<Option<OidcView>> {
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT issuer_url, client_id, client_secret, default_role \
          FROM tenant_sso WHERE tenant_id = $1",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_optional(db)
     .await?;
-    Ok(row.map(|(issuer_url, client_id, client_secret, default_role)| OidcView {
-        issuer_url,
-        client_id,
-        client_secret_hint: mask_secret(&client_secret),
-        default_role,
+    Ok(row.map(|r| OidcView {
+        issuer_url: r.issuer_url,
+        client_id: r.client_id,
+        client_secret_hint: mask_secret(&r.client_secret),
+        default_role: r.default_role,
     }))
 }
 
 async fn load_saml_row(db: &sqlx::PgPool, tenant_id: Uuid) -> AppResult<Option<SamlView>> {
-    let row: Option<(String, String, String, Option<String>, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT idp_entity_id, idp_sso_url, idp_x509_cert, sp_entity_id, default_role \
          FROM tenant_saml WHERE tenant_id = $1",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_optional(db)
     .await?;
-    Ok(row.map(
-        |(idp_entity_id, idp_sso_url, idp_x509_cert, sp_entity_id, default_role)| SamlView {
-            idp_entity_id,
-            idp_sso_url,
-            idp_x509_cert_bytes: idp_x509_cert.len(),
-            sp_entity_id,
-            default_role,
-        },
-    ))
+    Ok(row.map(|r| SamlView {
+        idp_entity_id: r.idp_entity_id,
+        idp_sso_url: r.idp_sso_url,
+        idp_x509_cert_bytes: r.idp_x509_cert.len(),
+        sp_entity_id: r.sp_entity_id,
+        default_role: r.default_role,
+    }))
 }
 
 /// Show only the trailing 4 chars so the admin can sanity-check what's
@@ -162,7 +160,7 @@ pub async fn put_oidc(
     require_admin(&caller)?;
     validate_oidc(&body)?;
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_sso (tenant_id, issuer_url, client_id, client_secret, default_role) \
          VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT (tenant_id) DO UPDATE SET \
@@ -170,12 +168,12 @@ pub async fn put_oidc(
            client_id = EXCLUDED.client_id, \
            client_secret = EXCLUDED.client_secret, \
            default_role = EXCLUDED.default_role",
+        caller.tenant.tenant_id,
+        body.issuer_url.trim(),
+        body.client_id.trim(),
+        body.client_secret.trim(),
+        body.default_role.trim(),
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(body.issuer_url.trim())
-    .bind(body.client_id.trim())
-    .bind(body.client_secret.trim())
-    .bind(body.default_role.trim())
     .execute(state.db())
     .await?;
 
@@ -249,7 +247,7 @@ pub async fn put_saml(
     require_admin(&caller)?;
     let parsed = parse_saml_metadata(&body)?;
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_saml \
            (tenant_id, idp_entity_id, idp_sso_url, idp_x509_cert, sp_entity_id, default_role) \
          VALUES ($1, $2, $3, $4, $5, $6) \
@@ -259,13 +257,13 @@ pub async fn put_saml(
            idp_x509_cert = EXCLUDED.idp_x509_cert, \
            sp_entity_id = EXCLUDED.sp_entity_id, \
            default_role = EXCLUDED.default_role",
+        caller.tenant.tenant_id,
+        &parsed.idp_entity_id,
+        &parsed.idp_sso_url,
+        &parsed.idp_x509_cert_pem,
+        parsed.sp_entity_id.as_deref(),
+        body.default_role.trim(),
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&parsed.idp_entity_id)
-    .bind(&parsed.idp_sso_url)
-    .bind(&parsed.idp_x509_cert_pem)
-    .bind(parsed.sp_entity_id.as_deref())
-    .bind(body.default_role.trim())
     .execute(state.db())
     .await?;
 
@@ -398,14 +396,18 @@ pub async fn delete_config(
     require_admin(&caller)?;
 
     let mut tx = state.db().begin().await?;
-    sqlx::query("DELETE FROM tenant_sso WHERE tenant_id = $1")
-        .bind(caller.tenant.tenant_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM tenant_saml WHERE tenant_id = $1")
-        .bind(caller.tenant.tenant_id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM tenant_sso WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM tenant_saml WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
 
     audit::record_best_effort(

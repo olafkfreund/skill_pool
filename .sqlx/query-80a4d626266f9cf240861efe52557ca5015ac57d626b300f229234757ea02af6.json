@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenant_theme SET custom_css_storage_key = NULL, custom_css_bytes_size = NULL WHERE tenant_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "80a4d626266f9cf240861efe52557ca5015ac57d626b300f229234757ea02af6"
+}

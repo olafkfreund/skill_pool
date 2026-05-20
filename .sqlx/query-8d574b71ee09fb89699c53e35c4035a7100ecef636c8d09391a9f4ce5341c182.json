@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT stack_tag AS stack, skill_slug AS skill FROM tenant_stack_mappings WHERE tenant_id = $1 ORDER BY stack_tag ASC, skill_slug ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stack",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "skill",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8d574b71ee09fb89699c53e35c4035a7100ecef636c8d09391a9f4ce5341c182"
+}

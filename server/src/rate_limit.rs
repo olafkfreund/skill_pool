@@ -198,17 +198,17 @@ async fn lookup_tenant(
     // simplicity we only handle the subdomain/header case here; custom-
     // domain hosts skip rate limiting in v1 (the next refactor can add a
     // second lookup keyed by host).
-    let row: Option<(Uuid, String, Option<i32>, Option<i32>)> = sqlx::query_as(
+    sqlx::query!(
         "SELECT id, plan_tier, rate_limit_rpm, rate_limit_burst \
          FROM tenants \
          WHERE slug = $1 AND status = 'active'",
+        slug,
     )
-    .bind(slug)
     .fetch_optional(db)
     .await
     .ok()
-    .flatten();
-    row
+    .flatten()
+    .map(|r| (r.id, r.plan_tier, r.rate_limit_rpm, r.rate_limit_burst))
 }
 
 // ---------------------------------------------------------------------------

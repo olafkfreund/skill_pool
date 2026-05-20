@@ -56,6 +56,12 @@ pub struct CustomDomain {
 
 /// Column list shared by every read in this module. Keep the order in
 /// sync with `CustomDomainRow` below.
+///
+/// JUSTIFIED runtime-checked: `COLS` is used via `format!()` to compose
+/// INSERT RETURNING, SELECT, and UPDATE RETURNING queries at runtime. The
+/// `query!` macro requires a single string literal — const-fragment
+/// concatenation is not supported. All queries include `tenant_id = $N`
+/// to enforce tenant scope.
 const COLS: &str =
     "id, hostname, status, verification_token, last_checked_at, last_error, activated_at, created_at";
 
@@ -267,15 +273,15 @@ pub async fn remove(
 ) -> AppResult<StatusCode> {
     require_admin(&caller)?;
 
-    let removed: Option<(String,)> = sqlx::query_as(
+    let removed = sqlx::query!(
         "DELETE FROM tenant_custom_domains \
          WHERE id = $1 AND tenant_id = $2 RETURNING hostname",
+        id,
+        caller.tenant.tenant_id,
     )
-    .bind(id)
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
-    let (hostname,) = removed.ok_or(AppError::NotFound)?;
+    let hostname = removed.ok_or(AppError::NotFound)?.hostname;
 
     if let Err(e) = state.refresh_custom_domains().await {
         tracing::warn!(error = ?e, "refresh custom-domain cache after delete failed");

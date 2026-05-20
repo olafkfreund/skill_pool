@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.id AS draft_id, d.slug AS draft_slug, d.merge_proposal_similarity AS similarity FROM skill_drafts d JOIN skills s ON s.id = d.merge_proposal_skill_id AND s.tenant_id = $1 WHERE d.tenant_id = $1 AND d.status = 'pending' AND s.slug = $2 ORDER BY d.merge_proposal_similarity DESC NULLS LAST LIMIT 10",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "draft_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "draft_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "similarity",
+        "type_info": "Float4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d616517030b2217efb4c64874e6c2832aa44cf400c49f251b49615c39f964869"
+}

@@ -273,12 +273,13 @@ impl AppState {
         }
 
         // Cold path: look up override from DB, build, insert.
-        let row: Option<(Option<String>,)> =
-            sqlx::query_as("SELECT storage_uri FROM tenants WHERE id = $1")
-                .bind(tenant.tenant_id)
-                .fetch_optional(&self.inner.db)
-                .await?;
-        let override_uri = row.and_then(|(u,)| u);
+        let row = sqlx::query!(
+            "SELECT storage_uri FROM tenants WHERE id = $1",
+            tenant.tenant_id,
+        )
+        .fetch_optional(&self.inner.db)
+        .await?;
+        let override_uri = row.and_then(|r| r.storage_uri);
 
         let entry: Arc<Storage> = match override_uri {
             None => {
@@ -414,7 +415,9 @@ impl AppState {
     /// rows. Called at startup, on every mutating custom-domain endpoint
     /// (so admins see flips immediately), and on a background interval.
     pub async fn refresh_custom_domains(&self) -> Result<()> {
-        let rows: Vec<(String, Uuid)> = sqlx::query_as(
+        // NOTE: no tenant_id filter — this is a global cache load that intentionally
+        // reads all tenants' custom domain rows to build the hostname→tenant_id map.
+        let rows = sqlx::query!(
             "SELECT hostname, tenant_id \
              FROM tenant_custom_domains \
              WHERE status IN ('verified', 'active')",
@@ -422,8 +425,8 @@ impl AppState {
         .fetch_all(&self.inner.db)
         .await?;
         let mut next = HashMap::with_capacity(rows.len());
-        for (host, tenant_id) in rows {
-            next.insert(host.to_lowercase(), tenant_id);
+        for r in rows {
+            next.insert(r.hostname.to_lowercase(), r.tenant_id);
         }
         let mut cache = self.inner.custom_domains.write().await;
         *cache = next;

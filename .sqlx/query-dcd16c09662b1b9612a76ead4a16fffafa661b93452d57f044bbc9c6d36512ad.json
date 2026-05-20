@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenant_theme (tenant_id, brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, border, radius, logo_uri, footer_branding, font_family) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT (tenant_id) DO UPDATE SET brand_name = EXCLUDED.brand_name, primary_ = EXCLUDED.primary_, primary_fg = EXCLUDED.primary_fg, accent = EXCLUDED.accent, bg = EXCLUDED.bg, fg = EXCLUDED.fg, muted = EXCLUDED.muted, muted_fg = EXCLUDED.muted_fg, border = EXCLUDED.border, radius = EXCLUDED.radius, logo_uri = EXCLUDED.logo_uri, footer_branding = EXCLUDED.footer_branding, font_family = EXCLUDED.font_family",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dcd16c09662b1b9612a76ead4a16fffafa661b93452d57f044bbc9c6d36512ad"
+}

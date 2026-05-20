@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenants\n           SET banner_text = CASE\n                   WHEN $4 THEN NULL\n                   WHEN $2 = $5 THEN banner_text\n                   WHEN $2 = '' THEN NULL\n                   ELSE $2\n               END,\n               banner_url = CASE\n                   WHEN $4 THEN NULL\n                   WHEN $3 = $5 THEN banner_url\n                   WHEN $3 = '' THEN NULL\n                   ELSE $3\n               END\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6938ace0f7a518015f218f4d2b05d886ee8ddda0e1eecf47d8e7b6d5d880e55c"
+}

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenant_projects SET last_plan_refresh_at = now() WHERE slug = $1 AND tenant_id = (SELECT id FROM tenants WHERE slug = $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c4fdfce64a2e7b61009e173cff4bb9494967116a26830a418a87265437c6787e"
+}

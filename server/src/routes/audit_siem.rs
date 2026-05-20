@@ -39,14 +39,16 @@ pub async fn get_config(
     caller: AuthedCaller,
 ) -> AppResult<Json<AuditSiemConfig>> {
     require_scope(&caller.scope, "tenant:admin")?;
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT tenant_audit_siem_url, tenant_audit_siem_token \
          FROM tenants WHERE id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
-    let (url, token) = row.unwrap_or((None, None));
+    let (url, token) = row
+        .map(|r| (r.tenant_audit_siem_url, r.tenant_audit_siem_token))
+        .unwrap_or((None, None));
     Ok(Json(AuditSiemConfig {
         url,
         token_configured: token.is_some(),
@@ -88,9 +90,11 @@ pub async fn put_config(
     }
     let token = normalize(body.token);
 
-    // Same CASE pattern as the notifications endpoint: `$N::int = 0`
-    // means "leave the column alone", otherwise overwrite with the
-    // accompanying value bind.
+    // JUSTIFIED runtime-checked: `$N::int = 0` flag parameters require an
+    // explicit PostgreSQL cast that the `query!` macro cannot verify at
+    // compile time for integer flag arguments paired with nullable text.
+    // The CASE … ELSE pattern is the canonical partial-update idiom for
+    // a fixed multi-column UPDATE where some columns are left unchanged.
     sqlx::query(
         "UPDATE tenants SET \
             tenant_audit_siem_url   = CASE WHEN $2::int = 0 THEN tenant_audit_siem_url   ELSE $3 END, \

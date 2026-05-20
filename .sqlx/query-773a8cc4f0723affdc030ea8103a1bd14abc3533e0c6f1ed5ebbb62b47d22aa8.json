@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT idp_entity_id, idp_x509_cert, sp_entity_id, default_role FROM tenant_saml WHERE tenant_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "idp_entity_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "idp_x509_cert",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "sp_entity_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "default_role",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "773a8cc4f0723affdc030ea8103a1bd14abc3533e0c6f1ed5ebbb62b47d22aa8"
+}

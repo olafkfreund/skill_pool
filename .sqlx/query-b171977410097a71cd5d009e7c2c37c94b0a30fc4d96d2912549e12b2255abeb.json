@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, project_id, version, body_md, body_sha256, source_type, source_url, source_etag, imported_by, imported_at, status, fetch_error, fetch_error_at FROM tenant_project_plans WHERE project_id = $1 ORDER BY version DESC LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "project_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "body_md",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "body_sha256",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "source_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "source_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "source_etag",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "imported_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "imported_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "fetch_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "fetch_error_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "b171977410097a71cd5d009e7c2c37c94b0a30fc4d96d2912549e12b2255abeb"
+}

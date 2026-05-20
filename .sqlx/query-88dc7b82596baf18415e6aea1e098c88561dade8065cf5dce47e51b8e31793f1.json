@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM tenant_role_mappings WHERE tenant_id = $1 AND idp_group = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "88dc7b82596baf18415e6aea1e098c88561dade8065cf5dce47e51b8e31793f1"
+}

@@ -175,35 +175,22 @@ fn load_key() -> Option<[u8; 32]> {
 /// Fetch the branding row for a tenant. `None` ⇒ no per-tenant
 /// branding configured; caller falls back to global SMTP.
 pub async fn load_row(db: &PgPool, tenant_id: Uuid) -> sqlx::Result<Option<BrandingRow>> {
-    type RowTuple = (
-        Uuid,
-        String,
-        Option<String>,
-        Option<String>,
-        String,
-        Vec<u8>,
-        Option<String>,
-    );
-    let row: Option<RowTuple> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT tenant_id, from_addr, from_name, reply_to, smtp_url, smtp_password_enc, footer_html \
          FROM tenant_email_branding WHERE tenant_id = $1",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_optional(db)
     .await?;
-    Ok(row.map(
-        |(tenant_id, from_addr, from_name, reply_to, smtp_url, smtp_password_enc, footer_html)| {
-            BrandingRow {
-                tenant_id,
-                from_addr,
-                from_name,
-                reply_to,
-                smtp_url,
-                smtp_password_enc,
-                footer_html,
-            }
-        },
-    ))
+    Ok(row.map(|r| BrandingRow {
+        tenant_id: r.tenant_id,
+        from_addr: r.from_addr,
+        from_name: r.from_name,
+        reply_to: r.reply_to,
+        smtp_url: r.smtp_url,
+        smtp_password_enc: r.smtp_password_enc,
+        footer_html: r.footer_html,
+    }))
 }
 
 /// Per-tenant SMTP transport cache. Built on first send and re-used.

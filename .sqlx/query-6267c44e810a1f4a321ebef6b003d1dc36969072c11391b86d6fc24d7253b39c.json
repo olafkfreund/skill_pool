@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenant_theme (tenant_id, brand_name, custom_css_storage_key, custom_css_bytes_size) VALUES ($1, $2, $3, $4) ON CONFLICT (tenant_id) DO UPDATE SET custom_css_storage_key = EXCLUDED.custom_css_storage_key, custom_css_bytes_size  = EXCLUDED.custom_css_bytes_size",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6267c44e810a1f4a321ebef6b003d1dc36969072c11391b86d6fc24d7253b39c"
+}

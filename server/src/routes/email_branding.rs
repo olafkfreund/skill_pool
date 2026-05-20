@@ -107,7 +107,7 @@ pub async fn put_config(
 
     let enc = email_branding::encrypt_password(&body.smtp_password);
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_email_branding \
             (tenant_id, from_addr, from_name, reply_to, smtp_url, smtp_password_enc, footer_html, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
@@ -119,14 +119,14 @@ pub async fn put_config(
             smtp_password_enc = EXCLUDED.smtp_password_enc, \
             footer_html = EXCLUDED.footer_html, \
             updated_at = now()",
+        caller.tenant.tenant_id,
+        body.from_addr.trim(),
+        body.from_name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        body.reply_to.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        &smtp_url,
+        &enc as &[u8],
+        body.footer_html.as_deref().filter(|s| !s.is_empty()),
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(body.from_addr.trim())
-    .bind(body.from_name.as_deref().map(str::trim).filter(|s| !s.is_empty()))
-    .bind(body.reply_to.as_deref().map(str::trim).filter(|s| !s.is_empty()))
-    .bind(&smtp_url)
-    .bind(&enc)
-    .bind(body.footer_html.as_deref().filter(|s| !s.is_empty()))
     .execute(state.db())
     .await?;
 
@@ -169,10 +169,12 @@ pub async fn delete_config(
     caller: AuthedCaller,
 ) -> AppResult<StatusCode> {
     require_scope(&caller.scope, "tenant:admin")?;
-    sqlx::query("DELETE FROM tenant_email_branding WHERE tenant_id = $1")
-        .bind(caller.tenant.tenant_id)
-        .execute(state.db())
-        .await?;
+    sqlx::query!(
+        "DELETE FROM tenant_email_branding WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
+    )
+    .execute(state.db())
+    .await?;
     state
         .email_transport()
         .invalidate(caller.tenant.tenant_id)

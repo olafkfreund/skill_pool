@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.slug, sd.version_range FROM skill_dependencies sd JOIN skills s ON s.id = sd.parent_skill_id WHERE sd.tenant_id = $1 AND sd.requires_slug = $2 AND s.slug <> $3 AND s.status = 'published'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "version_range",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0ae9ca11068640a655f48418688bbfb8cf89515e7bad669d6cbc6c04153918b7"
+}

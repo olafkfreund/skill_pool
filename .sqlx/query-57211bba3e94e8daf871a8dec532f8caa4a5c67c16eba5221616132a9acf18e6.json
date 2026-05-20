@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenant_project_items (project_id, skill_slug, kind, position) VALUES ($1, $2, $3, $4) ON CONFLICT (project_id, skill_slug, kind) DO UPDATE SET position = EXCLUDED.position",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "57211bba3e94e8daf871a8dec532f8caa4a5c67c16eba5221616132a9acf18e6"
+}

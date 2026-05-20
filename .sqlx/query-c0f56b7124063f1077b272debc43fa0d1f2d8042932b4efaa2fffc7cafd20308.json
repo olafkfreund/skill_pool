@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT brand_name, primary_, primary_fg, bg, fg, muted_fg, border, logo_storage_key, logo_content_type, updated_at FROM tenant_theme WHERE tenant_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "brand_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "primary_",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "primary_fg",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "bg",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "fg",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "muted_fg",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "border",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "logo_storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "logo_content_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "c0f56b7124063f1077b272debc43fa0d1f2d8042932b4efaa2fffc7cafd20308"
+}

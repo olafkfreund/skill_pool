@@ -50,13 +50,14 @@ pub async fn get_banner(
     State(state): State<AppState>,
     tenant: TenantCtx,
 ) -> AppResult<Json<TenantBanner>> {
-    let row: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT banner_text, banner_url FROM tenants WHERE id = $1")
-            .bind(tenant.tenant_id)
-            .fetch_optional(state.db_read())
-            .await?;
+    let row = sqlx::query!(
+        "SELECT banner_text, banner_url FROM tenants WHERE id = $1",
+        tenant.tenant_id,
+    )
+    .fetch_optional(state.db_read())
+    .await?;
 
-    let (text, url) = row.unwrap_or((None, None));
+    let (text, url) = row.map(|r| (r.banner_text, r.banner_url)).unwrap_or((None, None));
     Ok(Json(TenantBanner { text, url }))
 }
 

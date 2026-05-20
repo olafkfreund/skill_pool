@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT skill_slug FROM tenant_stack_mappings WHERE tenant_id = $1 AND stack_tag = ANY($2) ORDER BY skill_slug LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "skill_slug",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a71a3c1e115f7221db1a571f2c9d8a680c5c1eb1fd84118aebb38b74f3109bf9"
+}

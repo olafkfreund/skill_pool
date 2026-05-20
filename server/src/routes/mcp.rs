@@ -7,7 +7,7 @@
 //!
 //! Methods implemented:
 //!   - `initialize` — server capability handshake
-//!   - `tools/list` — advertise the two tools below
+//!   - `tools/list` — advertise the tools below
 //!   - `tools/call` — dispatch
 //!
 //! Tools:
@@ -23,6 +23,10 @@
 //!     chat. Capped at `MAX_BUNDLE_BYTES` (1 MiB); larger bundles
 //!     surface a structured error that points the caller at
 //!     `GET /v1/skills/{slug}/bundle.tar.gz`.
+//!   - `get_project_plan(project_slug)` — fetch the active plan markdown
+//!     for a project in this tenant. Returns the plan body plus version
+//!     metadata. Tool-errors (isError: true) when the project has no
+//!     imported plan yet or the project slug is not found.
 //!
 //! Auth: reuses the standard `AuthedCaller` extractor — operators set
 //! `Authorization: Bearer <token>` and `X-Skill-Pool-Tenant: <slug>`
@@ -280,6 +284,28 @@ fn tools_list(id: Option<Value>) -> JsonRpcResponse {
                         },
                         "additionalProperties": false
                     }
+                },
+                {
+                    "name": "get_project_plan",
+                    "description":
+                        "Fetch the active plan markdown for a project in this \
+                         tenant. Returns the plan body and version metadata so \
+                         you can answer questions about the project's current \
+                         direction mid-session, without needing the developer \
+                         to have run `skill-pool ensure` recently. Returns a \
+                         tool error (isError: true) if the project has no \
+                         imported plan yet or the project slug is not found.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["project_slug"],
+                        "properties": {
+                            "project_slug": {
+                                "type": "string",
+                                "description": "Slug of the project (e.g. acme-billing-service)."
+                            }
+                        },
+                        "additionalProperties": false
+                    }
                 }
             ]
         }),
@@ -315,6 +341,12 @@ async fn tools_call(
             Err(ToolError::Internal(msg)) => JsonRpcResponse::err(id, INTERNAL_ERROR, msg),
         },
         "install_skill" => match call_install_skill(state, caller, args).await {
+            Ok(v) => JsonRpcResponse::ok(id, v),
+            Err(ToolError::NotFound(msg)) => tool_error_result(id, &msg),
+            Err(ToolError::Invalid(msg)) => JsonRpcResponse::err(id, INVALID_PARAMS, msg),
+            Err(ToolError::Internal(msg)) => JsonRpcResponse::err(id, INTERNAL_ERROR, msg),
+        },
+        "get_project_plan" => match call_get_project_plan(state, caller, args).await {
             Ok(v) => JsonRpcResponse::ok(id, v),
             Err(ToolError::NotFound(msg)) => tool_error_result(id, &msg),
             Err(ToolError::Invalid(msg)) => JsonRpcResponse::err(id, INVALID_PARAMS, msg),
@@ -627,6 +659,65 @@ async fn call_install_skill(
     }))
 }
 
+#[derive(Deserialize)]
+struct GetProjectPlanArgs {
+    project_slug: String,
+}
+
+async fn call_get_project_plan(
+    state: &AppState,
+    caller: &AuthedCaller,
+    args: Value,
+) -> Result<Value, ToolError> {
+    let args: GetProjectPlanArgs = serde_json::from_value(args)
+        .map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))?;
+
+    let result = crate::admin::get_active_plan(
+        state.db(),
+        &caller.tenant.tenant_slug,
+        &args.project_slug,
+    )
+    .await
+    .map_err(|e| {
+        // get_active_plan returns Err when the project slug doesn't exist.
+        // Surface that as NotFound so the model gets isError: true rather
+        // than a JSON-RPC internal error.
+        let msg = e.to_string();
+        if msg.contains("not found") {
+            ToolError::NotFound(msg)
+        } else {
+            ToolError::Internal(msg)
+        }
+    })?;
+
+    let Some(plan) = result else {
+        return Err(ToolError::NotFound(format!(
+            "project `{}` in tenant `{}` has no imported plan yet; \
+             run `skill-pool ensure` or import a plan first",
+            args.project_slug, caller.tenant.tenant_slug
+        )));
+    };
+
+    let summary = format!(
+        "Active plan for project `{}` (tenant `{}`), version {}.\n\
+         Source: {} | SHA-256: {} | Imported: {}",
+        args.project_slug,
+        caller.tenant.tenant_slug,
+        plan.version,
+        plan.source_type,
+        plan.body_sha256,
+        plan.imported_at.format("%Y-%m-%dT%H:%M:%SZ"),
+    );
+
+    Ok(serde_json::json!({
+        "content": [
+            { "type": "text", "text": summary },
+            { "type": "text", "text": plan.body_md }
+        ],
+        "isError": false
+    }))
+}
+
 fn read_skill_md(bytes: &[u8]) -> Option<String> {
     use flate2::read::GzDecoder;
     use std::io::Read;
@@ -683,11 +774,12 @@ mod tests {
         let r = tools_list(Some(serde_json::json!(2)));
         let v = r.result.unwrap();
         let tools = v["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"search_skills"));
         assert!(names.contains(&"get_skill"));
         assert!(names.contains(&"install_skill"));
+        assert!(names.contains(&"get_project_plan"));
     }
 
     #[test]
@@ -695,7 +787,13 @@ mod tests {
         let r = tools_list(Some(serde_json::json!(2)));
         let v = r.result.unwrap();
         let tools = v["tools"].as_array().unwrap();
-        for t in tools {
+        // `get_project_plan` is project-scoped, not catalog-kind-scoped, so it
+        // intentionally has no `kind` property. Skip it in this assertion.
+        let catalog_tools: Vec<_> = tools
+            .iter()
+            .filter(|t| t["name"].as_str() != Some("get_project_plan"))
+            .collect();
+        for t in catalog_tools {
             let kind_schema = &t["inputSchema"]["properties"]["kind"];
             assert!(
                 kind_schema.is_object(),
@@ -707,6 +805,56 @@ mod tests {
             let vs: Vec<&str> = variants.iter().map(|v| v.as_str().unwrap()).collect();
             assert_eq!(vs, vec!["skill", "agent", "command"]);
         }
+    }
+
+    #[test]
+    fn get_project_plan_schema_has_required_project_slug() {
+        let r = tools_list(Some(serde_json::json!(3)));
+        let v = r.result.unwrap();
+        let tools = v["tools"].as_array().unwrap();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"].as_str() == Some("get_project_plan"))
+            .expect("get_project_plan tool not found");
+
+        // Must have inputSchema of type object.
+        assert_eq!(tool["inputSchema"]["type"], "object");
+
+        // project_slug must be in required.
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let req_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(
+            req_names.contains(&"project_slug"),
+            "project_slug not in required: {req_names:?}"
+        );
+
+        // project_slug property must be a string.
+        assert_eq!(
+            tool["inputSchema"]["properties"]["project_slug"]["type"],
+            "string"
+        );
+
+        // No extra properties allowed.
+        assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+
+        // No `kind` property on this tool.
+        assert!(
+            tool["inputSchema"]["properties"]["kind"].is_null(),
+            "get_project_plan should not expose a kind property"
+        );
+    }
+
+    #[test]
+    fn tools_list_order_is_stable() {
+        // Readers expect: search_skills, get_skill, install_skill, get_project_plan.
+        let r = tools_list(Some(serde_json::json!(4)));
+        let v = r.result.unwrap();
+        let tools = v["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            vec!["search_skills", "get_skill", "install_skill", "get_project_plan"]
+        );
     }
 
     #[test]

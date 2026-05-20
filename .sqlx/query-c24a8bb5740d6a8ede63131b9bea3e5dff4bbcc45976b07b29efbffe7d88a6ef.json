@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, source_url, source_type, body_sha256, version FROM tenant_project_plans WHERE project_id = $1 AND status = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "source_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "source_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "body_sha256",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "version",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c24a8bb5740d6a8ede63131b9bea3e5dff4bbcc45976b07b29efbffe7d88a6ef"
+}

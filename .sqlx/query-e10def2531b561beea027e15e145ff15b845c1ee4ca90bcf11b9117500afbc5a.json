@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenant_email_branding (tenant_id, from_addr, from_name, reply_to, smtp_url, smtp_password_enc, footer_html, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now()) ON CONFLICT (tenant_id) DO UPDATE SET from_addr = EXCLUDED.from_addr, from_name = EXCLUDED.from_name, reply_to = EXCLUDED.reply_to, smtp_url = EXCLUDED.smtp_url, smtp_password_enc = EXCLUDED.smtp_password_enc, footer_html = EXCLUDED.footer_html, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e10def2531b561beea027e15e145ff15b845c1ee4ca90bcf11b9117500afbc5a"
+}

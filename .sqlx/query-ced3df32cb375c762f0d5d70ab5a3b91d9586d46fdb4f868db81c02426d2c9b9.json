@@ -1,0 +1,94 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, border, radius, logo_uri, footer_branding, font_family FROM tenant_theme WHERE tenant_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "brand_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "primary_",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "primary_fg",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "accent",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "bg",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "fg",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "muted",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "muted_fg",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "border",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "radius",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "logo_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "footer_branding",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "font_family",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "ced3df32cb375c762f0d5d70ab5a3b91d9586d46fdb4f868db81c02426d2c9b9"
+}

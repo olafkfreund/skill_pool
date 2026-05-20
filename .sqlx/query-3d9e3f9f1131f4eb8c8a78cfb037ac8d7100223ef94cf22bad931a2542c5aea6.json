@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH latest AS ( SELECT DISTINCT ON (slug) slug, version, description, use_count, last_used_at, created_at FROM skills WHERE tenant_id = $1 AND kind = 'skill' AND status = 'published' ORDER BY slug, created_at DESC ) SELECT slug, version, description, use_count, last_used_at, created_at FROM latest WHERE use_count < $2 AND (last_used_at IS NULL OR last_used_at < now() - make_interval(days => $3)) ORDER BY last_used_at ASC NULLS FIRST, use_count ASC LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "use_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_used_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3d9e3f9f1131f4eb8c8a78cfb037ac8d7100223ef94cf22bad931a2542c5aea6"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE skills SET status = 'archive_candidate' WHERE status = 'published' AND kind = 'skill' AND use_count < $1 AND (last_used_at IS NULL OR last_used_at < now() - make_interval(days => $2))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8b879b2d38c2eac79dc6b35ce731c065ffe562cf450779309e0430076aebbff6"
+}

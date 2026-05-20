@@ -99,46 +99,40 @@ impl WebhookConfig {
     /// `notifications_webhook_secret`. Returns `None` when the tenant has
     /// no URL configured — delivery is silently skipped.
     pub async fn load(db: &PgPool, tenant_id: Uuid) -> sqlx::Result<Option<Self>> {
-        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        let row = sqlx::query!(
             "SELECT notifications_webhook_url, notifications_webhook_secret \
              FROM tenants WHERE id = $1",
+            tenant_id,
         )
-        .bind(tenant_id)
         .fetch_optional(db)
         .await?;
-        Ok(row.and_then(|(url, secret)| url.map(|u| Self { url: u, secret })))
+        Ok(row.and_then(|r| r.notifications_webhook_url.map(|u| Self { url: u, secret: r.notifications_webhook_secret })))
     }
 }
-
-/// Row tuple returned by the combined webhook + email config query.
-/// Aliased to silence `clippy::type_complexity` without losing the
-/// inline type info.
-type NotificationConfigRow = (
-    Option<String>, // webhook url
-    Option<String>, // webhook secret
-    Option<String>, // smtp url
-    Option<String>, // smtp from
-    Option<String>, // smtp to
-);
 
 impl NotificationConfig {
     /// Single DB round trip that loads both webhook + email configs.
     /// `None` for either side means "skip that delivery channel."
     pub async fn load(db: &PgPool, tenant_id: Uuid) -> sqlx::Result<Self> {
-        let row: Option<NotificationConfigRow> = sqlx::query_as(
+        let row = sqlx::query!(
             "SELECT notifications_webhook_url, notifications_webhook_secret, \
                     notification_smtp_url, notification_smtp_from, notification_smtp_to \
              FROM tenants WHERE id = $1",
+            tenant_id,
         )
-        .bind(tenant_id)
         .fetch_optional(db)
         .await?;
-        let Some((wh_url, wh_secret, smtp_url, from, to)) = row else {
+        let Some(r) = row else {
             return Ok(Self {
                 webhook: None,
                 email: None,
             });
         };
+        let wh_url = r.notifications_webhook_url;
+        let wh_secret = r.notifications_webhook_secret;
+        let smtp_url = r.notification_smtp_url;
+        let from = r.notification_smtp_from;
+        let to = r.notification_smtp_to;
         let webhook = wh_url.map(|url| WebhookConfig {
             url,
             secret: wh_secret,

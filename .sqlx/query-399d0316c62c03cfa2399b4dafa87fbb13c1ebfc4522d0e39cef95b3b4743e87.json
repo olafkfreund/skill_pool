@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM tenant_custom_domains WHERE id = $1 AND tenant_id = $2 RETURNING hostname",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hostname",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "399d0316c62c03cfa2399b4dafa87fbb13c1ebfc4522d0e39cef95b3b4743e87"
+}

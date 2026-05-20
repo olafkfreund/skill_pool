@@ -152,7 +152,7 @@ pub async fn list(
 
     // --- Keyword / tag / plain-list branch ------------------------------
     let needle = q.query.as_deref().map(|s| format!("%{s}%"));
-    let rows: Vec<SkillRow> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT DISTINCT ON (slug) \
             slug, version, description, when_to_use, tags, status, created_at \
          FROM skills \
@@ -163,16 +163,29 @@ pub async fn list(
            AND ($3::text[] = '{}' OR tags @> $3) \
          ORDER BY slug, created_at DESC \
          LIMIT $4",
+        tenant.tenant_id,
+        needle,
+        &tag_list,
+        limit,
+        kind,
     )
-    .bind(tenant.tenant_id)
-    .bind(needle)
-    .bind(&tag_list)
-    .bind(limit)
-    .bind(kind)
     .fetch_all(state.db_read())
     .await?;
 
-    Ok(Json(rows.into_iter().map(Into::into).collect()))
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| Skill {
+                slug: r.slug,
+                version: r.version,
+                description: r.description,
+                when_to_use: r.when_to_use,
+                tags: r.tags,
+                status: r.status,
+                created_at: r.created_at,
+                similarity: None,
+            })
+            .collect(),
+    ))
 }
 
 /// Tiny query struct shared by all get_* endpoints that take `:slug`.
@@ -203,20 +216,29 @@ pub async fn get_one(
     Query(kq): Query<KindQuery>,
 ) -> AppResult<Json<Skill>> {
     let kind = resolve_kind(kq.kind.as_deref())?;
-    let row: Option<SkillRow> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT slug, version, description, when_to_use, tags, status, created_at \
          FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
+        tenant.tenant_id,
+        &slug,
+        kind,
     )
-    .bind(tenant.tenant_id)
-    .bind(&slug)
-    .bind(kind)
     .fetch_optional(state.db_read())
-    .await?;
+    .await?
+    .ok_or(AppError::NotFound)?;
 
-    let row = row.ok_or(AppError::NotFound)?;
-    Ok(Json(row.into()))
+    Ok(Json(Skill {
+        slug: row.slug,
+        version: row.version,
+        description: row.description,
+        when_to_use: row.when_to_use,
+        tags: row.tags,
+        status: row.status,
+        created_at: row.created_at,
+        similarity: None,
+    }))
 }
 
 pub async fn get_skill_md(
@@ -229,17 +251,18 @@ pub async fn get_skill_md(
     use std::io::Read;
 
     let kind = resolve_kind(kq.kind.as_deref())?;
-    let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT id, bundle_uri FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
+        caller.tenant.tenant_id,
+        &slug,
+        kind,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&slug)
-    .bind(kind)
     .fetch_optional(state.db_read())
-    .await?;
-    let (skill_id, key) = row.ok_or(AppError::NotFound)?;
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let (skill_id, key) = (row.id, row.bundle_uri);
 
     // View event — same telemetry pipeline as download.
     record_usage(
@@ -288,18 +311,19 @@ pub async fn get_bundle(
     Query(bq): Query<BundleQuery>,
 ) -> AppResult<Response> {
     let kind = resolve_kind(bq.kind.as_deref())?;
-    let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT id, bundle_uri FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
+        caller.tenant.tenant_id,
+        &slug,
+        kind,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&slug)
-    .bind(kind)
     .fetch_optional(state.db_read())
-    .await?;
+    .await?
+    .ok_or(AppError::NotFound)?;
 
-    let (skill_id, key) = row.ok_or(AppError::NotFound)?;
+    let (skill_id, key) = (row.id, row.bundle_uri);
 
     // Best-effort usage record: bumps the per-row counter for decay AND
     // appends an event row for the timeline aggregations. A DB blip here
@@ -355,25 +379,25 @@ async fn record_usage(
     event_kind: &'static str,
     caller: &AuthedCaller,
 ) {
-    let r = sqlx::query(
+    let r = sqlx::query!(
         "UPDATE skills SET use_count = use_count + 1, last_used_at = now() WHERE id = $1",
+        skill_id,
     )
-    .bind(skill_id)
     .execute(db)
     .await;
     if let Err(e) = r {
         tracing::warn!(error = ?e, skill_id = %skill_id, "use_count bump failed");
     }
 
-    let r = sqlx::query(
+    let r = sqlx::query!(
         "INSERT INTO skill_usage_events (tenant_id, skill_id, event_kind, user_id, token_id) \
          VALUES ($1, $2, $3, $4, $5)",
+        tenant_id,
+        skill_id,
+        event_kind,
+        caller.user_id,
+        caller.token_id,
     )
-    .bind(tenant_id)
-    .bind(skill_id)
-    .bind(event_kind)
-    .bind(caller.user_id)
-    .bind(caller.token_id)
     .execute(db)
     .await;
     if let Err(e) = r {
@@ -535,16 +559,16 @@ pub async fn publish(
             &version_range,
         )
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO skill_dependencies \
                (tenant_id, parent_skill_id, requires_slug, version_range) \
              VALUES ($1, $2, $3, $4) \
              ON CONFLICT (parent_skill_id, requires_slug) DO UPDATE SET version_range = EXCLUDED.version_range",
+            caller.tenant.tenant_id,
+            row.id,
+            &req_slug,
+            &version_range,
         )
-        .bind(caller.tenant.tenant_id)
-        .bind(row.id)
-        .bind(&req_slug)
-        .bind(&version_range)
         .execute(state.db())
         .await?;
     }
@@ -609,7 +633,7 @@ pub async fn publish(
 }
 
 /// One entry in a skill's dependency closure.
-#[derive(serde::Serialize, sqlx::FromRow)]
+#[derive(serde::Serialize)]
 pub struct DepEntry {
     pub slug: String,
     pub version_range: String,
@@ -617,7 +641,7 @@ pub struct DepEntry {
 }
 
 /// Reverse-edge entry: a skill that requires *us*.
-#[derive(serde::Serialize, sqlx::FromRow)]
+#[derive(serde::Serialize)]
 pub struct DependentEntry {
     pub slug: String,
     pub version: String,
@@ -625,7 +649,7 @@ pub struct DependentEntry {
 }
 
 /// Pending-draft entry that flagged this skill as its merge target.
-#[derive(serde::Serialize, sqlx::FromRow)]
+#[derive(serde::Serialize)]
 pub struct PendingMergeProposal {
     pub draft_id: uuid::Uuid,
     pub draft_slug: String,
@@ -651,20 +675,6 @@ pub struct SkillDetail {
     pub merge_proposals: Vec<PendingMergeProposal>,
 }
 
-#[derive(sqlx::FromRow)]
-struct SkillDetailRow {
-    id: uuid::Uuid,
-    slug: String,
-    version: String,
-    description: String,
-    when_to_use: Option<String>,
-    tags: Vec<String>,
-    status: String,
-    created_at: DateTime<Utc>,
-    use_count: i32,
-    last_used_at: Option<DateTime<Utc>>,
-}
-
 pub async fn get_detail(
     State(state): State<AppState>,
     tenant: TenantCtx,
@@ -672,24 +682,24 @@ pub async fn get_detail(
     Query(kq): Query<KindQuery>,
 ) -> AppResult<Json<SkillDetail>> {
     let kind = resolve_kind(kq.kind.as_deref())?;
-    let parent: Option<SkillDetailRow> = sqlx::query_as(
+    let parent = sqlx::query!(
         "SELECT id, slug, version, description, when_to_use, tags, status, created_at, \
                 use_count, last_used_at \
          FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
+        tenant.tenant_id,
+        &slug,
+        kind,
     )
-    .bind(tenant.tenant_id)
-    .bind(&slug)
-    .bind(kind)
     .fetch_optional(state.db_read())
-    .await?;
-    let parent = parent.ok_or(AppError::NotFound)?;
+    .await?
+    .ok_or(AppError::NotFound)?;
 
     // Forward edges: rows in skill_dependencies whose parent is this
     // skill, joined to skills to surface the target's current version
     // (if published). Unpublished target → version is empty string.
-    let requires: Vec<DependentEntry> = sqlx::query_as(
+    let requires_rows = sqlx::query!(
         "SELECT d.requires_slug AS slug, \
                 COALESCE(s.version, '') AS version, \
                 d.version_range \
@@ -701,31 +711,48 @@ pub async fn get_detail(
          ) s ON true \
          WHERE d.tenant_id = $1 AND d.parent_skill_id = $2 \
          ORDER BY d.requires_slug ASC",
+        tenant.tenant_id,
+        parent.id,
     )
-    .bind(tenant.tenant_id)
-    .bind(parent.id)
     .fetch_all(state.db_read())
     .await?;
+    // COALESCE(s.version, '') always produces a value; unwrap_or_default is safe.
+    let requires: Vec<DependentEntry> = requires_rows
+        .into_iter()
+        .map(|r| DependentEntry {
+            slug: r.slug,
+            version: r.version.unwrap_or_default(),
+            version_range: r.version_range,
+        })
+        .collect();
 
     // Reverse edges: who declares a dependency on this slug?
-    let required_by: Vec<DependentEntry> = sqlx::query_as(
+    let required_by_rows = sqlx::query!(
         "SELECT s.slug AS slug, s.version AS version, d.version_range \
          FROM skill_dependencies d \
          JOIN skills s ON s.id = d.parent_skill_id AND s.status = 'published' \
          WHERE d.tenant_id = $1 AND d.requires_slug = $2 \
          ORDER BY s.slug ASC",
+        tenant.tenant_id,
+        &parent.slug,
     )
-    .bind(tenant.tenant_id)
-    .bind(&parent.slug)
     .fetch_all(state.db_read())
     .await?;
+    let required_by: Vec<DependentEntry> = required_by_rows
+        .into_iter()
+        .map(|r| DependentEntry {
+            slug: r.slug,
+            version: r.version,
+            version_range: r.version_range,
+        })
+        .collect();
 
     // Pending drafts that flagged this slug as a merge target (Phase 5
     // embedding dedup). Joining through skills.slug rather than the row
     // id surfaces proposals against any version of this skill — the
     // semantic intent is "are curators proposing a merge here?", not
     // "which row id was the embedding closest to?".
-    let merge_proposals: Vec<PendingMergeProposal> = sqlx::query_as(
+    let merge_proposal_rows = sqlx::query!(
         "SELECT d.id AS draft_id, d.slug AS draft_slug, \
                 d.merge_proposal_similarity AS similarity \
          FROM skill_drafts d \
@@ -735,11 +762,19 @@ pub async fn get_detail(
            AND s.slug = $2 \
          ORDER BY d.merge_proposal_similarity DESC NULLS LAST \
          LIMIT 10",
+        tenant.tenant_id,
+        &parent.slug,
     )
-    .bind(tenant.tenant_id)
-    .bind(&parent.slug)
     .fetch_all(state.db_read())
     .await?;
+    let merge_proposals: Vec<PendingMergeProposal> = merge_proposal_rows
+        .into_iter()
+        .map(|r| PendingMergeProposal {
+            draft_id: r.draft_id,
+            draft_slug: r.draft_slug,
+            similarity: r.similarity.unwrap_or(0.0),
+        })
+        .collect();
 
     Ok(Json(SkillDetail {
         slug: parent.slug,
@@ -750,7 +785,7 @@ pub async fn get_detail(
         status: parent.status,
         created_at: parent.created_at,
         use_count: parent.use_count,
-        last_used_at: parent.last_used_at,
+        last_used_at: Some(parent.last_used_at),
         requires,
         required_by,
         merge_proposals,
@@ -773,15 +808,6 @@ pub struct SkillVersion {
     /// change-summary column; description is the closest proxy).
     pub change_summary: String,
     pub status: String,
-}
-
-#[derive(sqlx::FromRow)]
-struct SkillVersionRow {
-    version: String,
-    created_at: DateTime<Utc>,
-    description: String,
-    status: String,
-    published_by: Option<String>,
 }
 
 /// Truncate a string to at most `max_chars` Unicode characters.
@@ -811,17 +837,17 @@ pub async fn get_versions(
     // LEFT JOIN to users so the absence of a created_by FK doesn't drop
     // the row. Filter accepts every status (so curators see history
     // across the full lifecycle — published, archive_candidate, archived).
-    let rows: Vec<SkillVersionRow> = sqlx::query_as(
-        "SELECT s.version, s.created_at, s.description, s.status, u.email AS published_by \
+    let rows = sqlx::query!(
+        "SELECT s.version, s.created_at, s.description, s.status, u.email::text AS published_by \
          FROM skills s \
          LEFT JOIN users u ON u.id = s.created_by \
          WHERE s.tenant_id = $1 AND s.slug = $2 AND s.kind = $3 \
          ORDER BY s.created_at DESC \
          LIMIT 50",
+        tenant.tenant_id,
+        &slug,
+        kind,
     )
-    .bind(tenant.tenant_id)
-    .bind(&slug)
-    .bind(kind)
     .fetch_all(state.db_read())
     .await?;
 
@@ -852,20 +878,21 @@ pub async fn get_deps(
     Path(slug): Path<String>,
 ) -> AppResult<Json<Vec<DepEntry>>> {
     // Resolve the latest published version of `slug` for this tenant.
-    let parent: Option<(uuid::Uuid,)> = sqlx::query_as(
+    let parent = sqlx::query!(
         "SELECT id FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
+        tenant.tenant_id,
+        &slug,
     )
-    .bind(tenant.tenant_id)
-    .bind(&slug)
     .fetch_optional(state.db_read())
     .await?;
-    let Some((parent_id,)) = parent else {
+    let Some(parent) = parent else {
         return Err(AppError::NotFound);
     };
+    let parent_id = parent.id;
 
-    let rows: Vec<DepEntry> = sqlx::query_as(
+    let closure_rows = sqlx::query!(
         "WITH RECURSIVE closure AS ( \
             SELECT d.requires_slug, d.version_range, 1 AS depth \
             FROM skill_dependencies d \
@@ -882,11 +909,19 @@ pub async fn get_deps(
          SELECT requires_slug AS slug, version_range, depth \
          FROM closure \
          ORDER BY depth ASC, slug ASC",
+        tenant.tenant_id,
+        parent_id,
     )
-    .bind(tenant.tenant_id)
-    .bind(parent_id)
     .fetch_all(state.db_read())
     .await?;
+    let rows: Vec<DepEntry> = closure_rows
+        .into_iter()
+        .map(|r| DepEntry {
+            slug: r.slug.unwrap_or_default(),
+            version_range: r.version_range.unwrap_or_default(),
+            depth: r.depth.unwrap_or(0),
+        })
+        .collect();
 
     Ok(Json(rows))
 }
@@ -934,32 +969,6 @@ fn require_scope(scope: &str, needed: &str) -> AppResult<()> {
 
 fn bundle_to_app_err(e: BundleError) -> AppError {
     AppError::BadRequest(e.to_string())
-}
-
-#[derive(sqlx::FromRow)]
-struct SkillRow {
-    slug: String,
-    version: String,
-    description: String,
-    when_to_use: Option<String>,
-    tags: Vec<String>,
-    status: String,
-    created_at: DateTime<Utc>,
-}
-
-impl From<SkillRow> for Skill {
-    fn from(r: SkillRow) -> Self {
-        Self {
-            slug: r.slug,
-            version: r.version,
-            description: r.description,
-            when_to_use: r.when_to_use,
-            tags: r.tags,
-            status: r.status,
-            created_at: r.created_at,
-            similarity: None,
-        }
-    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -1012,7 +1021,7 @@ async fn check_version_compatibility(
     if new_range == "*" {
         return Ok(());
     }
-    let rows: Vec<(String, String)> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT s.slug, sd.version_range \
          FROM skill_dependencies sd \
          JOIN skills s ON s.id = sd.parent_skill_id \
@@ -1020,14 +1029,15 @@ async fn check_version_compatibility(
            AND sd.requires_slug = $2 \
            AND s.slug <> $3 \
            AND s.status = 'published'",
+        tenant_id,
+        req_slug,
+        new_slug,
     )
-    .bind(tenant_id)
-    .bind(req_slug)
-    .bind(new_slug)
     .fetch_all(db)
     .await?;
 
-    for (other_slug, other_range) in rows {
+    for r in rows {
+        let (other_slug, other_range) = (r.slug, r.version_range);
         if !ranges_compatible(new_range, &other_range) {
             return Err(AppError::Conflict(format!(
                 "skill `{new_slug}` requires `{req_slug}@{new_range}` but skill `{other_slug}` already requires `{req_slug}@{other_range}`"

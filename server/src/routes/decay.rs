@@ -31,7 +31,7 @@ pub struct DecayQuery {
     pub limit: Option<i64>,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Serialize)]
 pub struct DecayCandidate {
     pub slug: String,
     pub version: String,
@@ -56,7 +56,7 @@ pub async fn list_candidates(
     // Skills-only by default for v1. Agents and commands would need
     // their own decay tuning (different baseline usage); revisit when
     // those kinds have meaningful traffic.
-    let rows: Vec<DecayCandidate> = sqlx::query_as(
+    let rows = sqlx::query!(
         "WITH latest AS ( \
            SELECT DISTINCT ON (slug) \
              slug, version, description, use_count, last_used_at, created_at \
@@ -67,18 +67,29 @@ pub async fn list_candidates(
          SELECT slug, version, description, use_count, last_used_at, created_at \
          FROM latest \
          WHERE use_count < $2 \
-           AND (last_used_at IS NULL OR last_used_at < now() - make_interval(days => $3::int)) \
+           AND (last_used_at IS NULL OR last_used_at < now() - make_interval(days => $3)) \
          ORDER BY last_used_at ASC NULLS FIRST, use_count ASC \
          LIMIT $4",
+        caller.tenant.tenant_id,
+        max_uses,
+        days as i32,
+        limit,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(max_uses)
-    .bind(days as i32)
-    .bind(limit)
     .fetch_all(state.db_read())
     .await?;
 
-    Ok(Json(rows))
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| DecayCandidate {
+                slug: r.slug,
+                version: r.version,
+                description: r.description,
+                use_count: r.use_count,
+                last_used_at: Some(r.last_used_at),
+                created_at: r.created_at,
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Serialize)]
@@ -109,7 +120,7 @@ pub async fn archive(
     };
 
     // Flip the latest published version of this slug + kind.
-    let row: Option<(String,)> = sqlx::query_as(
+    let row = sqlx::query!(
         "UPDATE skills SET status = 'archived' \
          WHERE id = ( \
             SELECT id FROM skills \
@@ -117,14 +128,15 @@ pub async fn archive(
             ORDER BY created_at DESC LIMIT 1 \
          ) \
          RETURNING version",
+        caller.tenant.tenant_id,
+        &slug,
+        kind,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&slug)
-    .bind(kind)
     .fetch_optional(state.db())
-    .await?;
+    .await?
+    .ok_or(AppError::NotFound)?;
 
-    let (version,) = row.ok_or(AppError::NotFound)?;
+    let version = row.version;
 
     audit::record_best_effort(
         state.db(),
@@ -169,16 +181,16 @@ const _: StatusCode = StatusCode::OK;
 /// `sqlx::Error`. The caller (the background tokio task in
 /// `main::serve`) catches and logs that without crashing the server.
 pub async fn sweep(db: &sqlx::PgPool, stale_days: i32, min_uses: i32) -> sqlx::Result<u64> {
-    let res = sqlx::query(
+    let res = sqlx::query!(
         "UPDATE skills \
          SET status = 'archive_candidate' \
          WHERE status = 'published' \
            AND kind = 'skill' \
            AND use_count < $1 \
-           AND (last_used_at IS NULL OR last_used_at < now() - make_interval(days => $2::int))",
+           AND (last_used_at IS NULL OR last_used_at < now() - make_interval(days => $2))",
+        min_uses,
+        stale_days,
     )
-    .bind(min_uses)
-    .bind(stale_days)
     .execute(db)
     .await?;
     Ok(res.rows_affected())

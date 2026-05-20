@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE skill_drafts SET status = 'discarded', reviewed_by = $1, reviewed_at = now() WHERE tenant_id = $2 AND id = $3 AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a2965855f90618d223cca0c6c6bb0520b9c4b31422aa95498905ef4df88aa0db"
+}

@@ -40,31 +40,28 @@ pub struct NotificationsConfig {
     pub smtp_to: Option<String>,
 }
 
-/// Row tuple returned by the combined config query (webhook + SMTP).
-/// Aliased to keep clippy's `type_complexity` quiet.
-type ConfigRow = (
-    Option<String>, // webhook url
-    Option<String>, // webhook secret
-    Option<String>, // smtp url
-    Option<String>, // smtp from
-    Option<String>, // smtp to
-);
-
 pub async fn get_config(
     State(state): State<AppState>,
     caller: AuthedCaller,
 ) -> AppResult<Json<NotificationsConfig>> {
     require_scope(&caller.scope, "tenant:admin")?;
-    let row: Option<ConfigRow> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT notifications_webhook_url, notifications_webhook_secret, \
                 notification_smtp_url, notification_smtp_from, notification_smtp_to \
          FROM tenants WHERE id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
-    let (wh_url, wh_secret, smtp_url, smtp_from, smtp_to) =
-        row.unwrap_or((None, None, None, None, None));
+    let (wh_url, wh_secret, smtp_url, smtp_from, smtp_to) = row
+        .map(|r| (
+            r.notifications_webhook_url,
+            r.notifications_webhook_secret,
+            r.notification_smtp_url,
+            r.notification_smtp_from,
+            r.notification_smtp_to,
+        ))
+        .unwrap_or((None, None, None, None, None));
     Ok(Json(NotificationsConfig {
         webhook_url: wh_url,
         signing_enabled: wh_secret.is_some(),
@@ -128,7 +125,11 @@ pub async fn put_config(
     let smtp_from = normalize(body.smtp_from);
     let smtp_to = normalize(body.smtp_to);
 
-    // CASE pattern: $N::int = 0 means "leave alone", else write the bind.
+    // JUSTIFIED runtime-checked: `$N::int = 0` flag parameters require an
+    // explicit PostgreSQL cast that the `query!` macro cannot verify at
+    // compile time for integer flag arguments paired with nullable text.
+    // The CASE … ELSE pattern is the canonical partial-update idiom for
+    // a fixed multi-column UPDATE where some columns are left unchanged.
     sqlx::query(
         "UPDATE tenants SET \
             notifications_webhook_url    = CASE WHEN $2::int = 0 THEN notifications_webhook_url    ELSE $3 END, \
@@ -189,12 +190,14 @@ pub async fn pending_count(
     _caller: AuthedCaller,
     tenant: TenantCtx,
 ) -> AppResult<Json<PendingCount>> {
-    let (n,): (i64,) = sqlx::query_as(
+    let n = sqlx::query_scalar!(
         "SELECT COUNT(*) FROM skill_drafts WHERE tenant_id = $1 AND status = 'pending'",
+        tenant.tenant_id,
     )
-    .bind(tenant.tenant_id)
     .fetch_one(state.db())
-    .await?;
+    .await?
+    // COUNT(*) is always non-null; unwrap is safe.
+    .unwrap_or(0);
     Ok(Json(PendingCount { pending: n }))
 }
 

@@ -35,15 +35,16 @@ pub async fn get_session_policy(
     State(state): State<AppState>,
     tenant: TenantCtx,
 ) -> AppResult<Json<SessionPolicy>> {
-    let row: Option<(Option<i32>,)> =
-        sqlx::query_as("SELECT session_max_age_secs FROM tenants WHERE id = $1")
-            .bind(tenant.tenant_id)
-            .fetch_optional(state.db_read())
-            .await?;
+    let row = sqlx::query!(
+        "SELECT session_max_age_secs FROM tenants WHERE id = $1",
+        tenant.tenant_id,
+    )
+    .fetch_optional(state.db_read())
+    .await?;
 
-    let configured = matches!(row, Some((Some(_),)));
+    let configured = matches!(row, Some(ref r) if r.session_max_age_secs.is_some());
     let max_age_secs = row
-        .and_then(|(v,)| v)
+        .and_then(|r| r.session_max_age_secs)
         .unwrap_or(DEFAULT_SESSION_MAX_AGE_SECS);
 
     Ok(Json(SessionPolicy {

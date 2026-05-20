@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenant_theme SET favicon_storage_key = NULL, favicon_content_type = NULL, favicon_bytes_size = NULL WHERE tenant_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "33d06eedf9d30bdd96bd03cd9e9af7e5652a97e4db96b3e4c8bc3efabe8261f1"
+}

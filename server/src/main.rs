@@ -755,6 +755,10 @@ fn spawn_plan_refresh_sweep(
                 _ = tick.tick() => {
                     // Query for projects whose refresh interval has elapsed.
                     // tenant_slug is needed by refresh_plan_from_source; project slug too.
+                    // JUSTIFIED: tp.slug::text CITEXT cast yields Option<String> in query!
+                    // and the interval is constructed via string concatenation at runtime
+                    // (plan_auto_refresh_interval_secs || ' seconds')::interval — not
+                    // expressible with compile-time macro parameters.
                     let due: Vec<(String, String)> = match sqlx::query_as(
                         "SELECT t.slug, tp.slug::text \
                          FROM tenant_projects tp \
@@ -822,14 +826,14 @@ fn spawn_plan_refresh_sweep(
                         }
 
                         // Update last_plan_refresh_at regardless of outcome.
-                        let _ = sqlx::query(
+                        let _ = sqlx::query!(
                             "UPDATE tenant_projects \
                              SET last_plan_refresh_at = now() \
                              WHERE slug = $1 \
                                AND tenant_id = (SELECT id FROM tenants WHERE slug = $2)",
+                            &project_slug,
+                            &tenant_slug,
                         )
-                        .bind(&project_slug)
-                        .bind(&tenant_slug)
                         .execute(&db)
                         .await;
                     }

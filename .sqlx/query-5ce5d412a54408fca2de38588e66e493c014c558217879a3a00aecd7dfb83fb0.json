@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM tenant_stack_mappings WHERE tenant_id = $1 AND stack_tag = $2 AND skill_slug = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ce5d412a54408fca2de38588e66e493c014c558217879a3a00aecd7dfb83fb0"
+}

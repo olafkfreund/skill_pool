@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT name, description, git_remote, stack_tags, plan_auto_refresh_interval_secs FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "git_remote",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "stack_tags",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 4,
+        "name": "plan_auto_refresh_interval_secs",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "f248b8c3c3aa680e4cb3d444b22d09d4f8830b51852a7d8144ba0c6703f468be"
+}

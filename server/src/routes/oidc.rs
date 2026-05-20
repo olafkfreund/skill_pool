@@ -71,11 +71,12 @@ pub async fn discover(
     State(state): State<AppState>,
     tenant: TenantCtx,
 ) -> AppResult<Json<OidcDiscovery>> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT issuer_url FROM tenant_sso WHERE tenant_id = $1")
-            .bind(tenant.tenant_id)
-            .fetch_optional(state.db())
-            .await?;
+    let row = sqlx::query!(
+        "SELECT issuer_url FROM tenant_sso WHERE tenant_id = $1",
+        tenant.tenant_id,
+    )
+    .fetch_optional(state.db())
+    .await?;
     Ok(Json(OidcDiscovery {
         enabled: row.is_some(),
     }))
@@ -226,20 +227,19 @@ struct SsoConfig {
 }
 
 async fn load_sso(state: &AppState, tenant_id: Uuid) -> AppResult<SsoConfig> {
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT issuer_url, client_id, client_secret, default_role \
          FROM tenant_sso WHERE tenant_id = $1",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_optional(state.db())
-    .await?;
-    let (issuer_url, client_id, client_secret, default_role) =
-        row.ok_or_else(|| AppError::BadRequest("OIDC not configured for this tenant".into()))?;
+    .await?
+    .ok_or_else(|| AppError::BadRequest("OIDC not configured for this tenant".into()))?;
     Ok(SsoConfig {
-        issuer_url,
-        client_id,
-        client_secret,
-        default_role,
+        issuer_url: row.issuer_url,
+        client_id: row.client_id,
+        client_secret: row.client_secret,
+        default_role: row.default_role,
     })
 }
 
@@ -329,20 +329,20 @@ async fn upsert_user(
     external_idp_id: &str,
     display_name: Option<&str>,
 ) -> AppResult<Uuid> {
-    let row: (Uuid,) = sqlx::query_as(
+    let row = sqlx::query!(
         "INSERT INTO users (email, external_idp_id, display_name) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (email) DO UPDATE SET \
            external_idp_id = EXCLUDED.external_idp_id, \
            display_name = COALESCE(EXCLUDED.display_name, users.display_name) \
          RETURNING id",
+        email,
+        external_idp_id,
+        display_name,
     )
-    .bind(email)
-    .bind(external_idp_id)
-    .bind(display_name)
     .fetch_one(state.db())
     .await?;
-    Ok(row.0)
+    Ok(row.id)
 }
 
 async fn ensure_membership(
@@ -351,14 +351,14 @@ async fn ensure_membership(
     user_id: Uuid,
     default_role: &str,
 ) -> AppResult<()> {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_users (tenant_id, user_id, role) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (tenant_id, user_id) DO NOTHING",
+        tenant_id,
+        user_id,
+        default_role,
     )
-    .bind(tenant_id)
-    .bind(user_id)
-    .bind(default_role)
     .execute(state.db())
     .await?;
     Ok(())
@@ -371,14 +371,14 @@ async fn mint_session(state: &AppState, tenant_id: Uuid, user_id: Uuid) -> AppRe
     let hashed = hash_token(&raw);
     let expires_at = Utc::now() + Duration::days(SESSION_TTL_DAYS);
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO user_sessions (tenant_id, user_id, hashed_token, expires_at) \
          VALUES ($1, $2, $3, $4)",
+        tenant_id,
+        user_id,
+        &hashed,
+        expires_at,
     )
-    .bind(tenant_id)
-    .bind(user_id)
-    .bind(&hashed)
-    .bind(expires_at)
     .execute(state.db())
     .await?;
 
@@ -483,16 +483,17 @@ pub async fn whoami(
     // The session-token auth path populates user_id; the API-token path doesn't.
     let user_id = caller.user_id.ok_or_else(|| AppError::Unauthorized)?;
 
-    let row: Option<(String, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT u.email, tu.role \
          FROM users u JOIN tenant_users tu ON tu.user_id = u.id \
          WHERE u.id = $1 AND tu.tenant_id = $2",
+        user_id,
+        caller.tenant.tenant_id,
     )
-    .bind(user_id)
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
-    .await?;
-    let (email, role) = row.ok_or(AppError::NotFound)?;
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let (email, role) = (row.email, row.role);
 
     Ok(Json(WhoAmI {
         user_id,
@@ -509,10 +510,12 @@ pub async fn logout(
     caller: crate::auth::AuthedCaller,
 ) -> AppResult<StatusCode> {
     if let Some(session_id) = caller.session_id {
-        sqlx::query("UPDATE user_sessions SET revoked_at = now() WHERE id = $1")
-            .bind(session_id)
-            .execute(state.db())
-            .await?;
+        sqlx::query!(
+            "UPDATE user_sessions SET revoked_at = now() WHERE id = $1",
+            session_id,
+        )
+        .execute(state.db())
+        .await?;
     }
     Ok(StatusCode::NO_CONTENT)
 }

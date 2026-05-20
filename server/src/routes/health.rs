@@ -58,7 +58,7 @@ impl DepStatus {
 
 async fn probe_db(state: &AppState) -> DepStatus {
     let t = Instant::now();
-    match sqlx::query_scalar::<_, i32>("SELECT 1")
+    match sqlx::query_scalar!("SELECT 1::int4")
         .fetch_one(state.db())
         .await
     {

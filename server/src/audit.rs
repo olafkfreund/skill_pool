@@ -71,6 +71,11 @@ pub async fn record(db: &PgPool, ev: Event<'_>) -> Result<()> {
     // ip_addr column is INET; bind as text and cast explicitly so NULL/Some(String) both work.
     // RETURNING gives us the row id + canonical ts to ship to the SIEM —
     // saves a second round trip when fan-out is configured.
+    // JUSTIFIED runtime-checked: `ip_addr` binds to an `INET` column via a
+    // `$8::text::inet` cast so we can pass a nullable `Option<String>` without
+    // requiring the `sqlx-postgres` inet codec. The `query!` macro cannot
+    // express `$n::text::inet` as a compile-time literal type override for an
+    // `Option<String>` argument, so we keep this as `query_as`.
     let (id, ts): (i64, DateTime<Utc>) = sqlx::query_as(
         "INSERT INTO audit_events \
          (tenant_id, actor_user, actor_token, action, target_kind, target_id, metadata, ip_addr, user_agent) \
@@ -212,13 +217,13 @@ impl SiemConfig {
     /// Returns `None` when the tenant has no URL configured — fan-out is
     /// silently skipped for that case (the common path).
     pub async fn load(db: &PgPool, tenant_id: Uuid) -> sqlx::Result<Option<Self>> {
-        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        let row = sqlx::query!(
             "SELECT tenant_audit_siem_url, tenant_audit_siem_token \
              FROM tenants WHERE id = $1",
+            tenant_id,
         )
-        .bind(tenant_id)
         .fetch_optional(db)
         .await?;
-        Ok(row.and_then(|(url, token)| url.map(|u| Self { url: u, token })))
+        Ok(row.and_then(|r| r.tenant_audit_siem_url.map(|u| Self { url: u, token: r.tenant_audit_siem_token })))
     }
 }

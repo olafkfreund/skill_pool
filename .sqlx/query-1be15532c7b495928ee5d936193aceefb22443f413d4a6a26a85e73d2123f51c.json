@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT banner_text, banner_url FROM tenants WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "banner_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "banner_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "1be15532c7b495928ee5d936193aceefb22443f413d4a6a26a85e73d2123f51c"
+}

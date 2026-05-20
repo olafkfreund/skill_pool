@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT logo_storage_key, logo_content_type FROM tenant_theme WHERE tenant_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "logo_storage_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "logo_content_type",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "76546ade02abd08cdff6081dea5a0d4c96df50570e77d7bff5f74cf17e8fb470"
+}

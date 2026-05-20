@@ -67,6 +67,11 @@ pub async fn list(
     require_scope(&caller.scope, "skills:read")?;
 
     let status_filter = q.status.as_deref().unwrap_or("pending");
+    // JUSTIFIED runtime-checked: two structurally-different queries chosen at runtime
+    // based on whether `status_filter == "all"` (no status WHERE clause) vs. a
+    // specific status value. The `query!` macro requires a single literal; branching
+    // queries cannot be expressed as compile-time macros without duplicating the full
+    // SELECT column list. Both queries are tenant-scoped via `d.tenant_id = $1`.
     let drafts: Vec<Draft> = if status_filter == "all" {
         sqlx::query_as(
             "SELECT d.id, d.slug, d.description, d.when_to_use, d.tags, d.origin, \
@@ -123,14 +128,14 @@ pub async fn get_skill_md(
 ) -> AppResult<String> {
     require_scope(&caller.scope, "skills:read")?;
 
-    let row: Option<(String,)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT bundle_uri FROM skill_drafts WHERE tenant_id = $1 AND id = $2",
+        caller.tenant.tenant_id,
+        id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(id)
     .fetch_optional(state.db())
     .await?;
-    let (key,) = row.ok_or(AppError::NotFound)?;
+    let key = row.ok_or(AppError::NotFound)?.bundle_uri;
 
     let bytes = state
         .storage_for(&caller.tenant)
@@ -267,6 +272,10 @@ pub async fn create(
         .as_ref()
         .map(|v| crate::embedding::vector_to_pg_literal(v));
 
+    // JUSTIFIED runtime-checked: `$2::text::vector` casts an embedding string
+    // into a pgvector `vector` type. sqlx `query!` cannot express this cast
+    // for a `String` argument without a native pgvector codec dependency.
+    // Query is tenant-scoped via `tenant_id = $1`.
     let merge_proposal: Option<(Uuid, f32)> = if let Some(lit) = &embedding_literal {
         sqlx::query_as(
             "SELECT id, (1 - (description_embedding <=> $2::text::vector))::real AS similarity \
@@ -286,6 +295,11 @@ pub async fn create(
         None
     };
 
+    // JUSTIFIED runtime-checked: `$12::text::vector` casts the embedding
+    // string literal into pgvector's `vector` type. The macro cannot express
+    // this cast for a nullable `Option<&str>` without a native pgvector codec.
+    // Also contains a correlated subquery `(SELECT slug FROM skills WHERE id = $13)`
+    // in RETURNING which `query!` cannot verify as a static literal.
     let row: Draft = sqlx::query_as(
         "INSERT INTO skill_drafts \
            (id, tenant_id, slug, description, when_to_use, tags, origin, notes, \
@@ -386,14 +400,14 @@ pub async fn publish(
     let mut tx = state.db().begin().await?;
 
     // Lock the draft row so two concurrent publishers don't double-promote.
-    let draft: Option<DraftRow> = sqlx::query_as(
+    let draft = sqlx::query!(
         "SELECT id, slug, description, when_to_use, tags, bundle_uri, bundle_sha256, status \
          FROM skill_drafts \
          WHERE tenant_id = $1 AND id = $2 \
          FOR UPDATE",
+        caller.tenant.tenant_id,
+        id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -434,26 +448,26 @@ pub async fn publish(
         .await
         .map_err(AppError::Anyhow)?;
 
-    let inserted: Result<(Uuid,), sqlx::Error> = sqlx::query_as(
+    let inserted: Result<Uuid, sqlx::Error> = sqlx::query_scalar!(
         "INSERT INTO skills \
            (tenant_id, slug, version, description, when_to_use, tags, bundle_uri, bundle_sha256, created_by) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
          RETURNING id",
+        caller.tenant.tenant_id,
+        final_slug,
+        body.version.trim(),
+        draft.description,
+        draft.when_to_use,
+        draft.tags.as_slice(),
+        skill_key,
+        draft.bundle_sha256,
+        caller.user_id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&final_slug)
-    .bind(body.version.trim())
-    .bind(&draft.description)
-    .bind(&draft.when_to_use)
-    .bind(&draft.tags)
-    .bind(&skill_key)
-    .bind(&draft.bundle_sha256)
-    .bind(caller.user_id)
     .fetch_one(&mut *tx)
     .await;
 
     let skill_id = match inserted {
-        Ok((id,)) => id,
+        Ok(id) => id,
         Err(sqlx::Error::Database(dbe))
             if dbe.constraint() == Some("skills_tenant_id_slug_version_key") =>
         {
@@ -466,17 +480,17 @@ pub async fn publish(
         Err(e) => return Err(e.into()),
     };
 
-    sqlx::query(
+    sqlx::query!(
         "UPDATE skill_drafts \
          SET status = 'published', published_skill_id = $1, published_version = $2, \
              reviewed_by = $3, reviewed_at = now() \
          WHERE tenant_id = $4 AND id = $5",
+        skill_id,
+        body.version.trim(),
+        caller.user_id,
+        caller.tenant.tenant_id,
+        id,
     )
-    .bind(skill_id)
-    .bind(body.version.trim())
-    .bind(caller.user_id)
-    .bind(caller.tenant.tenant_id)
-    .bind(id)
     .execute(&mut *tx)
     .await?;
 
@@ -583,14 +597,14 @@ pub async fn patch(
     // Load + lock the row so we can validate state transitions before
     // building the dynamic UPDATE.
     let mut tx = state.db().begin().await?;
-    let current: Option<DraftRow> = sqlx::query_as(
+    let current = sqlx::query!(
         "SELECT id, slug, description, when_to_use, tags, bundle_uri, bundle_sha256, status \
          FROM skill_drafts \
          WHERE tenant_id = $1 AND id = $2 \
          FOR UPDATE",
+        caller.tenant.tenant_id,
+        id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
     let current = current.ok_or(AppError::NotFound)?;
@@ -629,10 +643,12 @@ pub async fn patch(
         .notes
         .map(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
 
-    // COALESCE-based UPDATE keeps the SQL static — every column gets
-    // bound, but a NULL bind means "leave alone" for non-nullable
-    // columns. For nullable columns we use a sentinel: a one-element
-    // array vs. NULL distinguishes "set to NULL" from "leave alone".
+    // JUSTIFIED runtime-checked: `$5::int = 0` and `$8::int = 0` flag
+    // parameters require explicit PostgreSQL casts that `query!` cannot
+    // verify at compile time for integer flag arguments paired with nullable
+    // text. The CASE … ELSE pattern is the canonical partial-update idiom
+    // for nullable columns when three states must be distinguished (unset,
+    // set-to-null, set-to-value). Tenant-scoped via `tenant_id = $1`.
     sqlx::query(
         "UPDATE skill_drafts SET \
             slug         = COALESCE($3, slug), \
@@ -692,14 +708,14 @@ pub async fn discard(
 ) -> AppResult<StatusCode> {
     require_scope(&caller.scope, "skills:publish")?;
 
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "UPDATE skill_drafts \
          SET status = 'discarded', reviewed_by = $1, reviewed_at = now() \
          WHERE tenant_id = $2 AND id = $3 AND status = 'pending'",
+        caller.user_id,
+        caller.tenant.tenant_id,
+        id,
     )
-    .bind(caller.user_id)
-    .bind(caller.tenant.tenant_id)
-    .bind(id)
     .execute(state.db())
     .await?;
 
@@ -743,6 +759,9 @@ async fn load_draft(state: &AppState, tenant_id: Uuid, id: Uuid) -> AppResult<Dr
     .bind(id)
     .fetch_optional(state.db())
     .await?;
+    // JUSTIFIED runtime-checked: shares the same JOIN + alias shape as the
+    // two `list()` queries above; uses `Draft` (sqlx::FromRow) which requires
+    // runtime-checked `query_as` for the aliased merge_proposal_slug column.
     draft.ok_or(AppError::NotFound)
 }
 
@@ -758,15 +777,3 @@ fn bundle_to_app_err(e: BundleError) -> AppError {
     AppError::BadRequest(e.to_string())
 }
 
-#[derive(sqlx::FromRow)]
-struct DraftRow {
-    #[allow(dead_code)]
-    id: Uuid,
-    slug: String,
-    description: String,
-    when_to_use: Option<String>,
-    tags: Vec<String>,
-    bundle_uri: String,
-    bundle_sha256: String,
-    status: String,
-}

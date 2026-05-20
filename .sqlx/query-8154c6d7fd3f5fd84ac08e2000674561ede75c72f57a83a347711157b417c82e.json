@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenant_custom_domains SET status = 'active', last_checked_at = now(), last_error = NULL, activated_at = COALESCE(activated_at, now()) WHERE id = $1 AND tenant_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8154c6d7fd3f5fd84ac08e2000674561ede75c72f57a83a347711157b417c82e"
+}

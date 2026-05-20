@@ -1,0 +1,102 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenant_project_plans (tenant_id, project_id, version, body_md, body_sha256, source_type, source_url, source_etag, imported_by, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active') RETURNING id, project_id, version, body_md, body_sha256, source_type, source_url, source_etag, imported_by, imported_at, status, fetch_error, fetch_error_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "project_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "body_md",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "body_sha256",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "source_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "source_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "source_etag",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "imported_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "imported_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "fetch_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "fetch_error_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "d857323a9ca184c70ea37f3e3789e8d4c13e306217eec06a498b4c4fb32242bb"
+}

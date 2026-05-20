@@ -155,35 +155,65 @@ pub async fn get_theme(State(state): State<AppState>, tenant: TenantCtx) -> AppR
         let tenant_id = tenant.tenant_id;
         let tenant_slug = tenant.tenant_slug.clone();
         let theme = cache::cached_json(redis, &key, THEME_CACHE_TTL_SECS, move || async move {
-            let row: Option<ThemeRow> = sqlx::query_as(
+            let row = sqlx::query!(
                 "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
                         border, radius, logo_uri, footer_branding, font_family \
                  FROM tenant_theme WHERE tenant_id = $1",
+                tenant_id,
             )
-            .bind(tenant_id)
             .fetch_optional(&db)
             .await?;
-            Ok(row
-                .map(Theme::from)
-                .unwrap_or_else(|| Theme::default_for(&tenant_slug)))
+            Ok(match row {
+                Some(r) => Theme {
+                    brand_name: r.brand_name,
+                    primary: r.primary_,
+                    primary_fg: r.primary_fg,
+                    accent: r.accent,
+                    bg: r.bg,
+                    fg: r.fg,
+                    muted: r.muted,
+                    muted_fg: r.muted_fg,
+                    border: r.border,
+                    radius: r.radius,
+                    logo_uri: r.logo_uri,
+                    footer_branding: r.footer_branding,
+                    font_family: r.font_family,
+                },
+                None => Theme::default_for(&tenant_slug),
+            })
         })
         .await
         .map_err(AppError::Anyhow)?;
         return Ok(Json(theme));
     }
 
-    let row: Option<ThemeRow> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
                 border, radius, logo_uri, footer_branding, font_family \
          FROM tenant_theme WHERE tenant_id = $1",
+        tenant.tenant_id,
     )
-    .bind(tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
 
-    let theme = row
-        .map(Theme::from)
-        .unwrap_or_else(|| Theme::default_for(&tenant.tenant_slug));
+    let theme = match row {
+        Some(r) => Theme {
+            brand_name: r.brand_name,
+            primary: r.primary_,
+            primary_fg: r.primary_fg,
+            accent: r.accent,
+            bg: r.bg,
+            fg: r.fg,
+            muted: r.muted,
+            muted_fg: r.muted_fg,
+            border: r.border,
+            radius: r.radius,
+            logo_uri: r.logo_uri,
+            footer_branding: r.footer_branding,
+            font_family: r.font_family,
+        },
+        None => Theme::default_for(&tenant.tenant_slug),
+    };
     Ok(Json(theme))
 }
 
@@ -201,7 +231,7 @@ pub async fn put_theme(
     require_scope(&caller.scope, "tenant:admin")?;
     validate(&body)?;
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_theme \
            (tenant_id, brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, border, radius, logo_uri, footer_branding, font_family) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
@@ -219,21 +249,21 @@ pub async fn put_theme(
            logo_uri = EXCLUDED.logo_uri, \
            footer_branding = EXCLUDED.footer_branding, \
            font_family = EXCLUDED.font_family",
+        caller.tenant.tenant_id,
+        &body.brand_name,
+        &body.primary,
+        &body.primary_fg,
+        &body.accent,
+        &body.bg,
+        &body.fg,
+        &body.muted,
+        &body.muted_fg,
+        &body.border,
+        &body.radius,
+        body.logo_uri.as_deref(),
+        body.footer_branding,
+        body.font_family.as_deref(),
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&body.brand_name)
-    .bind(&body.primary)
-    .bind(&body.primary_fg)
-    .bind(&body.accent)
-    .bind(&body.bg)
-    .bind(&body.fg)
-    .bind(&body.muted)
-    .bind(&body.muted_fg)
-    .bind(&body.border)
-    .bind(&body.radius)
-    .bind(body.logo_uri.as_deref())
-    .bind(body.footer_branding)
-    .bind(body.font_family.as_deref())
     .execute(state.db())
     .await?;
 
@@ -365,44 +395,6 @@ fn parse_hex(hex: &str) -> AppResult<(u8, u8, u8)> {
     ))
 }
 
-#[derive(sqlx::FromRow)]
-struct ThemeRow {
-    brand_name: String,
-    #[sqlx(rename = "primary_")]
-    primary: String,
-    primary_fg: String,
-    accent: String,
-    bg: String,
-    fg: String,
-    muted: String,
-    muted_fg: String,
-    border: String,
-    radius: String,
-    logo_uri: Option<String>,
-    footer_branding: bool,
-    font_family: Option<String>,
-}
-
-impl From<ThemeRow> for Theme {
-    fn from(r: ThemeRow) -> Self {
-        Self {
-            brand_name: r.brand_name,
-            primary: r.primary,
-            primary_fg: r.primary_fg,
-            accent: r.accent,
-            bg: r.bg,
-            fg: r.fg,
-            muted: r.muted,
-            muted_fg: r.muted_fg,
-            border: r.border,
-            radius: r.radius,
-            logo_uri: r.logo_uri,
-            footer_branding: r.footer_branding,
-            font_family: r.font_family,
-        }
-    }
-}
-
 // --- logo upload / serve --------------------------------------------------
 
 /// `POST /v1/theme/logo` — multipart upload, single field `file`.
@@ -464,15 +456,17 @@ pub async fn post_logo(
     // Best-effort cleanup of any previously-stored logo for this tenant
     // (different extension → different key). Failing to delete an orphan
     // shouldn't block the upload.
-    let prev: Option<(Option<String>,)> = sqlx::query_as(
+    let prev = sqlx::query!(
         "SELECT logo_storage_key FROM tenant_theme WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
-    if let Some((Some(prev_key),)) = prev {
-        if prev_key != key {
-            let _ = storage.delete_object(&prev_key).await;
+    if let Some(r) = prev {
+        if let Some(prev_key) = r.logo_storage_key {
+            if prev_key != key {
+                let _ = storage.delete_object(&prev_key).await;
+            }
         }
     }
 
@@ -482,19 +476,19 @@ pub async fn post_logo(
         .map_err(AppError::Anyhow)?;
 
     let size: i32 = sanitized.bytes.len() as i32;
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_theme (tenant_id, brand_name, logo_storage_key, logo_content_type, logo_bytes_size) \
          VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT (tenant_id) DO UPDATE SET \
             logo_storage_key  = EXCLUDED.logo_storage_key, \
             logo_content_type = EXCLUDED.logo_content_type, \
             logo_bytes_size   = EXCLUDED.logo_bytes_size",
+        caller.tenant.tenant_id,
+        &caller.tenant.tenant_slug,
+        &key,
+        sanitized.kind.content_type(),
+        size,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&caller.tenant.tenant_slug)
-    .bind(&key)
-    .bind(sanitized.kind.content_type())
-    .bind(size)
     .execute(state.db())
     .await?;
 
@@ -532,30 +526,32 @@ pub async fn delete_logo(
 ) -> AppResult<StatusCode> {
     require_scope(&caller.scope, "tenant:admin")?;
 
-    let prev: Option<(Option<String>,)> = sqlx::query_as(
+    let prev = sqlx::query!(
         "SELECT logo_storage_key FROM tenant_theme WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
 
-    if let Some((Some(key),)) = prev {
-        let storage = state
-            .storage_for(&caller.tenant)
-            .await
-            .map_err(AppError::Anyhow)?;
-        storage
-            .delete_object(&key)
-            .await
-            .map_err(AppError::Anyhow)?;
+    if let Some(r) = prev {
+        if let Some(key) = r.logo_storage_key {
+            let storage = state
+                .storage_for(&caller.tenant)
+                .await
+                .map_err(AppError::Anyhow)?;
+            storage
+                .delete_object(&key)
+                .await
+                .map_err(AppError::Anyhow)?;
+        }
     }
 
-    sqlx::query(
+    sqlx::query!(
         "UPDATE tenant_theme \
             SET logo_storage_key = NULL, logo_content_type = NULL, logo_bytes_size = NULL \
           WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .execute(state.db())
     .await?;
 
@@ -587,16 +583,19 @@ pub async fn delete_logo(
 /// sweet spot — long enough to dodge load on the login page, short enough
 /// that a logo replace is visible across the org within minutes.
 pub async fn get_logo(State(state): State<AppState>, tenant: TenantCtx) -> AppResult<Response> {
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT logo_storage_key, logo_content_type FROM tenant_theme WHERE tenant_id = $1",
+        tenant.tenant_id,
     )
-    .bind(tenant.tenant_id)
     .fetch_optional(state.db_read())
     .await?;
 
     let (key, ct) = match row {
-        Some((Some(k), Some(c))) => (k, c),
-        _ => return Err(AppError::NotFound),
+        Some(r) => match (r.logo_storage_key, r.logo_content_type) {
+            (Some(k), Some(c)) => (k, c),
+            _ => return Err(AppError::NotFound),
+        },
+        None => return Err(AppError::NotFound),
     };
 
     let storage = state
@@ -627,16 +626,6 @@ pub async fn get_logo(State(state): State<AppState>, tenant: TenantCtx) -> AppRe
 /// nudges admins toward sensibly-sized assets and matches the DB CHECK in
 /// migration 0023.
 pub const MAX_FAVICON_BYTES: usize = 64 * 1024;
-
-/// Row shape for `get_favicon`'s combined favicon-OR-logo lookup. Named so
-/// clippy doesn't trip on the tuple-of-options type complexity.
-#[derive(sqlx::FromRow)]
-struct FaviconLookupRow {
-    favicon_storage_key: Option<String>,
-    favicon_content_type: Option<String>,
-    logo_storage_key: Option<String>,
-    logo_content_type: Option<String>,
-}
 
 /// `POST /v1/theme/favicon` — multipart upload, single field `file`.
 ///
@@ -693,15 +682,17 @@ pub async fn post_favicon(
 
     // Best-effort cleanup of any previously-stored favicon under a different
     // extension. Identical pattern to logo upload.
-    let prev: Option<(Option<String>,)> = sqlx::query_as(
+    let prev = sqlx::query!(
         "SELECT favicon_storage_key FROM tenant_theme WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
-    if let Some((Some(prev_key),)) = prev {
-        if prev_key != key {
-            let _ = storage.delete_object(&prev_key).await;
+    if let Some(r) = prev {
+        if let Some(prev_key) = r.favicon_storage_key {
+            if prev_key != key {
+                let _ = storage.delete_object(&prev_key).await;
+            }
         }
     }
 
@@ -711,19 +702,19 @@ pub async fn post_favicon(
         .map_err(AppError::Anyhow)?;
 
     let size: i32 = sanitized.bytes.len() as i32;
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_theme (tenant_id, brand_name, favicon_storage_key, favicon_content_type, favicon_bytes_size) \
          VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT (tenant_id) DO UPDATE SET \
             favicon_storage_key  = EXCLUDED.favicon_storage_key, \
             favicon_content_type = EXCLUDED.favicon_content_type, \
             favicon_bytes_size   = EXCLUDED.favicon_bytes_size",
+        caller.tenant.tenant_id,
+        &caller.tenant.tenant_slug,
+        &key,
+        sanitized.kind.content_type(),
+        size,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&caller.tenant.tenant_slug)
-    .bind(&key)
-    .bind(sanitized.kind.content_type())
-    .bind(size)
     .execute(state.db())
     .await?;
 
@@ -758,30 +749,32 @@ pub async fn delete_favicon(
 ) -> AppResult<StatusCode> {
     require_scope(&caller.scope, "tenant:admin")?;
 
-    let prev: Option<(Option<String>,)> = sqlx::query_as(
+    let prev = sqlx::query!(
         "SELECT favicon_storage_key FROM tenant_theme WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
 
-    if let Some((Some(key),)) = prev {
-        let storage = state
-            .storage_for(&caller.tenant)
-            .await
-            .map_err(AppError::Anyhow)?;
-        storage
-            .delete_object(&key)
-            .await
-            .map_err(AppError::Anyhow)?;
+    if let Some(r) = prev {
+        if let Some(key) = r.favicon_storage_key {
+            let storage = state
+                .storage_for(&caller.tenant)
+                .await
+                .map_err(AppError::Anyhow)?;
+            storage
+                .delete_object(&key)
+                .await
+                .map_err(AppError::Anyhow)?;
+        }
     }
 
-    sqlx::query(
+    sqlx::query!(
         "UPDATE tenant_theme \
             SET favicon_storage_key = NULL, favicon_content_type = NULL, favicon_bytes_size = NULL \
           WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .execute(state.db())
     .await?;
 
@@ -815,26 +808,23 @@ pub async fn delete_favicon(
 /// closest thing we have to "the brand mark".
 pub async fn get_favicon(State(state): State<AppState>, tenant: TenantCtx) -> AppResult<Response> {
     // Try favicon first; fall back to logo when favicon row is empty.
-    let row: Option<FaviconLookupRow> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT favicon_storage_key, favicon_content_type, logo_storage_key, logo_content_type \
          FROM tenant_theme WHERE tenant_id = $1",
+        tenant.tenant_id,
     )
-    .bind(tenant.tenant_id)
     .fetch_optional(state.db_read())
     .await?;
 
     let (key, ct) = match row {
-        Some(FaviconLookupRow {
-            favicon_storage_key: Some(fk),
-            favicon_content_type: Some(fc),
-            ..
-        }) => (fk, fc),
-        Some(FaviconLookupRow {
-            favicon_storage_key: None,
-            logo_storage_key: Some(lk),
-            logo_content_type: Some(lc),
-            ..
-        }) => (lk, lc), // fallback: logo bytes serve as favicon
+        Some(ref r) if r.favicon_storage_key.is_some() && r.favicon_content_type.is_some() => (
+            r.favicon_storage_key.clone().unwrap(),
+            r.favicon_content_type.clone().unwrap(),
+        ),
+        Some(ref r) if r.favicon_storage_key.is_none() && r.logo_storage_key.is_some() && r.logo_content_type.is_some() => (
+            r.logo_storage_key.clone().unwrap(),
+            r.logo_content_type.clone().unwrap(),
+        ),
         _ => return Err(AppError::NotFound),
     };
 
@@ -864,17 +854,32 @@ pub async fn get_favicon(State(state): State<AppState>, tenant: TenantCtx) -> Ap
 /// `get_theme` but takes a `TenantCtx` directly so we don't have to thread
 /// the extractor through.
 async fn read_theme(db: &sqlx::PgPool, tenant: &TenantCtx) -> AppResult<Theme> {
-    let row: Option<ThemeRow> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT brand_name, primary_, primary_fg, accent, bg, fg, muted, muted_fg, \
                 border, radius, logo_uri, footer_branding, font_family \
          FROM tenant_theme WHERE tenant_id = $1",
+        tenant.tenant_id,
     )
-    .bind(tenant.tenant_id)
     .fetch_optional(db)
     .await?;
-    Ok(row
-        .map(Theme::from)
-        .unwrap_or_else(|| Theme::default_for(&tenant.tenant_slug)))
+    Ok(match row {
+        Some(r) => Theme {
+            brand_name: r.brand_name,
+            primary: r.primary_,
+            primary_fg: r.primary_fg,
+            accent: r.accent,
+            bg: r.bg,
+            fg: r.fg,
+            muted: r.muted,
+            muted_fg: r.muted_fg,
+            border: r.border,
+            radius: r.radius,
+            logo_uri: r.logo_uri,
+            footer_branding: r.footer_branding,
+            font_family: r.font_family,
+        },
+        None => Theme::default_for(&tenant.tenant_slug),
+    })
 }
 
 // Tiny compile-time assurance that `LogoKind`'s content-type matches the
@@ -956,17 +961,17 @@ pub async fn post_custom_css(
         .map_err(AppError::Anyhow)?;
 
     let size: i32 = sanitized.bytes.len() as i32;
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_theme (tenant_id, brand_name, custom_css_storage_key, custom_css_bytes_size) \
          VALUES ($1, $2, $3, $4) \
          ON CONFLICT (tenant_id) DO UPDATE SET \
             custom_css_storage_key = EXCLUDED.custom_css_storage_key, \
             custom_css_bytes_size  = EXCLUDED.custom_css_bytes_size",
+        caller.tenant.tenant_id,
+        &caller.tenant.tenant_slug,
+        &key,
+        size,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&caller.tenant.tenant_slug)
-    .bind(&key)
-    .bind(size)
     .execute(state.db())
     .await?;
 
@@ -999,30 +1004,32 @@ pub async fn delete_custom_css(
 ) -> AppResult<StatusCode> {
     require_scope(&caller.scope, "tenant:admin")?;
 
-    let prev: Option<(Option<String>,)> = sqlx::query_as(
+    let prev = sqlx::query!(
         "SELECT custom_css_storage_key FROM tenant_theme WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .fetch_optional(state.db())
     .await?;
 
-    if let Some((Some(key),)) = prev {
-        let storage = state
-            .storage_for(&caller.tenant)
-            .await
-            .map_err(AppError::Anyhow)?;
-        storage
-            .delete_object(&key)
-            .await
-            .map_err(AppError::Anyhow)?;
+    if let Some(r) = prev {
+        if let Some(key) = r.custom_css_storage_key {
+            let storage = state
+                .storage_for(&caller.tenant)
+                .await
+                .map_err(AppError::Anyhow)?;
+            storage
+                .delete_object(&key)
+                .await
+                .map_err(AppError::Anyhow)?;
+        }
     }
 
-    sqlx::query(
+    sqlx::query!(
         "UPDATE tenant_theme \
             SET custom_css_storage_key = NULL, custom_css_bytes_size = NULL \
           WHERE tenant_id = $1",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .execute(state.db())
     .await?;
 
@@ -1068,16 +1075,16 @@ pub async fn get_custom_css(
     State(state): State<AppState>,
     tenant: TenantCtx,
 ) -> AppResult<Response> {
-    let row: Option<(Option<String>,)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT custom_css_storage_key FROM tenant_theme WHERE tenant_id = $1",
+        tenant.tenant_id,
     )
-    .bind(tenant.tenant_id)
     .fetch_optional(state.db_read())
     .await?;
 
-    let key = match row {
-        Some((Some(k),)) => k,
-        _ => return Err(AppError::NotFound),
+    let key = match row.and_then(|r| r.custom_css_storage_key) {
+        Some(k) => k,
+        None => return Err(AppError::NotFound),
     };
 
     let storage = state

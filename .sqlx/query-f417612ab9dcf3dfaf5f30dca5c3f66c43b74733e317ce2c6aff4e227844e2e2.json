@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH RECURSIVE closure AS ( SELECT d.requires_slug, d.version_range, 1 AS depth FROM skill_dependencies d WHERE d.tenant_id = $1 AND d.parent_skill_id = $2 UNION SELECT d.requires_slug, d.version_range, c.depth + 1 FROM skill_dependencies d JOIN skills s ON s.id = d.parent_skill_id AND s.tenant_id = $1 JOIN closure c ON s.slug = c.requires_slug WHERE c.depth < 10 ) SELECT requires_slug AS slug, version_range, depth FROM closure ORDER BY depth ASC, slug ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "version_range",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "depth",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f417612ab9dcf3dfaf5f30dca5c3f66c43b74733e317ce2c6aff4e227844e2e2"
+}

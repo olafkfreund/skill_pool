@@ -133,10 +133,10 @@ where
                         // round-trip for session-based callers because
                         // user_sessions has no last_used_at column.
                         if matches!(c.kind, AuthKind::ApiToken) {
-                            let _ = sqlx::query(
+                            let _ = sqlx::query!(
                                 "UPDATE tenant_api_tokens SET last_used_at = now() WHERE id = $1",
+                                c.token_id,
                             )
-                            .bind(c.token_id)
                             .execute(app.db())
                             .await;
                         }
@@ -157,10 +157,12 @@ where
 
         // Try API token first — that's the CLI path and the common case.
         if let Some((token_id, scope)) = lookup_api_token(&app, tenant.tenant_id, &hashed).await? {
-            let _ = sqlx::query("UPDATE tenant_api_tokens SET last_used_at = now() WHERE id = $1")
-                .bind(token_id)
-                .execute(app.db())
-                .await;
+            let _ = sqlx::query!(
+                "UPDATE tenant_api_tokens SET last_used_at = now() WHERE id = $1",
+                token_id,
+            )
+            .execute(app.db())
+            .await;
             // Best-effort cache write — never block the response on a
             // failed SETEX.
             if let Some(redis) = app.redis() {
@@ -255,15 +257,15 @@ async fn lookup_api_token(
     tenant_id: Uuid,
     hashed: &str,
 ) -> Result<Option<(Uuid, String)>, AppError> {
-    let row: Option<(Uuid, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT id, scope FROM tenant_api_tokens \
          WHERE tenant_id = $1 AND hashed_token = $2 AND revoked_at IS NULL",
+        tenant_id,
+        hashed,
     )
-    .bind(tenant_id)
-    .bind(hashed)
     .fetch_optional(state.db())
     .await?;
-    Ok(row)
+    Ok(row.map(|r| (r.id, r.scope)))
 }
 
 /// Role precedence: higher number wins. Used when an IdP-provided group set
@@ -292,12 +294,12 @@ pub async fn apply_role_from_groups(
     if groups.is_empty() {
         return Ok(None);
     }
-    let rows: Vec<(String,)> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT role FROM tenant_role_mappings \
          WHERE tenant_id = $1 AND idp_group = ANY($2)",
+        tenant_id,
+        groups,
     )
-    .bind(tenant_id)
-    .bind(groups)
     .fetch_all(db)
     .await?;
     if rows.is_empty() {
@@ -305,16 +307,18 @@ pub async fn apply_role_from_groups(
     }
     let best = rows
         .into_iter()
-        .map(|(r,)| r)
+        .map(|r| r.role)
         .max_by_key(|r| role_rank(r))
         .expect("non-empty after early return");
 
-    sqlx::query("UPDATE tenant_users SET role = $1 WHERE tenant_id = $2 AND user_id = $3")
-        .bind(&best)
-        .bind(tenant_id)
-        .bind(user_id)
-        .execute(db)
-        .await?;
+    sqlx::query!(
+        "UPDATE tenant_users SET role = $1 WHERE tenant_id = $2 AND user_id = $3",
+        best,
+        tenant_id,
+        user_id,
+    )
+    .execute(db)
+    .await?;
     Ok(Some(best))
 }
 
@@ -323,7 +327,7 @@ async fn lookup_session(
     tenant_id: Uuid,
     hashed: &str,
 ) -> Result<Option<(Uuid, Uuid, String)>, AppError> {
-    let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT s.id, s.user_id, tu.role \
          FROM user_sessions s \
          JOIN tenant_users tu ON tu.tenant_id = s.tenant_id AND tu.user_id = s.user_id \
@@ -331,12 +335,12 @@ async fn lookup_session(
            AND s.hashed_token = $2 \
            AND s.revoked_at IS NULL \
            AND s.expires_at > now()",
+        tenant_id,
+        hashed,
     )
-    .bind(tenant_id)
-    .bind(hashed)
     .fetch_optional(state.db())
     .await?;
-    Ok(row)
+    Ok(row.map(|r| (r.id, r.user_id, r.role)))
 }
 
 #[cfg(test)]

@@ -88,13 +88,15 @@ where
             if let Some(host_raw) = parts.headers.get("host").and_then(|h| h.to_str().ok()) {
                 let host = normalize_host(host_raw);
                 if let Some(tenant_id) = state.custom_domain_tenant(&host).await {
-                    let row: Option<(String,)> = sqlx::query_as(
-                        "SELECT slug FROM tenants WHERE id = $1 AND status = 'active'",
+                    let row = sqlx::query!(
+                        "SELECT slug::text FROM tenants WHERE id = $1 AND status = 'active'",
+                        tenant_id,
                     )
-                    .bind(tenant_id)
                     .fetch_optional(state.db())
                     .await?;
-                    if let Some((tenant_slug,)) = row {
+                    if let Some(r) = row {
+                        // slug::text cast returns Option<String>; NOT NULL in schema.
+                        let tenant_slug = r.slug.unwrap_or_default();
                         return Ok(TenantCtx {
                             tenant_id,
                             tenant_slug,
@@ -109,15 +111,18 @@ where
 
         let slug = slug_from_request(parts, state.tenancy())?;
 
-        let row: Option<(Uuid, String)> =
-            sqlx::query_as("SELECT id, slug FROM tenants WHERE slug = $1 AND status = 'active'")
-                .bind(&slug)
-                .fetch_optional(state.db())
-                .await?;
+        let row = sqlx::query!(
+            "SELECT id, slug::text FROM tenants WHERE slug = $1 AND status = 'active'",
+            slug,
+        )
+        .fetch_optional(state.db())
+        .await?;
 
-        let (tenant_id, tenant_slug) = row.ok_or(AppError::Unauthorized)?;
+        let r = row.ok_or(AppError::Unauthorized)?;
+        // slug::text cast returns Option<String>; NOT NULL in schema.
+        let tenant_slug = r.slug.unwrap_or_default();
         Ok(TenantCtx {
-            tenant_id,
+            tenant_id: r.id,
             tenant_slug,
         })
     }

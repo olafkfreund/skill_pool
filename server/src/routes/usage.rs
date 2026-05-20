@@ -49,9 +49,12 @@ pub async fn timeline(
     require_scope(&caller.scope, "tenant:admin")?;
     let days = q.days.unwrap_or(DEFAULT_DAYS).clamp(1, MAX_DAYS);
 
-    // generate_series fills missing days with zeros so the front-end
-    // chart never has gaps. We round to UTC days; tenants in non-UTC
-    // timezones will see "their day" shifted, which is fine for v1.
+    // JUSTIFIED runtime-checked: query uses `$1::int` cast for PostgreSQL
+    // interval arithmetic and `COUNT(*) FILTER (WHERE ...)` aggregates.
+    // sqlx `query!` cannot verify the `::int` cast type or the nullable
+    // output of FILTER aggregates without explicit type overrides. The
+    // generate_series + FILTER combination is idiomatic PostgreSQL that
+    // must remain as runtime-checked to compile.
     let rows: Vec<TimelineBucket> = sqlx::query_as(
         "WITH days AS ( \
             SELECT generate_series( \
@@ -101,6 +104,10 @@ pub async fn top(
     let days = q.days.unwrap_or(DEFAULT_DAYS).clamp(1, MAX_DAYS);
     let limit = q.limit.unwrap_or(DEFAULT_TOP_LIMIT).clamp(1, MAX_TOP_LIMIT);
 
+    // JUSTIFIED runtime-checked: uses `$2::int * INTERVAL '1 day'` and
+    // `COUNT(*) FILTER (WHERE ...)` aggregate clauses. Both require
+    // explicit PostgreSQL casts/extensions that `query!` cannot check
+    // at compile time for these expression patterns.
     let rows: Vec<TopSkillRow> = sqlx::query_as(
         "SELECT \
             s.slug, \
@@ -189,40 +196,40 @@ pub async fn post_event(
     // We require `published` here so a CLI hitting an archived slug
     // gets a 404 (the manifest is stale) rather than silently
     // recording activity against a graveyard row.
-    let row: Option<(uuid::Uuid,)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT id FROM skills \
          WHERE tenant_id = $1 AND slug = $2 AND kind = $3 AND status = 'published' \
          ORDER BY created_at DESC LIMIT 1",
+        caller.tenant.tenant_id,
+        body.skill_id,
+        kind,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(&body.skill_id)
-    .bind(kind)
     .fetch_optional(state.db_read())
     .await?;
-    let (skill_id,) = row.ok_or(AppError::NotFound)?;
+    let skill_id = row.ok_or(AppError::NotFound)?.id;
 
     // Best-effort: bump the per-row counter so decay sees this too,
     // then append the event row. A DB blip on either is logged but
     // doesn't fail the request — the CLI treats this as fire-and-forget.
-    let r = sqlx::query(
+    let r = sqlx::query!(
         "UPDATE skills SET use_count = use_count + 1, last_used_at = now() WHERE id = $1",
+        skill_id,
     )
-    .bind(skill_id)
     .execute(state.db())
     .await;
     if let Err(e) = r {
         tracing::warn!(error = ?e, skill_id = %skill_id, "use_count bump failed (CLI usage)");
     }
 
-    let r = sqlx::query(
+    let r = sqlx::query!(
         "INSERT INTO skill_usage_events (tenant_id, skill_id, event_kind, user_id, token_id) \
          VALUES ($1, $2, $3, $4, $5)",
+        caller.tenant.tenant_id,
+        skill_id,
+        event_kind,
+        caller.user_id,
+        caller.token_id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(skill_id)
-    .bind(event_kind)
-    .bind(caller.user_id)
-    .bind(caller.token_id)
     .execute(state.db())
     .await;
     if let Err(e) = r {

@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tenant_id, from_addr, from_name, reply_to, smtp_url, smtp_password_enc, footer_html FROM tenant_email_branding WHERE tenant_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tenant_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "from_addr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "from_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "reply_to",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "smtp_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "smtp_password_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "footer_html",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "68c26115bafde75b5276b4471a2585bb2d196902f97a8dd52a5b189296de564c"
+}

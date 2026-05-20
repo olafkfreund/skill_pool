@@ -255,29 +255,29 @@ pub async fn create_user(
         .filter(|s| !s.is_empty());
 
     // Upsert user by email.
-    let user: (Uuid,) = sqlx::query_as(
+    let row = sqlx::query!(
         "INSERT INTO users (email, display_name, active) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (email) DO UPDATE SET \
            display_name = COALESCE(EXCLUDED.display_name, users.display_name), \
            active = EXCLUDED.active \
          RETURNING id",
+        &email,
+        display_name.as_deref(),
+        req.active,
     )
-    .bind(&email)
-    .bind(display_name.as_deref())
-    .bind(req.active)
     .fetch_one(state.db())
     .await?;
-    let user_id = user.0;
+    let user_id = row.id;
 
     // Add membership at the default 'viewer' role; admins promote later.
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_users (tenant_id, user_id, role) \
          VALUES ($1, $2, 'viewer') \
          ON CONFLICT (tenant_id, user_id) DO NOTHING",
+        caller.tenant.tenant_id,
+        user_id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(user_id)
     .execute(state.db())
     .await?;
 
@@ -344,21 +344,19 @@ pub async fn patch_user(
         if !active {
             // Deprovisioning: revoke membership + active flag. Keep the user
             // row for audit. Future logins will need re-provision.
-            sqlx::query("UPDATE users SET active = false WHERE id = $1")
-                .bind(row.user_id)
+            sqlx::query!("UPDATE users SET active = false WHERE id = $1", row.user_id)
                 .execute(state.db())
                 .await?;
-            sqlx::query("DELETE FROM tenant_users WHERE id = $1")
-                .bind(row.tenant_user_id)
+            sqlx::query!("DELETE FROM tenant_users WHERE id = $1", row.tenant_user_id)
                 .execute(state.db())
                 .await?;
             // Best-effort: revoke active sessions.
-            let _ = sqlx::query(
+            let _ = sqlx::query!(
                 "UPDATE user_sessions SET revoked_at = now() \
                  WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+                caller.tenant.tenant_id,
+                row.user_id,
             )
-            .bind(caller.tenant.tenant_id)
-            .bind(row.user_id)
             .execute(state.db())
             .await;
             // Return a synthetic representation reflecting the post-deprovision state.
@@ -381,8 +379,7 @@ pub async fn patch_user(
             }));
         } else {
             // Re-activation toggle on a still-existing membership row.
-            sqlx::query("UPDATE users SET active = true WHERE id = $1")
-                .bind(row.user_id)
+            sqlx::query!("UPDATE users SET active = true WHERE id = $1", row.user_id)
                 .execute(state.db())
                 .await?;
         }
@@ -407,20 +404,18 @@ pub async fn delete_user(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    sqlx::query("DELETE FROM tenant_users WHERE id = $1")
-        .bind(row.tenant_user_id)
+    sqlx::query!("DELETE FROM tenant_users WHERE id = $1", row.tenant_user_id)
         .execute(state.db())
         .await?;
-    sqlx::query("UPDATE users SET active = false WHERE id = $1")
-        .bind(row.user_id)
+    sqlx::query!("UPDATE users SET active = false WHERE id = $1", row.user_id)
         .execute(state.db())
         .await?;
-    let _ = sqlx::query(
+    let _ = sqlx::query!(
         "UPDATE user_sessions SET revoked_at = now() \
          WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        caller.tenant.tenant_id,
+        row.user_id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(row.user_id)
     .execute(state.db())
     .await;
     Ok(StatusCode::NO_CONTENT)
@@ -471,6 +466,9 @@ const SELECT_MEMBERSHIP: &str = "
     WHERE tu.tenant_id = $1
 ";
 
+// JUSTIFIED: These four helpers share SELECT_MEMBERSHIP base SQL via format!() to
+// avoid duplicating a 7-column JOIN. Each appends a different WHERE/LIMIT clause
+// selected at call-site — query! cannot compose SQL from a runtime `const` string.
 async fn fetch_membership_by_id(
     state: &AppState,
     tenant_id: Uuid,

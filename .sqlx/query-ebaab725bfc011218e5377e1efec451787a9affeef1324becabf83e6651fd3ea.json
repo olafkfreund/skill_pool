@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO skill_dependencies (tenant_id, parent_skill_id, requires_slug, version_range) VALUES ($1, $2, $3, $4) ON CONFLICT (parent_skill_id, requires_slug) DO UPDATE SET version_range = EXCLUDED.version_range",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ebaab725bfc011218e5377e1efec451787a9affeef1324becabf83e6651fd3ea"
+}

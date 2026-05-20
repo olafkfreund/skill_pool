@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenant_users (tenant_id, user_id, role) VALUES ($1, $2, 'viewer') ON CONFLICT (tenant_id, user_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ad3fbced096085dcd389069101bba7746ad144c60eab62fa746fca7379cb7f76"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tenant_audit_siem_url, tenant_audit_siem_token FROM tenants WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tenant_audit_siem_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_audit_siem_token",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "23c12e9781c71699d67a79acb491702be33948044d61b08e4e48db54de6d6cbe"
+}

@@ -40,11 +40,12 @@ pub async fn discover(
     State(state): State<AppState>,
     tenant: TenantCtx,
 ) -> AppResult<Json<SamlDiscovery>> {
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT tenant_id FROM tenant_saml WHERE tenant_id = $1")
-            .bind(tenant.tenant_id)
-            .fetch_optional(state.db())
-            .await?;
+    let row = sqlx::query!(
+        "SELECT tenant_id FROM tenant_saml WHERE tenant_id = $1",
+        tenant.tenant_id,
+    )
+    .fetch_optional(state.db())
+    .await?;
     Ok(Json(SamlDiscovery {
         enabled: row.is_some(),
     }))
@@ -57,15 +58,15 @@ pub async fn metadata(
     tenant: TenantCtx,
     Path(_slug): Path<String>,
 ) -> AppResult<Response> {
-    let row: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT sp_entity_id FROM tenant_saml WHERE tenant_id = $1")
-            .bind(tenant.tenant_id)
-            .fetch_optional(state.db())
-            .await?;
+    let row = sqlx::query!(
+        "SELECT sp_entity_id FROM tenant_saml WHERE tenant_id = $1",
+        tenant.tenant_id,
+    )
+    .fetch_optional(state.db())
+    .await?;
 
     let sp_entity_id = match row {
-        Some((Some(custom),)) => custom,
-        Some((None,)) => default_sp_entity_id(&tenant.tenant_slug),
+        Some(r) => r.sp_entity_id.unwrap_or_else(|| default_sp_entity_id(&tenant.tenant_slug)),
         None => {
             return Err(AppError::BadRequest(
                 "SAML not configured for this tenant".into(),
@@ -201,22 +202,20 @@ async fn load_saml_config(
     tenant_id: Uuid,
     tenant_slug: &str,
 ) -> AppResult<SamlConfig> {
-    let row: Option<(String, String, Option<String>, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT idp_entity_id, idp_x509_cert, sp_entity_id, default_role \
          FROM tenant_saml WHERE tenant_id = $1",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_optional(state.db())
-    .await?;
-
-    let (idp_entity_id, idp_x509_cert, sp_entity_id, default_role) =
-        row.ok_or_else(|| AppError::BadRequest("SAML not configured for this tenant".into()))?;
+    .await?
+    .ok_or_else(|| AppError::BadRequest("SAML not configured for this tenant".into()))?;
 
     Ok(SamlConfig {
-        idp_entity_id,
-        idp_x509_cert,
-        sp_entity_id: sp_entity_id.unwrap_or_else(|| default_sp_entity_id(tenant_slug)),
-        default_role,
+        idp_entity_id: row.idp_entity_id,
+        idp_x509_cert: row.idp_x509_cert,
+        sp_entity_id: row.sp_entity_id.unwrap_or_else(|| default_sp_entity_id(tenant_slug)),
+        default_role: row.default_role,
     })
 }
 
@@ -373,20 +372,20 @@ async fn upsert_user(
     external_idp_id: &str,
     display_name: Option<&str>,
 ) -> AppResult<Uuid> {
-    let row: (Uuid,) = sqlx::query_as(
+    let row = sqlx::query!(
         "INSERT INTO users (email, external_idp_id, display_name) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (email) DO UPDATE SET \
            external_idp_id = EXCLUDED.external_idp_id, \
            display_name = COALESCE(EXCLUDED.display_name, users.display_name) \
          RETURNING id",
+        email,
+        external_idp_id,
+        display_name,
     )
-    .bind(email)
-    .bind(external_idp_id)
-    .bind(display_name)
     .fetch_one(state.db())
     .await?;
-    Ok(row.0)
+    Ok(row.id)
 }
 
 async fn ensure_membership(
@@ -395,14 +394,14 @@ async fn ensure_membership(
     user_id: Uuid,
     default_role: &str,
 ) -> AppResult<()> {
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_users (tenant_id, user_id, role) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (tenant_id, user_id) DO NOTHING",
+        tenant_id,
+        user_id,
+        default_role,
     )
-    .bind(tenant_id)
-    .bind(user_id)
-    .bind(default_role)
     .execute(state.db())
     .await?;
     Ok(())
@@ -414,14 +413,14 @@ async fn mint_session(state: &AppState, tenant_id: Uuid, user_id: Uuid) -> AppRe
     let raw = format!("sps_{}", hex::encode(bytes));
     let hashed = hash_token(&raw);
     let expires_at = Utc::now() + chrono::Duration::days(SESSION_TTL_DAYS);
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO user_sessions (tenant_id, user_id, hashed_token, expires_at) \
          VALUES ($1, $2, $3, $4)",
+        tenant_id,
+        user_id,
+        &hashed,
+        expires_at,
     )
-    .bind(tenant_id)
-    .bind(user_id)
-    .bind(&hashed)
-    .bind(expires_at)
     .execute(state.db())
     .await?;
     Ok(raw)

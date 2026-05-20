@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenants\n           SET region      = COALESCE(NULLIF($2, ''), region),\n               storage_uri = COALESCE(NULLIF($3, ''), storage_uri)\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "832b29f6e1d5ebf29c286f19efdfd5387c457fb45a5c4b9b8bf815d8d321bab8"
+}

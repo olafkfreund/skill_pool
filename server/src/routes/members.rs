@@ -29,6 +29,10 @@ pub struct Member {
     pub active: bool,
 }
 
+// JUSTIFIED runtime-checked: `SELECT_MEMBER_COLS` is a `&str` const that is
+// used with `format!()` to build WHERE-clause variants at runtime. The `query!`
+// macro requires a single string literal; const-fragment concatenation is not
+// supported. All queries that use this const include `tu.tenant_id = $1`.
 const SELECT_MEMBER_COLS: &str = "
     SELECT tu.id          AS id,
            u.email        AS email,
@@ -68,15 +72,17 @@ pub async fn patch_role(
 
     let mut tx = state.db().begin().await?;
 
-    let target: Option<(Uuid, String)> = sqlx::query_as(
+    let target = sqlx::query!(
         "SELECT user_id, role FROM tenant_users \
          WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+        caller.tenant.tenant_id,
+        member_id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(member_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (user_id, current_role) = target.ok_or(AppError::NotFound)?;
+    let t = target.ok_or(AppError::NotFound)?;
+    let user_id = t.user_id;
+    let current_role = t.role;
 
     if current_role == "admin" && body.role != "admin" {
         let other_admins = count_other_admins(&mut tx, caller.tenant.tenant_id, member_id).await?;
@@ -87,13 +93,13 @@ pub async fn patch_role(
         }
     }
 
-    sqlx::query(
+    sqlx::query!(
         "UPDATE tenant_users SET role = $1 \
          WHERE tenant_id = $2 AND id = $3",
+        body.role,
+        caller.tenant.tenant_id,
+        member_id,
     )
-    .bind(&body.role)
-    .bind(caller.tenant.tenant_id)
-    .bind(member_id)
     .execute(&mut *tx)
     .await?;
 
@@ -137,15 +143,17 @@ pub async fn remove(
     require_admin(&caller)?;
 
     let mut tx = state.db().begin().await?;
-    let target: Option<(Uuid, String)> = sqlx::query_as(
+    let target = sqlx::query!(
         "SELECT user_id, role FROM tenant_users \
          WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+        caller.tenant.tenant_id,
+        member_id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(member_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (user_id, role) = target.ok_or(AppError::NotFound)?;
+    let t = target.ok_or(AppError::NotFound)?;
+    let user_id = t.user_id;
+    let role = t.role;
 
     if role == "admin" {
         let other_admins = count_other_admins(&mut tx, caller.tenant.tenant_id, member_id).await?;
@@ -156,19 +164,21 @@ pub async fn remove(
         }
     }
 
-    sqlx::query("DELETE FROM tenant_users WHERE tenant_id = $1 AND id = $2")
-        .bind(caller.tenant.tenant_id)
-        .bind(member_id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM tenant_users WHERE tenant_id = $1 AND id = $2",
+        caller.tenant.tenant_id,
+        member_id,
+    )
+    .execute(&mut *tx)
+    .await?;
 
     // Revoke any active sessions this user holds against this tenant.
-    sqlx::query(
+    sqlx::query!(
         "UPDATE user_sessions SET revoked_at = now() \
          WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL",
+        caller.tenant.tenant_id,
+        user_id,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(user_id)
     .execute(&mut *tx)
     .await?;
 
@@ -222,13 +232,15 @@ async fn count_other_admins(
     tenant_id: Uuid,
     except_member_id: Uuid,
 ) -> AppResult<i64> {
-    let (n,): (i64,) = sqlx::query_as(
+    let n = sqlx::query_scalar!(
         "SELECT COUNT(*) FROM tenant_users \
          WHERE tenant_id = $1 AND role = 'admin' AND id <> $2",
+        tenant_id,
+        except_member_id,
     )
-    .bind(tenant_id)
-    .bind(except_member_id)
     .fetch_one(&mut **tx)
-    .await?;
+    .await?
+    // COUNT(*) is always non-null; unwrap is safe.
+    .unwrap_or(0);
     Ok(n)
 }

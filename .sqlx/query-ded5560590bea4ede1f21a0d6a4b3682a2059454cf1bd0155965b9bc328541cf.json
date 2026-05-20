@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tenant_theme SET logo_storage_key = NULL, logo_content_type = NULL, logo_bytes_size = NULL WHERE tenant_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ded5560590bea4ede1f21a0d6a4b3682a2059454cf1bd0155965b9bc328541cf"
+}

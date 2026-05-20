@@ -23,7 +23,7 @@ use crate::auth::AuthedCaller;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Serialize)]
 pub struct StackMapping {
     pub stack: String,
     pub skill: String,
@@ -34,16 +34,20 @@ pub async fn list(
     caller: AuthedCaller,
 ) -> AppResult<Json<Vec<StackMapping>>> {
     require_scope(&caller.scope, "tenant:admin")?;
-    let rows: Vec<StackMapping> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT stack_tag AS stack, skill_slug AS skill \
          FROM tenant_stack_mappings \
          WHERE tenant_id = $1 \
          ORDER BY stack_tag ASC, skill_slug ASC",
+        caller.tenant.tenant_id,
     )
-    .bind(caller.tenant.tenant_id)
     .fetch_all(state.db())
     .await?;
-    Ok(Json(rows))
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| StackMapping { stack: r.stack, skill: r.skill })
+            .collect::<Vec<_>>(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -74,17 +78,18 @@ pub async fn upsert(
 
     // Idempotent insert: re-adding the same (stack, skill) is a no-op
     // thanks to the composite PK + ON CONFLICT.
-    let row: StackMapping = sqlx::query_as(
+    let r = sqlx::query!(
         "INSERT INTO tenant_stack_mappings (tenant_id, stack_tag, skill_slug) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (tenant_id, stack_tag, skill_slug) DO UPDATE SET stack_tag = EXCLUDED.stack_tag \
          RETURNING stack_tag AS stack, skill_slug AS skill",
+        caller.tenant.tenant_id,
+        stack,
+        skill,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(stack)
-    .bind(skill)
     .fetch_one(state.db())
     .await?;
+    let row = StackMapping { stack: r.stack, skill: r.skill };
 
     audit::record_best_effort(
         state.db(),
@@ -113,13 +118,13 @@ pub async fn remove(
     require_scope(&caller.scope, "tenant:admin")?;
     let (stack, skill) = validate_pair(&body)?;
 
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "DELETE FROM tenant_stack_mappings \
          WHERE tenant_id = $1 AND stack_tag = $2 AND skill_slug = $3",
+        caller.tenant.tenant_id,
+        stack,
+        skill,
     )
-    .bind(caller.tenant.tenant_id)
-    .bind(stack)
-    .bind(skill)
     .execute(state.db())
     .await?;
 

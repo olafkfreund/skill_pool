@@ -61,20 +61,20 @@ pub async fn create_tenant(
     if !matches!(plan, "team" | "business" | "enterprise") {
         return Err(anyhow!("plan must be one of: team, business, enterprise"));
     }
-    let row: (Uuid,) = sqlx::query_as(
+    let row = sqlx::query!(
         "INSERT INTO tenants (slug, name, plan_tier) VALUES ($1, $2, $3) RETURNING id",
+        slug,
+        name,
+        plan,
     )
-    .bind(slug)
-    .bind(name)
-    .bind(plan)
     .fetch_one(db)
     .await
     .context("insert tenant")?;
     println!("tenant created");
-    println!("  id:   {}", row.0);
+    println!("  id:   {}", row.id);
     println!("  slug: {slug}");
     println!("  plan: {plan}");
-    Ok(CreatedTenant { id: row.0 })
+    Ok(CreatedTenant { id: row.id })
 }
 
 /// Set or clear a tenant's data-residency fields.
@@ -94,12 +94,13 @@ pub async fn set_tenant_residency(
     region: Option<&str>,
     storage_uri: Option<&str>,
 ) -> Result<()> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?.id;
 
     if let Some(uri) = storage_uri {
         crate::storage::Storage::from_uri(uri)
@@ -109,15 +110,15 @@ pub async fn set_tenant_residency(
     // COALESCE so a single-field update doesn't clobber the other.
     // Sentinel `''` distinguishes "leave alone" (NULL) from "explicitly
     // clear" (empty string treated as NULL by NULLIF).
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "UPDATE tenants
            SET region      = COALESCE(NULLIF($2, ''), region),
                storage_uri = COALESCE(NULLIF($3, ''), storage_uri)
          WHERE id = $1",
+        tenant_id,
+        region.unwrap_or(""),
+        storage_uri.unwrap_or(""),
     )
-    .bind(tenant_id)
-    .bind(region.unwrap_or(""))
-    .bind(storage_uri.unwrap_or(""))
     .execute(db)
     .await?;
     if result.rows_affected() != 1 {
@@ -146,23 +147,26 @@ pub async fn set_tenant_residency(
 ///
 /// Sessions in flight are not invalidated — policy applies at next login.
 pub async fn set_session_max_age(db: &PgPool, slug: &str, max_age_secs: Option<i32>) -> Result<()> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?.id;
 
-    let result = sqlx::query("UPDATE tenants SET session_max_age_secs = $2 WHERE id = $1")
-        .bind(tenant_id)
-        .bind(max_age_secs)
-        .execute(db)
-        .await
-        .with_context(|| {
-            // The CHECK constraint will reject out-of-range values; surface
-            // that as a clean error message instead of a raw sqlx message.
-            format!("set session_max_age_secs for `{slug}` (range 60..2592000 seconds)")
-        })?;
+    let result = sqlx::query!(
+        "UPDATE tenants SET session_max_age_secs = $2 WHERE id = $1",
+        tenant_id,
+        max_age_secs,
+    )
+    .execute(db)
+    .await
+    .with_context(|| {
+        // The CHECK constraint will reject out-of-range values; surface
+        // that as a clean error message instead of a raw sqlx message.
+        format!("set session_max_age_secs for `{slug}` (range 60..2592000 seconds)")
+    })?;
     if result.rows_affected() != 1 {
         return Err(anyhow!(
             "expected 1 row updated, got {}",
@@ -203,13 +207,14 @@ pub async fn set_tenant_banner(
     url: Option<&str>,
     clear: bool,
 ) -> Result<()> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) =
-        tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id =
+        tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?.id;
 
     // Three update modes mapped to a single SQL statement via $4 (clear flag):
     //   * clear=true  → set both to NULL unconditionally.
@@ -221,7 +226,7 @@ pub async fn set_tenant_banner(
     // hit CHECK, but we use a literal that text-input never produces — a
     // form-feed). Simpler than two queries.
     const KEEP: &str = "\x0c__skill_pool_keep__\x0c";
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "UPDATE tenants
            SET banner_text = CASE
                    WHEN $4 THEN NULL
@@ -236,12 +241,12 @@ pub async fn set_tenant_banner(
                    ELSE $3
                END
          WHERE id = $1",
+        tenant_id,
+        text.unwrap_or(KEEP),
+        url.unwrap_or(KEEP),
+        clear,
+        KEEP,
     )
-    .bind(tenant_id)
-    .bind(text.unwrap_or(KEEP))
-    .bind(url.unwrap_or(KEEP))
-    .bind(clear)
-    .bind(KEEP)
     .execute(db)
     .await
     .with_context(|| {
@@ -309,19 +314,24 @@ pub async fn set_tenant_rate_limits(
         return Err(anyhow!("pass --rpm, --burst, or --clear (at least one required)"));
     }
 
-    let tenant: Option<(Uuid, String)> = sqlx::query_as(
+    let tenant = sqlx::query!(
         "SELECT id, plan_tier FROM tenants WHERE slug = $1 AND status = 'active'",
+        slug,
     )
-    .bind(slug)
     .fetch_optional(db)
     .await?;
-    let (tenant_id, plan) =
-        tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+    let row = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?;
+    let tenant_id = row.id;
+    let plan = row.plan_tier;
 
     // Encode "leave alone" as -1 sentinel; CHECK constraint rejects
     // negatives so the column can never hold the sentinel. `--clear`
     // wins over individual values regardless of what was passed.
     const KEEP: i32 = -1;
+    // JUSTIFIED: CASE branches mix NULL (unknown type) with integer; the
+    // `$4 THEN NULL` arm confuses sqlx's compile-time type checker with
+    // "CASE types text and integer cannot be matched". Same pattern as
+    // notifications put_config and audit_siem put_config.
     let result = sqlx::query(
         "UPDATE tenants \
            SET rate_limit_rpm = CASE \
@@ -357,12 +367,14 @@ pub async fn set_tenant_rate_limits(
 
     // Read back so we can print the *effective* limits (plan default
     // when both columns are NULL).
-    let (rpm_override, burst_override): (Option<i32>, Option<i32>) = sqlx::query_as(
+    let readback = sqlx::query!(
         "SELECT rate_limit_rpm, rate_limit_burst FROM tenants WHERE id = $1",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_one(db)
     .await?;
+    let rpm_override = readback.rate_limit_rpm;
+    let burst_override = readback.rate_limit_burst;
     let effective =
         crate::rate_limit::resolve_for_tenant(&plan, rpm_override, burst_override);
 
@@ -399,15 +411,13 @@ pub async fn set_tenant_rate_limits(
 /// rows. Export to SIEM before calling this if your compliance regime
 /// requires retaining audit history beyond the tenant lifetime.
 pub async fn delete_tenant(db: &PgPool, slug: &str) -> Result<DeletedTenant> {
-    let tenant: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
-        .bind(slug)
+    let tenant = sqlx::query!("SELECT id FROM tenants WHERE slug = $1", slug)
         .fetch_optional(db)
         .await
         .context("look up tenant by slug")?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found"))?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found"))?.id;
 
-    let result = sqlx::query("DELETE FROM tenants WHERE id = $1")
-        .bind(tenant_id)
+    let result = sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
         .execute(db)
         .await
         .context("delete tenant row (cascade removes children)")?;
@@ -453,12 +463,13 @@ async fn create_token_inner(
     scope: &str,
     created_by: Option<Uuid>,
 ) -> Result<CreatedToken> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
     let raw = generate_token();
     let hashed = hash_token(&raw);
@@ -466,79 +477,69 @@ async fn create_token_inner(
     // pairs a UI row to whatever copy the caller pasted into a script.
     let prefix = raw.chars().take(12).collect::<String>();
 
-    let row: (Uuid, DateTime<Utc>) = sqlx::query_as(
+    let row = sqlx::query!(
         "INSERT INTO tenant_api_tokens \
             (tenant_id, hashed_token, name, scope, token_prefix, created_by) \
          VALUES ($1, $2, $3, $4, $5, $6) \
          RETURNING id, created_at",
+        tenant_id,
+        &hashed,
+        name,
+        scope,
+        &prefix,
+        created_by,
     )
-    .bind(tenant_id)
-    .bind(&hashed)
-    .bind(name)
-    .bind(scope)
-    .bind(&prefix)
-    .bind(created_by)
     .fetch_one(db)
     .await
     .context("insert token")?;
 
     Ok(CreatedToken {
-        id: row.0,
+        id: row.id,
         raw_token: raw,
         prefix,
-        created_at: row.1,
+        created_at: row.created_at,
     })
 }
 
 /// List API tokens minted by `user_id` in `tenant_slug`. Includes both
 /// active and revoked rows so the UI can render history. The `hashed_token`
 /// column is intentionally excluded from the projection — see `TokenSummary`.
-#[allow(clippy::type_complexity)] // sqlx query_as tuple type, one-off
 pub async fn list_user_tokens(
     db: &PgPool,
     tenant_slug: &str,
     user_id: Uuid,
 ) -> Result<Vec<TokenSummary>> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    let rows: Vec<(
-        Uuid,
-        String,
-        Option<String>,
-        String,
-        DateTime<Utc>,
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-    )> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT id, name, token_prefix, scope, created_at, last_used_at, revoked_at \
          FROM tenant_api_tokens \
          WHERE tenant_id = $1 AND created_by = $2 \
          ORDER BY created_at DESC",
+        tenant_id,
+        user_id,
     )
-    .bind(tenant_id)
-    .bind(user_id)
     .fetch_all(db)
     .await
     .context("list user tokens")?;
 
     Ok(rows
         .into_iter()
-        .map(
-            |(id, name, prefix, scope, created_at, last_used_at, revoked_at)| TokenSummary {
-                id,
-                name,
-                prefix,
-                scope,
-                created_at,
-                last_used_at,
-                revoked_at,
-            },
-        )
+        .map(|r| TokenSummary {
+            id: r.id,
+            name: r.name,
+            prefix: r.token_prefix,
+            scope: r.scope,
+            created_at: r.created_at,
+            last_used_at: r.last_used_at,
+            revoked_at: r.revoked_at,
+        })
         .collect())
 }
 
@@ -553,36 +554,37 @@ pub async fn revoke_user_token(
     user_id: Uuid,
     token_id: Uuid,
 ) -> Result<bool> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
     // Two-step: first check the row exists at all (so we can distinguish
     // 404 from "already revoked is fine"), then update. The UPDATE is a
     // no-op for already-revoked rows, which is the idempotency contract.
-    let exists: Option<(Uuid,)> = sqlx::query_as(
+    let exists = sqlx::query!(
         "SELECT id FROM tenant_api_tokens \
          WHERE tenant_id = $1 AND id = $2 AND created_by = $3",
+        tenant_id,
+        token_id,
+        user_id,
     )
-    .bind(tenant_id)
-    .bind(token_id)
-    .bind(user_id)
     .fetch_optional(db)
     .await?;
     if exists.is_none() {
         return Ok(false);
     }
 
-    sqlx::query(
+    sqlx::query!(
         "UPDATE tenant_api_tokens SET revoked_at = now() \
          WHERE tenant_id = $1 AND id = $2 AND created_by = $3 AND revoked_at IS NULL",
+        tenant_id,
+        token_id,
+        user_id,
     )
-    .bind(tenant_id)
-    .bind(token_id)
-    .bind(user_id)
     .execute(db)
     .await
     .context("revoke user token")?;
@@ -596,21 +598,22 @@ pub async fn set_stack_mapping(
     stack_tag: &str,
     skill_slug: &str,
 ) -> Result<()> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_stack_mappings (tenant_id, stack_tag, skill_slug) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (tenant_id, stack_tag, skill_slug) DO NOTHING",
+        tenant_id,
+        stack_tag,
+        skill_slug,
     )
-    .bind(tenant_id)
-    .bind(stack_tag)
-    .bind(skill_slug)
     .execute(db)
     .await
     .context("insert tenant_stack_mappings")?;
@@ -622,18 +625,19 @@ pub async fn set_stack_mapping(
 }
 
 pub async fn list_stack_mappings(db: &PgPool, tenant_slug: &str) -> Result<()> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    let rows: Vec<(String, String)> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT stack_tag, skill_slug FROM tenant_stack_mappings \
          WHERE tenant_id = $1 ORDER BY stack_tag, skill_slug",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_all(db)
     .await?;
 
@@ -641,8 +645,8 @@ pub async fn list_stack_mappings(db: &PgPool, tenant_slug: &str) -> Result<()> {
         println!("(no stack mappings for tenant `{tenant_slug}`)");
     } else {
         println!("stack mappings for tenant `{tenant_slug}`:");
-        for (tag, slug) in rows {
-            println!("  {tag:<24} -> {slug}");
+        for r in rows {
+            println!("  {:<24} -> {}", r.stack_tag, r.skill_slug);
         }
     }
     Ok(())
@@ -654,20 +658,21 @@ pub async fn remove_stack_mapping(
     stack_tag: &str,
     skill_slug: &str,
 ) -> Result<()> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "DELETE FROM tenant_stack_mappings \
          WHERE tenant_id = $1 AND stack_tag = $2 AND skill_slug = $3",
+        tenant_id,
+        stack_tag,
+        skill_slug,
     )
-    .bind(tenant_id)
-    .bind(stack_tag)
-    .bind(skill_slug)
     .execute(db)
     .await
     .context("delete tenant_stack_mappings")?;
@@ -689,21 +694,22 @@ pub async fn set_role_mapping(
     if !matches!(role, "viewer" | "publisher" | "curator" | "admin") {
         return Err(anyhow!("role must be viewer / publisher / curator / admin"));
     }
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_role_mappings (tenant_id, idp_group, role) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (tenant_id, idp_group) DO UPDATE SET role = EXCLUDED.role",
+        tenant_id,
+        idp_group,
+        role,
     )
-    .bind(tenant_id)
-    .bind(idp_group)
-    .bind(role)
     .execute(db)
     .await
     .context("upsert tenant_role_mappings")?;
@@ -715,18 +721,19 @@ pub async fn set_role_mapping(
 }
 
 pub async fn list_role_mappings(db: &PgPool, tenant_slug: &str) -> Result<()> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    let rows: Vec<(String, String)> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT idp_group, role FROM tenant_role_mappings \
          WHERE tenant_id = $1 ORDER BY idp_group",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_all(db)
     .await?;
 
@@ -734,28 +741,30 @@ pub async fn list_role_mappings(db: &PgPool, tenant_slug: &str) -> Result<()> {
         println!("(no role mappings for tenant `{tenant_slug}`)");
     } else {
         println!("role mappings for tenant `{tenant_slug}`:");
-        for (group, role) in rows {
-            println!("  {group:<40} -> {role}");
+        for r in rows {
+            println!("  {:<40} -> {}", r.idp_group, r.role);
         }
     }
     Ok(())
 }
 
 pub async fn remove_role_mapping(db: &PgPool, tenant_slug: &str, idp_group: &str) -> Result<()> {
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    let result =
-        sqlx::query("DELETE FROM tenant_role_mappings WHERE tenant_id = $1 AND idp_group = $2")
-            .bind(tenant_id)
-            .bind(idp_group)
-            .execute(db)
-            .await
-            .context("delete tenant_role_mappings")?;
+    let result = sqlx::query!(
+        "DELETE FROM tenant_role_mappings WHERE tenant_id = $1 AND idp_group = $2",
+        tenant_id,
+        idp_group,
+    )
+    .execute(db)
+    .await
+    .context("delete tenant_role_mappings")?;
 
     if result.rows_affected() == 0 {
         println!("(no mapping found for group `{idp_group}` on tenant `{tenant_slug}`)");
@@ -790,14 +799,15 @@ pub async fn set_saml(
             "idp_x509_cert must be PEM-encoded (include the BEGIN CERTIFICATE marker)"
         ));
     }
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_saml \
            (tenant_id, idp_entity_id, idp_sso_url, idp_x509_cert, sp_entity_id, default_role) \
          VALUES ($1, $2, $3, $4, $5, $6) \
@@ -807,13 +817,13 @@ pub async fn set_saml(
            idp_x509_cert = EXCLUDED.idp_x509_cert, \
            sp_entity_id = EXCLUDED.sp_entity_id, \
            default_role = EXCLUDED.default_role",
+        tenant_id,
+        idp_entity_id,
+        idp_sso_url,
+        idp_x509_cert,
+        sp_entity_id,
+        default_role,
     )
-    .bind(tenant_id)
-    .bind(idp_entity_id)
-    .bind(idp_sso_url)
-    .bind(idp_x509_cert)
-    .bind(sp_entity_id)
-    .bind(default_role)
     .execute(db)
     .await
     .context("upsert tenant_saml")?;
@@ -841,14 +851,15 @@ pub async fn set_sso(
             "default_role must be viewer / publisher / curator / admin"
         ));
     }
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_sso (tenant_id, issuer_url, client_id, client_secret, default_role) \
          VALUES ($1, $2, $3, $4, $5) \
          ON CONFLICT (tenant_id) DO UPDATE SET \
@@ -856,12 +867,12 @@ pub async fn set_sso(
            client_id = EXCLUDED.client_id, \
            client_secret = EXCLUDED.client_secret, \
            default_role = EXCLUDED.default_role",
+        tenant_id,
+        issuer_url,
+        client_id,
+        client_secret,
+        default_role,
     )
-    .bind(tenant_id)
-    .bind(issuer_url)
-    .bind(client_id)
-    .bind(client_secret)
-    .bind(default_role)
     .execute(db)
     .await
     .context("upsert tenant_sso")?;
@@ -887,36 +898,36 @@ pub async fn add_custom_domain(db: &PgPool, tenant_slug: &str, hostname: &str) -
     rand::thread_rng().fill_bytes(&mut buf);
     let token = hex::encode(buf);
 
-    let row: (Uuid,) = sqlx::query_as(
+    let row = sqlx::query!(
         "INSERT INTO tenant_custom_domains (tenant_id, hostname, verification_token) \
          VALUES ($1, $2, $3) RETURNING id",
+        tenant_id,
+        &host,
+        &token,
     )
-    .bind(tenant_id)
-    .bind(&host)
-    .bind(&token)
     .fetch_one(db)
     .await
     .with_context(|| format!("insert tenant_custom_domains row for {host}"))?;
 
     println!("custom domain added for tenant `{tenant_slug}`:");
-    println!("  id:       {}", row.0);
+    println!("  id:       {}", row.id);
     println!("  hostname: {host}");
     println!();
     println!("Ask the tenant admin to add this DNS record:");
     println!("  _skill-pool-verify.{host} TXT {token}");
     println!();
     println!("Then run:");
-    println!("  skill-pool-server admin custom-domain --tenant {tenant_slug} verify --id {}", row.0);
+    println!("  skill-pool-server admin custom-domain --tenant {tenant_slug} verify --id {}", row.id);
     Ok(())
 }
 
 pub async fn list_custom_domains(db: &PgPool, tenant_slug: &str) -> Result<()> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
-    let rows: Vec<(Uuid, String, String, Option<String>)> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT id, hostname, status, last_error FROM tenant_custom_domains \
          WHERE tenant_id = $1 ORDER BY created_at DESC",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_all(db)
     .await?;
 
@@ -924,7 +935,8 @@ pub async fn list_custom_domains(db: &PgPool, tenant_slug: &str) -> Result<()> {
         println!("(no custom domains for tenant `{tenant_slug}`)");
     } else {
         println!("custom domains for tenant `{tenant_slug}`:");
-        for (id, hostname, status, last_error) in rows {
+        for r in rows {
+            let (id, hostname, status, last_error) = (r.id, r.hostname, r.status, r.last_error);
             print!("  {hostname:<40} {status:<10} {id}");
             if let Some(e) = last_error {
                 if status == "failed" {
@@ -939,15 +951,16 @@ pub async fn list_custom_domains(db: &PgPool, tenant_slug: &str) -> Result<()> {
 
 pub async fn verify_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) -> Result<()> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
-    let row: Option<(String, String)> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT hostname, verification_token FROM tenant_custom_domains \
          WHERE id = $1 AND tenant_id = $2",
+        id,
+        tenant_id,
     )
-    .bind(id)
-    .bind(tenant_id)
     .fetch_optional(db)
     .await?;
-    let (hostname, _token) = row.ok_or_else(|| anyhow!("custom domain {id} not found"))?;
+    let r = row.ok_or_else(|| anyhow!("custom domain {id} not found"))?;
+    let hostname = r.hostname;
     // The route handler does the heavy lifting; the CLI just nudges the
     // tenant admin to call the endpoint. We could re-implement the
     // hickory lookup here, but keeping a single code path means one
@@ -969,16 +982,16 @@ pub async fn verify_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) -> R
 /// when DNS verification is impractical (air-gapped deploys).
 pub async fn activate_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) -> Result<()> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "UPDATE tenant_custom_domains \
             SET status = 'active', \
                 last_checked_at = now(), \
                 last_error = NULL, \
                 activated_at = COALESCE(activated_at, now()) \
           WHERE id = $1 AND tenant_id = $2",
+        id,
+        tenant_id,
     )
-    .bind(id)
-    .bind(tenant_id)
     .execute(db)
     .await?;
     if result.rows_affected() != 1 {
@@ -991,11 +1004,11 @@ pub async fn activate_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) ->
 
 pub async fn remove_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) -> Result<()> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "DELETE FROM tenant_custom_domains WHERE id = $1 AND tenant_id = $2",
+        id,
+        tenant_id,
     )
-    .bind(id)
-    .bind(tenant_id)
     .execute(db)
     .await?;
     if result.rows_affected() == 0 {
@@ -1007,12 +1020,13 @@ pub async fn remove_custom_domain(db: &PgPool, tenant_slug: &str, id: Uuid) -> R
 }
 
 async fn lookup_tenant_id(db: &PgPool, tenant_slug: &str) -> Result<Uuid> {
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    Ok(row.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.0)
+    let row = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    Ok(row.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id)
 }
 
 fn normalize_admin_hostname(raw: &str) -> Result<String> {
@@ -1053,12 +1067,12 @@ pub async fn backfill_embeddings(
 
     let tenant_id: Option<Uuid> = match tenant_slug {
         Some(slug) => {
-            let row: Option<(Uuid,)> =
-                sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
-                    .bind(slug)
-                    .fetch_optional(db)
-                    .await?;
-            Some(row.ok_or_else(|| anyhow!("tenant `{slug}` not found"))?.0)
+            // Uses query! (not query_as!) — no status filter so it works for
+            // the backfill tool which needs to find any tenant by slug.
+            let row = sqlx::query!("SELECT id FROM tenants WHERE slug = $1", slug)
+                .fetch_optional(db)
+                .await?;
+            Some(row.ok_or_else(|| anyhow!("tenant `{slug}` not found"))?.id)
         }
         None => None,
     };
@@ -1069,6 +1083,10 @@ pub async fn backfill_embeddings(
 
     while processed < limit {
         let remaining = (limit - processed).min(page_size as usize) as i64;
+        // JUSTIFIED runtime-checked: two structurally-different queries selected
+        // at runtime based on whether tenant_id is Some or None. The macro
+        // requires a single string literal; conditional WHERE cannot be expressed
+        // as a compile-time literal without duplicating the query body.
         let rows: Vec<(Uuid, String, String)> = match tenant_id {
             Some(t) => sqlx::query_as(
                 "SELECT id, slug, description \
@@ -1115,6 +1133,10 @@ pub async fn backfill_embeddings(
                 continue;
             }
             let lit = crate::embedding::vector_to_pg_literal(&embedding);
+            // JUSTIFIED runtime-checked: `description_embedding` is a `vector`
+            // pg type not natively supported by sqlx; the `$1::text::vector`
+            // cast must be built from a Rust-side String literal — query! cannot
+            // express this cast pattern without a literal type override.
             sqlx::query(
                 "UPDATE skills SET description_embedding = $1::text::vector \
                  WHERE id = $2",
@@ -1170,17 +1192,21 @@ pub async fn set_email_branding(
         return Err(anyhow!("smtp_password must not be empty"));
     }
 
-    let tenant: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1 AND status = 'active'")
-            .bind(tenant_slug)
-            .fetch_optional(db)
-            .await?;
-    let (tenant_id,) =
-        tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found or suspended"))?;
+    let tenant = sqlx::query!(
+        "SELECT id FROM tenants WHERE slug = $1 AND status = 'active'",
+        tenant_slug,
+    )
+    .fetch_optional(db)
+    .await?;
+    let tenant_id =
+        tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found or suspended"))?.id;
 
     let enc = crate::email_branding::encrypt_password(args.smtp_password);
+    let from_name = args.from_name.map(str::trim).filter(|s| !s.is_empty());
+    let reply_to = args.reply_to.map(str::trim).filter(|s| !s.is_empty());
+    let footer_html = args.footer_html.filter(|s| !s.is_empty());
 
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO tenant_email_branding \
             (tenant_id, from_addr, from_name, reply_to, smtp_url, smtp_password_enc, footer_html, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
@@ -1192,14 +1218,14 @@ pub async fn set_email_branding(
             smtp_password_enc = EXCLUDED.smtp_password_enc, \
             footer_html = EXCLUDED.footer_html, \
             updated_at = now()",
+        tenant_id,
+        args.from_addr.trim(),
+        from_name,
+        reply_to,
+        args.smtp_url,
+        &enc,
+        footer_html,
     )
-    .bind(tenant_id)
-    .bind(args.from_addr.trim())
-    .bind(args.from_name.map(str::trim).filter(|s| !s.is_empty()))
-    .bind(args.reply_to.map(str::trim).filter(|s| !s.is_empty()))
-    .bind(args.smtp_url)
-    .bind(&enc)
-    .bind(args.footer_html.filter(|s| !s.is_empty()))
     .execute(db)
     .await
     .context("upsert tenant_email_branding")?;
@@ -1231,11 +1257,10 @@ pub async fn email_branding_test(db: &PgPool, tenant_slug: &str, recipient: &str
     if !crate::email_branding::looks_like_email(recipient) {
         return Err(anyhow!("recipient must be a valid email address"));
     }
-    let tenant: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
-        .bind(tenant_slug)
+    let tenant = sqlx::query!("SELECT id FROM tenants WHERE slug = $1", tenant_slug)
         .fetch_optional(db)
         .await?;
-    let (tenant_id,) = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?;
+    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
 
     let row = crate::email_branding::load_row(db, tenant_id)
         .await?
@@ -1304,22 +1329,6 @@ pub struct ProjectPatch {
     pub plan_auto_refresh_interval_secs: Option<Option<i32>>,
 }
 
-// Private type alias to avoid repetitive complex tuple type annotations in
-// query_as calls. Clippy `type_complexity` lint is suppressed on the
-// functions that use it (same pattern as `list_user_tokens` above).
-//
-// Columns: (id, slug, name, description, git_remote, stack_tags, created_at, updated_at)
-type ProjectRow = (
-    Uuid,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Vec<String>,
-    chrono::DateTime<chrono::Utc>,
-    chrono::DateTime<chrono::Utc>,
-);
-
 /// Normalise a git remote URL so that SSH and HTTPS forms of the same
 /// repository resolve to the same string, enabling reliable lookup.
 ///
@@ -1385,30 +1394,31 @@ pub async fn create_project(
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
     let normalized_remote = git_remote.map(normalize_git_remote);
 
-    let row: ProjectRow = sqlx::query_as(
-            "INSERT INTO tenant_projects \
-               (tenant_id, slug, name, description, git_remote) \
-             VALUES ($1, $2, $3, $4, $5) \
-             RETURNING id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at",
-        )
-        .bind(tenant_id)
-        .bind(slug)
-        .bind(name)
-        .bind(description)
-        .bind(normalized_remote.as_deref())
-        .fetch_one(db)
-        .await
-        .with_context(|| format!("create project `{slug}` for tenant `{tenant_slug}`"))?;
+    let row = sqlx::query!(
+        "INSERT INTO tenant_projects \
+           (tenant_id, slug, name, description, git_remote) \
+         VALUES ($1, $2, $3, $4, $5) \
+         RETURNING id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at",
+        tenant_id,
+        slug,
+        name,
+        description,
+        normalized_remote.as_deref(),
+    )
+    .fetch_one(db)
+    .await
+    .with_context(|| format!("create project `{slug}` for tenant `{tenant_slug}`"))?;
 
     Ok(Project {
-        id: row.0,
-        slug: row.1,
-        name: row.2,
-        description: row.3,
-        git_remote: row.4,
-        stack_tags: row.5,
-        created_at: row.6,
-        updated_at: row.7,
+        id: row.id,
+        // slug::text cast makes sqlx name this field `slug`
+        slug: row.slug.unwrap_or_default(),
+        name: row.name,
+        description: row.description,
+        git_remote: row.git_remote,
+        stack_tags: row.stack_tags,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     })
 }
 
@@ -1421,44 +1431,44 @@ pub async fn get_project(
 ) -> Result<Option<ProjectWithItems>> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let project_row: Option<ProjectRow> = sqlx::query_as(
-            "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
-             FROM tenant_projects \
-             WHERE tenant_id = $1 AND slug = $2",
-        )
-        .bind(tenant_id)
-        .bind(slug)
-        .fetch_optional(db)
-        .await?;
+    let project_row = sqlx::query!(
+        "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
+         FROM tenant_projects \
+         WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        slug,
+    )
+    .fetch_optional(db)
+    .await?;
 
     let Some(p) = project_row else {
         return Ok(None);
     };
-    let project_id = p.0;
+    let project_id = p.id;
     let project = Project {
         id: project_id,
-        slug: p.1,
-        name: p.2,
-        description: p.3,
-        git_remote: p.4,
-        stack_tags: p.5,
-        created_at: p.6,
-        updated_at: p.7,
+        slug: p.slug.unwrap_or_default(),
+        name: p.name,
+        description: p.description,
+        git_remote: p.git_remote,
+        stack_tags: p.stack_tags,
+        created_at: p.created_at,
+        updated_at: p.updated_at,
     };
 
-    let item_rows: Vec<(String, String, i32)> = sqlx::query_as(
+    let item_rows = sqlx::query!(
         "SELECT skill_slug, kind, position \
          FROM tenant_project_items \
          WHERE project_id = $1 \
          ORDER BY position ASC, skill_slug ASC",
+        project_id,
     )
-    .bind(project_id)
     .fetch_all(db)
     .await?;
 
     let items = item_rows
         .into_iter()
-        .map(|(skill_slug, kind, position)| ProjectItem { skill_slug, kind, position })
+        .map(|r| ProjectItem { skill_slug: r.skill_slug, kind: r.kind, position: r.position })
         .collect();
 
     Ok(Some(ProjectWithItems { project, items }))
@@ -1468,53 +1478,40 @@ pub async fn get_project(
 pub async fn list_projects(db: &PgPool, tenant_slug: &str) -> Result<Vec<Project>> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let rows: Vec<ProjectRow> = sqlx::query_as(
-            "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
-             FROM tenant_projects \
-             WHERE tenant_id = $1 \
-             ORDER BY slug ASC",
-        )
-        .bind(tenant_id)
-        .fetch_all(db)
-        .await?;
+    let rows = sqlx::query!(
+        "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
+         FROM tenant_projects \
+         WHERE tenant_id = $1 \
+         ORDER BY slug ASC",
+        tenant_id,
+    )
+    .fetch_all(db)
+    .await?;
 
     Ok(rows
         .into_iter()
         .map(|r| Project {
-            id: r.0,
-            slug: r.1,
-            name: r.2,
-            description: r.3,
-            git_remote: r.4,
-            stack_tags: r.5,
-            created_at: r.6,
-            updated_at: r.7,
+            id: r.id,
+            slug: r.slug.unwrap_or_default(),
+            name: r.name,
+            description: r.description,
+            git_remote: r.git_remote,
+            stack_tags: r.stack_tags,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
         })
         .collect())
 }
 
 /// Like `list_projects` but co-fetches the item count per project in a single
 /// query. Lets the admin list UI render an "Items" column without N+1.
-#[allow(clippy::type_complexity)] // sqlx tuple — one-off projection
 pub async fn list_projects_with_counts(
     db: &PgPool,
     tenant_slug: &str,
 ) -> Result<Vec<(Project, i64)>> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    type Row = (
-        uuid::Uuid,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Vec<String>,
-        chrono::DateTime<chrono::Utc>,
-        chrono::DateTime<chrono::Utc>,
-        i64,
-    );
-
-    let rows: Vec<Row> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT tp.id, tp.slug::text, tp.name, tp.description, tp.git_remote, \
                 tp.stack_tags, tp.created_at, tp.updated_at, \
                 COALESCE(ic.cnt, 0) AS item_count \
@@ -1526,8 +1523,8 @@ pub async fn list_projects_with_counts(
          ) ic ON ic.project_id = tp.id \
          WHERE tp.tenant_id = $1 \
          ORDER BY tp.slug ASC",
+        tenant_id,
     )
-    .bind(tenant_id)
     .fetch_all(db)
     .await?;
 
@@ -1535,16 +1532,16 @@ pub async fn list_projects_with_counts(
         .into_iter()
         .map(|r| {
             let project = Project {
-                id: r.0,
-                slug: r.1,
-                name: r.2,
-                description: r.3,
-                git_remote: r.4,
-                stack_tags: r.5,
-                created_at: r.6,
-                updated_at: r.7,
+                id: r.id,
+                slug: r.slug.unwrap_or_default(),
+                name: r.name,
+                description: r.description,
+                git_remote: r.git_remote,
+                stack_tags: r.stack_tags,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
             };
-            (project, r.8)
+            (project, r.item_count.unwrap_or(0))
         })
         .collect())
 }
@@ -1582,63 +1579,62 @@ pub async fn update_project(
     //
     // Simpler approach: always write all columns, using COALESCE to skip
     // unchanged ones. We read the current row first so we can fill gaps.
-    type CurRow = (String, Option<String>, Option<String>, Vec<String>, Option<i32>);
-    let current: Option<CurRow> = sqlx::query_as(
+    let current = sqlx::query!(
         "SELECT name, description, git_remote, stack_tags, plan_auto_refresh_interval_secs \
          FROM tenant_projects \
          WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        slug,
     )
-    .bind(tenant_id)
-    .bind(slug)
     .fetch_optional(db)
     .await?;
 
-    let (cur_name, cur_desc, cur_remote, cur_tags, cur_refresh) =
-        current.ok_or_else(|| anyhow!("project `{slug}` not found for tenant `{tenant_slug}`"))?;
+    let cur = current.ok_or_else(|| anyhow!("project `{slug}` not found for tenant `{tenant_slug}`"))?;
 
-    let new_name = patch.name.as_deref().unwrap_or(&cur_name).to_string();
+    let new_name = patch.name.as_deref().unwrap_or(&cur.name).to_string();
     let new_desc: Option<String> = match patch.description {
-        None => cur_desc,
+        None => cur.description,
         Some(v) => v,
     };
     let new_remote: Option<String> = match patch.git_remote {
-        None => cur_remote,
+        None => cur.git_remote,
         Some(None) => None,
         Some(Some(_)) => normalized_remote,
     };
-    let new_tags: Vec<String> = patch.stack_tags.unwrap_or(cur_tags);
+    let new_tags: Vec<String> = patch.stack_tags.unwrap_or(cur.stack_tags);
     let new_refresh: Option<i32> = match patch.plan_auto_refresh_interval_secs {
-        None => cur_refresh,
+        None => cur.plan_auto_refresh_interval_secs,
         Some(v) => v,
     };
 
-    let row: ProjectRow = sqlx::query_as(
-            "UPDATE tenant_projects \
-             SET name = $3, description = $4, git_remote = $5, stack_tags = $6, \
-                 plan_auto_refresh_interval_secs = $7, updated_at = now() \
-             WHERE tenant_id = $1 AND slug = $2 \
-             RETURNING id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at",
-        )
-        .bind(tenant_id)
-        .bind(slug)
-        .bind(&new_name)
-        .bind(&new_desc)
-        .bind(&new_remote)
-        .bind(&new_tags)
-        .bind(new_refresh)
-        .fetch_one(db)
-        .await
-        .with_context(|| format!("update project `{slug}` for tenant `{tenant_slug}`"))?;
+    let row = sqlx::query!(
+        "UPDATE tenant_projects \
+         SET name = $3, description = $4, git_remote = $5, stack_tags = $6, \
+             plan_auto_refresh_interval_secs = $7, updated_at = now() \
+         WHERE tenant_id = $1 AND slug = $2 \
+         RETURNING id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at",
+        tenant_id,
+        slug,
+        new_name,
+        new_desc,
+        new_remote,
+        new_tags.as_slice(),
+        new_refresh,
+    )
+    .fetch_one(db)
+    .await
+    .with_context(|| format!("update project `{slug}` for tenant `{tenant_slug}`"))?;
 
     Ok(Project {
-        id: row.0,
-        slug: row.1,
-        name: row.2,
-        description: row.3,
-        git_remote: row.4,
-        stack_tags: row.5,
-        created_at: row.6,
-        updated_at: row.7,
+        id: row.id,
+        // slug::text cast returns Option<String>; NOT NULL in schema.
+        slug: row.slug.unwrap_or_default(),
+        name: row.name,
+        description: row.description,
+        git_remote: row.git_remote,
+        stack_tags: row.stack_tags,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     })
 }
 
@@ -1647,11 +1643,11 @@ pub async fn update_project(
 pub async fn delete_project(db: &PgPool, tenant_slug: &str, slug: &str) -> Result<bool> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "DELETE FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        slug,
     )
-    .bind(tenant_id)
-    .bind(slug)
     .execute(db)
     .await
     .with_context(|| format!("delete project `{slug}` for tenant `{tenant_slug}`"))?;
@@ -1677,33 +1673,35 @@ pub async fn set_project_items(
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
     // Resolve the project id within this tenant.
-    let proj: Option<(Uuid,)> = sqlx::query_as(
+    let proj = sqlx::query!(
         "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        project_slug,
     )
-    .bind(tenant_id)
-    .bind(project_slug)
     .fetch_optional(db)
     .await?;
-    let (project_id,) =
-        proj.ok_or_else(|| anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`"))?;
+    let project_id =
+        proj.ok_or_else(|| anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`"))?.id;
 
     let mut tx = db.begin().await?;
 
-    sqlx::query("DELETE FROM tenant_project_items WHERE project_id = $1")
-        .bind(project_id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM tenant_project_items WHERE project_id = $1",
+        project_id,
+    )
+    .execute(&mut *tx)
+    .await?;
 
     for (position, (skill_slug, kind)) in items.iter().enumerate() {
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO tenant_project_items (project_id, skill_slug, kind, position) \
              VALUES ($1, $2, $3, $4) \
              ON CONFLICT (project_id, skill_slug, kind) DO UPDATE SET position = EXCLUDED.position",
+            project_id,
+            skill_slug,
+            kind,
+            position as i32,
         )
-        .bind(project_id)
-        .bind(skill_slug)
-        .bind(kind)
-        .bind(position as i32)
         .execute(&mut *tx)
         .await?;
     }
@@ -1727,25 +1725,26 @@ pub async fn resolve_project_by_remote(
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
     let normalized = normalize_git_remote(git_remote);
 
-    let row: Option<ProjectRow> = sqlx::query_as(
-            "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
-             FROM tenant_projects \
-             WHERE tenant_id = $1 AND git_remote = $2",
-        )
-        .bind(tenant_id)
-        .bind(&normalized)
-        .fetch_optional(db)
-        .await?;
+    let row = sqlx::query!(
+        "SELECT id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at \
+         FROM tenant_projects \
+         WHERE tenant_id = $1 AND git_remote = $2",
+        tenant_id,
+        normalized,
+    )
+    .fetch_optional(db)
+    .await?;
 
     Ok(row.map(|r| Project {
-        id: r.0,
-        slug: r.1,
-        name: r.2,
-        description: r.3,
-        git_remote: r.4,
-        stack_tags: r.5,
-        created_at: r.6,
-        updated_at: r.7,
+        id: r.id,
+        // slug::text cast returns Option<String>; NOT NULL in schema.
+        slug: r.slug.unwrap_or_default(),
+        name: r.name,
+        description: r.description,
+        git_remote: r.git_remote,
+        stack_tags: r.stack_tags,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
     }))
 }
 
@@ -1780,44 +1779,6 @@ pub enum RefreshOutcome {
     Updated(Box<Plan>),
     /// Fetch or parse failed; last-good version retained.
     Failed(String),
-}
-
-// Private type alias to avoid repeating the long tuple in multiple query_as calls.
-// Columns: (id, project_id, version, body_md, body_sha256, source_type,
-//           source_url, source_etag, imported_by, imported_at, status,
-//           fetch_error, fetch_error_at)
-type PlanRow = (
-    Uuid,
-    Uuid,
-    i32,
-    String,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<Uuid>,
-    chrono::DateTime<chrono::Utc>,
-    String,
-    Option<String>,
-    Option<chrono::DateTime<chrono::Utc>>,
-);
-
-fn plan_from_row(r: PlanRow) -> Plan {
-    Plan {
-        id: r.0,
-        project_id: r.1,
-        version: r.2,
-        body_md: r.3,
-        body_sha256: r.4,
-        source_type: r.5,
-        source_url: r.6,
-        source_etag: r.7,
-        imported_by: r.8,
-        imported_at: r.9,
-        status: r.10,
-        fetch_error: r.11,
-        fetch_error_at: r.12,
-    }
 }
 
 /// Compute SHA-256 of `body_md` and return it as lowercase hex.
@@ -1868,58 +1829,74 @@ pub async fn import_plan(db: &PgPool, args: ImportPlanArgs<'_>) -> Result<Plan> 
 
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let proj: Option<(Uuid,)> = sqlx::query_as(
+    let proj = sqlx::query!(
         "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        project_slug,
     )
-    .bind(tenant_id)
-    .bind(project_slug)
     .fetch_optional(db)
     .await?;
-    let (project_id,) = proj.ok_or_else(|| {
+    let project_id = proj.ok_or_else(|| {
         anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`")
-    })?;
+    })?.id;
 
     let new_hash = sha256_hex(body_md);
 
     // Dedup: if active row has same content, return it as-is.
-    let existing: Option<PlanRow> = sqlx::query_as(
+    let existing = sqlx::query!(
         "SELECT id, project_id, version, body_md, body_sha256, source_type, \
                 source_url, source_etag, imported_by, imported_at, status, \
                 fetch_error, fetch_error_at \
          FROM tenant_project_plans \
          WHERE project_id = $1 AND status = 'active' AND body_sha256 = $2",
+        project_id,
+        new_hash,
     )
-    .bind(project_id)
-    .bind(&new_hash)
     .fetch_optional(db)
     .await?;
 
-    if let Some(row) = existing {
-        return Ok(plan_from_row(row));
+    if let Some(r) = existing {
+        return Ok(Plan {
+            id: r.id,
+            project_id: r.project_id,
+            version: r.version,
+            body_md: r.body_md,
+            body_sha256: r.body_sha256,
+            source_type: r.source_type,
+            source_url: r.source_url,
+            source_etag: r.source_etag,
+            imported_by: r.imported_by,
+            imported_at: r.imported_at,
+            status: r.status,
+            fetch_error: r.fetch_error,
+            fetch_error_at: r.fetch_error_at,
+        });
     }
 
     let mut tx = db.begin().await?;
 
     // Get next version number.
-    let next_version: i32 = sqlx::query_scalar(
+    let next_version: i32 = sqlx::query_scalar!(
         "SELECT COALESCE(MAX(version), 0) + 1 FROM tenant_project_plans WHERE project_id = $1",
+        project_id,
     )
-    .bind(project_id)
     .fetch_one(&mut *tx)
-    .await?;
+    .await?
+    // COALESCE always produces a value; unwrap is safe.
+    .unwrap_or(1);
 
     // Mark any existing active row as superseded before inserting the new one
     // (avoids transient conflict on the partial unique index).
-    sqlx::query(
+    sqlx::query!(
         "UPDATE tenant_project_plans SET status = 'superseded' \
          WHERE project_id = $1 AND status = 'active'",
+        project_id,
     )
-    .bind(project_id)
     .execute(&mut *tx)
     .await?;
 
     // Insert new active row.
-    let row: PlanRow = sqlx::query_as(
+    let r = sqlx::query!(
         "INSERT INTO tenant_project_plans \
            (tenant_id, project_id, version, body_md, body_sha256, \
             source_type, source_url, source_etag, imported_by, status) \
@@ -1927,16 +1904,16 @@ pub async fn import_plan(db: &PgPool, args: ImportPlanArgs<'_>) -> Result<Plan> 
          RETURNING id, project_id, version, body_md, body_sha256, source_type, \
                    source_url, source_etag, imported_by, imported_at, status, \
                    fetch_error, fetch_error_at",
+        tenant_id,
+        project_id,
+        next_version,
+        body_md,
+        new_hash,
+        source_type,
+        source_url,
+        etag,
+        imported_by,
     )
-    .bind(tenant_id)
-    .bind(project_id)
-    .bind(next_version)
-    .bind(body_md)
-    .bind(&new_hash)
-    .bind(source_type)
-    .bind(source_url)
-    .bind(etag)
-    .bind(imported_by)
     .fetch_one(&mut *tx)
     .await
     .with_context(|| {
@@ -1944,7 +1921,21 @@ pub async fn import_plan(db: &PgPool, args: ImportPlanArgs<'_>) -> Result<Plan> 
     })?;
 
     tx.commit().await?;
-    Ok(plan_from_row(row))
+    Ok(Plan {
+        id: r.id,
+        project_id: r.project_id,
+        version: r.version,
+        body_md: r.body_md,
+        body_sha256: r.body_sha256,
+        source_type: r.source_type,
+        source_url: r.source_url,
+        source_etag: r.source_etag,
+        imported_by: r.imported_by,
+        imported_at: r.imported_at,
+        status: r.status,
+        fetch_error: r.fetch_error,
+        fetch_error_at: r.fetch_error_at,
+    })
 }
 
 /// Return the active plan for a project, or `None` if no plan has been imported.
@@ -1955,31 +1946,46 @@ pub async fn get_active_plan(
 ) -> Result<Option<Plan>> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let proj: Option<(Uuid,)> = sqlx::query_as(
+    let proj = sqlx::query!(
         "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        project_slug,
     )
-    .bind(tenant_id)
-    .bind(project_slug)
     .fetch_optional(db)
     .await?;
-    let Some((project_id,)) = proj else {
+    let Some(proj) = proj else {
         return Err(anyhow!(
             "project `{project_slug}` not found for tenant `{tenant_slug}`"
         ));
     };
+    let project_id = proj.id;
 
-    let row: Option<PlanRow> = sqlx::query_as(
+    let row = sqlx::query!(
         "SELECT id, project_id, version, body_md, body_sha256, source_type, \
                 source_url, source_etag, imported_by, imported_at, status, \
                 fetch_error, fetch_error_at \
          FROM tenant_project_plans \
          WHERE project_id = $1 AND status = 'active'",
+        project_id,
     )
-    .bind(project_id)
     .fetch_optional(db)
     .await?;
 
-    Ok(row.map(plan_from_row))
+    Ok(row.map(|r| Plan {
+        id: r.id,
+        project_id: r.project_id,
+        version: r.version,
+        body_md: r.body_md,
+        body_sha256: r.body_sha256,
+        source_type: r.source_type,
+        source_url: r.source_url,
+        source_etag: r.source_etag,
+        imported_by: r.imported_by,
+        imported_at: r.imported_at,
+        status: r.status,
+        fetch_error: r.fetch_error,
+        fetch_error_at: r.fetch_error_at,
+    }))
 }
 
 /// List plan versions for a project in descending version order.
@@ -1993,20 +1999,21 @@ pub async fn list_plan_versions(
 ) -> Result<Vec<Plan>> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let proj: Option<(Uuid,)> = sqlx::query_as(
+    let proj = sqlx::query!(
         "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        project_slug,
     )
-    .bind(tenant_id)
-    .bind(project_slug)
     .fetch_optional(db)
     .await?;
-    let Some((project_id,)) = proj else {
+    let Some(proj) = proj else {
         return Err(anyhow!(
             "project `{project_slug}` not found for tenant `{tenant_slug}`"
         ));
     };
+    let project_id = proj.id;
 
-    let rows: Vec<PlanRow> = sqlx::query_as(
+    let rows = sqlx::query!(
         "SELECT id, project_id, version, body_md, body_sha256, source_type, \
                 source_url, source_etag, imported_by, imported_at, status, \
                 fetch_error, fetch_error_at \
@@ -2014,13 +2021,30 @@ pub async fn list_plan_versions(
          WHERE project_id = $1 \
          ORDER BY version DESC \
          LIMIT $2",
+        project_id,
+        limit,
     )
-    .bind(project_id)
-    .bind(limit)
     .fetch_all(db)
     .await?;
 
-    Ok(rows.into_iter().map(plan_from_row).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| Plan {
+            id: r.id,
+            project_id: r.project_id,
+            version: r.version,
+            body_md: r.body_md,
+            body_sha256: r.body_sha256,
+            source_type: r.source_type,
+            source_url: r.source_url,
+            source_etag: r.source_etag,
+            imported_by: r.imported_by,
+            imported_at: r.imported_at,
+            status: r.status,
+            fetch_error: r.fetch_error,
+            fetch_error_at: r.fetch_error_at,
+        })
+        .collect())
 }
 
 /// Activate a historical version (revert). Atomically:
@@ -2034,25 +2058,26 @@ pub async fn activate_plan_version(
 ) -> Result<Plan> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let proj: Option<(Uuid,)> = sqlx::query_as(
+    let proj = sqlx::query!(
         "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        project_slug,
     )
-    .bind(tenant_id)
-    .bind(project_slug)
     .fetch_optional(db)
     .await?;
-    let Some((project_id,)) = proj else {
+    let Some(proj) = proj else {
         return Err(anyhow!(
             "project `{project_slug}` not found for tenant `{tenant_slug}`"
         ));
     };
+    let project_id = proj.id;
 
     // Verify the target version exists.
-    let target: Option<(Uuid,)> = sqlx::query_as(
+    let target = sqlx::query!(
         "SELECT id FROM tenant_project_plans WHERE project_id = $1 AND version = $2",
+        project_id,
+        version,
     )
-    .bind(project_id)
-    .bind(version)
     .fetch_optional(db)
     .await?;
     if target.is_none() {
@@ -2064,25 +2089,25 @@ pub async fn activate_plan_version(
     let mut tx = db.begin().await?;
 
     // Supersede current active (if any).
-    sqlx::query(
+    sqlx::query!(
         "UPDATE tenant_project_plans SET status = 'superseded' \
          WHERE project_id = $1 AND status = 'active'",
+        project_id,
     )
-    .bind(project_id)
     .execute(&mut *tx)
     .await?;
 
     // Activate the target version and clear any stale fetch_error from it.
-    let row: PlanRow = sqlx::query_as(
+    let r = sqlx::query!(
         "UPDATE tenant_project_plans \
          SET status = 'active', fetch_error = NULL, fetch_error_at = NULL \
          WHERE project_id = $1 AND version = $2 \
          RETURNING id, project_id, version, body_md, body_sha256, source_type, \
                    source_url, source_etag, imported_by, imported_at, status, \
                    fetch_error, fetch_error_at",
+        project_id,
+        version,
     )
-    .bind(project_id)
-    .bind(version)
     .fetch_one(&mut *tx)
     .await
     .with_context(|| {
@@ -2090,7 +2115,21 @@ pub async fn activate_plan_version(
     })?;
 
     tx.commit().await?;
-    Ok(plan_from_row(row))
+    Ok(Plan {
+        id: r.id,
+        project_id: r.project_id,
+        version: r.version,
+        body_md: r.body_md,
+        body_sha256: r.body_sha256,
+        source_type: r.source_type,
+        source_url: r.source_url,
+        source_etag: r.source_etag,
+        imported_by: r.imported_by,
+        imported_at: r.imported_at,
+        status: r.status,
+        fetch_error: r.fetch_error,
+        fetch_error_at: r.fetch_error_at,
+    })
 }
 
 /// Re-fetch the plan from its source URL and import a new version if the
@@ -2113,35 +2152,39 @@ pub async fn refresh_plan_from_source(
 ) -> Result<RefreshOutcome> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let proj: Option<(Uuid,)> = sqlx::query_as(
+    let proj = sqlx::query!(
         "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        project_slug,
     )
-    .bind(tenant_id)
-    .bind(project_slug)
     .fetch_optional(db)
     .await?;
-    let Some((project_id,)) = proj else {
+    let Some(proj) = proj else {
         return Err(anyhow!(
             "project `{project_slug}` not found for tenant `{tenant_slug}`"
         ));
     };
+    let project_id = proj.id;
 
     // Load the active plan — we need its source_url and source_type.
-    let active: Option<(Uuid, Option<String>, String, String, i32)> = sqlx::query_as(
+    let active = sqlx::query!(
         "SELECT id, source_url, source_type, body_sha256, version \
          FROM tenant_project_plans \
          WHERE project_id = $1 AND status = 'active'",
+        project_id,
     )
-    .bind(project_id)
     .fetch_optional(db)
     .await?;
 
-    let Some((active_id, source_url, source_type, current_hash, _version)) = active else {
+    let Some(active) = active else {
         // No active plan — nothing to refresh.
         return Ok(RefreshOutcome::Unchanged);
     };
+    let active_id = active.id;
+    let current_hash = active.body_sha256;
+    let source_type = active.source_type;
 
-    let url = match source_url {
+    let url = match active.source_url {
         None => return Ok(RefreshOutcome::Unchanged),
         Some(u) => u,
     };
@@ -2159,13 +2202,18 @@ pub async fn refresh_plan_from_source(
                 "plan refresh failed; keeping last-good version"
             );
             // Persist error on active row without changing the version.
-            let _ = sqlx::query(
+            // JUSTIFIED runtime-checked: best-effort fire-and-forget update;
+            // result is intentionally ignored via `let _ =`. Using query! here
+            // would require the error branch to `?` on the result, but we
+            // explicitly swallow it. query() with .await (not .await?) is
+            // the idiomatic pattern for optional side-effect writes.
+            let _ = sqlx::query!(
                 "UPDATE tenant_project_plans \
                  SET fetch_error = $1, fetch_error_at = now() \
                  WHERE id = $2",
+                reason,
+                active_id,
             )
-            .bind(&reason)
-            .bind(active_id)
             .execute(db)
             .await;
             Ok(RefreshOutcome::Failed(reason))
@@ -2206,14 +2254,14 @@ pub async fn set_plan_auto_refresh(
 ) -> Result<()> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
 
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "UPDATE tenant_projects \
          SET plan_auto_refresh_interval_secs = $3 \
          WHERE tenant_id = $1 AND slug = $2",
+        tenant_id,
+        project_slug,
+        secs,
     )
-    .bind(tenant_id)
-    .bind(project_slug)
-    .bind(secs)
     .execute(db)
     .await
     .with_context(|| {
