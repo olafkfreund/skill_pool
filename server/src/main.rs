@@ -629,6 +629,14 @@ async fn serve(cfg: config::Config) -> Result<()> {
     // continues to work). Shares the same shutdown channel as the worker.
     let decay_handle = spawn_decay_sweep(state.db().clone(), cfg.decay_check_interval_secs, shutdown_rx.clone());
 
+    // Background plan-refresh sweep (PL). Wakes every 60s, queries for
+    // projects whose auto-refresh interval has elapsed, and calls
+    // refresh_plan_from_source for each. Bounded concurrency: at most 4
+    // projects per tick. Failures are persisted by the admin fn itself;
+    // the sweep logs at warn and continues.
+    let plan_refresh_handle =
+        spawn_plan_refresh_sweep(state.db().clone(), state.http_client().clone(), shutdown_rx.clone());
+
     let app = routes::router(state);
 
     let addr: SocketAddr = cfg.bind.parse()?;
@@ -658,6 +666,13 @@ async fn serve(cfg: config::Config) -> Result<()> {
             Ok(Ok(())) => tracing::info!("decay sweep shut down cleanly"),
             Ok(Err(e)) => tracing::warn!(error = %e, "decay sweep task panicked"),
             Err(_) => tracing::warn!("decay sweep shutdown timed out"),
+        }
+    }
+    if let Some(handle) = plan_refresh_handle {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => tracing::info!("plan refresh sweep shut down cleanly"),
+            Ok(Err(e)) => tracing::warn!(error = %e, "plan refresh sweep task panicked"),
+            Err(_) => tracing::warn!("plan refresh sweep shutdown timed out"),
         }
     }
 
@@ -703,6 +718,120 @@ fn spawn_decay_sweep(
                         Ok(n) if n > 0 => tracing::info!(flipped = n, "decay sweep flipped rows to archive_candidate"),
                         Ok(_) => tracing::debug!("decay sweep: no stale skills"),
                         Err(e) => tracing::warn!(error = %e, "decay sweep failed; continuing"),
+                    }
+                }
+            }
+        }
+    }))
+}
+
+/// Spawn the background plan-refresh sweep task.
+///
+/// Wakes every 60 seconds. Queries `tenant_projects` for rows where
+/// `plan_auto_refresh_interval_secs IS NOT NULL` and the last refresh is
+/// past due. Processes at most 4 projects per tick (bounded concurrency).
+/// Returns `None` immediately — the task runs until the shutdown channel fires.
+fn spawn_plan_refresh_sweep(
+    db: sqlx::PgPool,
+    http: reqwest::Client,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    const SWEEP_INTERVAL_SECS: u64 = 60;
+    const MAX_PER_TICK: usize = 4;
+
+    Some(tokio::spawn(async move {
+        tracing::info!("plan refresh sweep task starting");
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(SWEEP_INTERVAL_SECS));
+        // Skip the immediate first tick — identical to the decay sweep pattern.
+        tick.tick().await;
+        loop {
+            tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        tracing::info!("plan refresh sweep shutting down");
+                        return;
+                    }
+                }
+                _ = tick.tick() => {
+                    // Query for projects whose refresh interval has elapsed.
+                    // tenant_slug is needed by refresh_plan_from_source; project slug too.
+                    let due: Vec<(String, String)> = match sqlx::query_as(
+                        "SELECT t.slug, tp.slug::text \
+                         FROM tenant_projects tp \
+                         JOIN tenants t ON t.id = tp.tenant_id \
+                         WHERE tp.plan_auto_refresh_interval_secs IS NOT NULL \
+                           AND ( \
+                             tp.last_plan_refresh_at IS NULL \
+                             OR tp.last_plan_refresh_at + \
+                                (tp.plan_auto_refresh_interval_secs || ' seconds')::interval < now() \
+                           ) \
+                         LIMIT $1",
+                    )
+                    .bind(MAX_PER_TICK as i64)
+                    .fetch_all(&db)
+                    .await
+                    {
+                        Ok(rows) => rows,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "plan refresh sweep query failed; will retry");
+                            continue;
+                        }
+                    };
+
+                    for (tenant_slug, project_slug) in due {
+                        match skill_pool_server::admin::refresh_plan_from_source(
+                            &db,
+                            &http,
+                            &tenant_slug,
+                            &project_slug,
+                        )
+                        .await
+                        {
+                            Ok(skill_pool_server::admin::RefreshOutcome::Updated(p)) => {
+                                tracing::info!(
+                                    tenant = %tenant_slug,
+                                    project = %project_slug,
+                                    version = p.version,
+                                    "plan auto-refresh: new version created"
+                                );
+                            }
+
+                            Ok(skill_pool_server::admin::RefreshOutcome::Unchanged) => {
+                                tracing::debug!(
+                                    tenant = %tenant_slug,
+                                    project = %project_slug,
+                                    "plan auto-refresh: content unchanged"
+                                );
+                            }
+                            Ok(skill_pool_server::admin::RefreshOutcome::Failed(reason)) => {
+                                tracing::warn!(
+                                    tenant = %tenant_slug,
+                                    project = %project_slug,
+                                    error = %reason,
+                                    "plan auto-refresh failed; last-good version retained"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    tenant = %tenant_slug,
+                                    project = %project_slug,
+                                    error = %e,
+                                    "plan auto-refresh error"
+                                );
+                            }
+                        }
+
+                        // Update last_plan_refresh_at regardless of outcome.
+                        let _ = sqlx::query(
+                            "UPDATE tenant_projects \
+                             SET last_plan_refresh_at = now() \
+                             WHERE slug = $1 \
+                               AND tenant_id = (SELECT id FROM tenants WHERE slug = $2)",
+                        )
+                        .bind(&project_slug)
+                        .bind(&tenant_slug)
+                        .execute(&db)
+                        .await;
                     }
                 }
             }

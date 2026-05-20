@@ -29,6 +29,7 @@ mod session_policy;
 mod skills;
 mod sso_admin;
 mod projects;
+mod project_plans;
 mod stack_mappings;
 mod theme;
 mod usage;
@@ -209,6 +210,29 @@ pub fn router(state: AppState) -> Router {
             axum::routing::put(projects::put_items),
         )
         .route("/v1/projects/resolve", get(projects::resolve))
+        // Project Plans (PL) — per-project markdown documents.
+        // Write routes (import, refresh, activate) require tenant:admin.
+        // Read routes (get, list, get-version) require any authenticated member.
+        .route(
+            "/v1/tenant/projects/{slug}/plan",
+            post(project_plans::import_plan).get(project_plans::get_plan),
+        )
+        .route(
+            "/v1/tenant/projects/{slug}/plan/versions",
+            get(project_plans::list_versions),
+        )
+        .route(
+            "/v1/tenant/projects/{slug}/plan/versions/{v}",
+            get(project_plans::get_version),
+        )
+        .route(
+            "/v1/tenant/projects/{slug}/plan/refresh",
+            post(project_plans::refresh_plan),
+        )
+        .route(
+            "/v1/tenant/projects/{slug}/plan/activate",
+            post(project_plans::activate_version),
+        )
         // MCP transport (Phase 5) — JSON-RPC adapter for skill search
         .route("/v1/mcp", post(mcp::handle))
         // OIDC

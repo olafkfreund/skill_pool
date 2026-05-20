@@ -82,6 +82,10 @@ struct Inner {
     /// a missing repo or unavailable `git` logs a warning and lets
     /// the publish succeed regardless.
     pub git_repo_path: Option<PathBuf>,
+    /// Shared HTTP client used for project-plan URL fetches and outbound
+    /// webhook delivery. Configured with a 10s timeout and 5-redirect cap.
+    /// Cloning is cheap (`reqwest::Client` is `Arc<Inner>`).
+    pub http_client: reqwest::Client,
 }
 
 async fn connect_pool(url: &str, max: u32) -> Result<PgPool> {
@@ -89,6 +93,16 @@ async fn connect_pool(url: &str, max: u32) -> Result<PgPool> {
         .max_connections(max)
         .connect(url)
         .await?)
+}
+
+/// Build the shared HTTP client for outbound requests (plan URL fetches,
+/// webhook delivery). 10s timeout, max 5 redirects, rustls TLS — no OpenSSL.
+fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .expect("build shared HTTP client")
 }
 
 /// Build the Redis client when `redis_url` is set. Connection failure
@@ -169,6 +183,7 @@ impl AppState {
                 redis,
                 queue,
                 git_repo_path: cfg.git_repo_path.clone(),
+                http_client: build_http_client(),
             }),
         };
         // Warm the cache once synchronously so the first request after
@@ -204,6 +219,7 @@ impl AppState {
                 redis,
                 queue,
                 git_repo_path: cfg.git_repo_path.clone(),
+                http_client: build_http_client(),
             }),
         };
         if let Err(e) = state.refresh_custom_domains().await {
@@ -329,6 +345,13 @@ impl AppState {
         self.inner.git_repo_path.as_deref()
     }
 
+    /// Shared HTTP client for outbound requests (project-plan URL fetches,
+    /// webhook delivery). `reqwest::Client` is internally `Arc<Inner>` so
+    /// cloning across `.await` points is cheap.
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.inner.http_client
+    }
+
     /// Test-only: build an `AppState` with an explicit Redis handle.
     /// Used by `tests/rate_limits.rs` to point the limiter at a
     /// testcontainer instead of relying on `SKILL_POOL_REDIS_URL`.
@@ -354,6 +377,7 @@ impl AppState {
                 redis: some_redis,
                 queue,
                 git_repo_path: cfg.git_repo_path.clone(),
+                http_client: build_http_client(),
             }),
         };
         if let Err(e) = state.refresh_custom_domains().await {

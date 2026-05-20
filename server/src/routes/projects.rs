@@ -105,6 +105,10 @@ pub struct PatchBody {
     pub description: Option<Option<String>>,
     pub git_remote: Option<Option<String>>,
     pub stack_tags: Option<Vec<String>>,
+    /// Toggle auto-refresh for this project's plan.
+    /// `null` in JSON = clear (explicit-only). Integer = refresh every N seconds.
+    /// Omitting the field = leave unchanged.
+    pub plan_auto_refresh_interval_secs: Option<Option<i32>>,
 }
 
 #[derive(Deserialize)]
@@ -282,6 +286,7 @@ pub async fn patch(
         description: body.description,
         git_remote: body.git_remote,
         stack_tags: body.stack_tags,
+        plan_auto_refresh_interval_secs: body.plan_auto_refresh_interval_secs,
     };
 
     let project = admin::update_project(state.db(), &caller.tenant.tenant_slug, &slug, patch)

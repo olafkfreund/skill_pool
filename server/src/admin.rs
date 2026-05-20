@@ -1298,6 +1298,10 @@ pub struct ProjectPatch {
     pub description: Option<Option<String>>,
     pub git_remote: Option<Option<String>>,
     pub stack_tags: Option<Vec<String>>,
+    /// Auto-refresh interval for project plans in seconds. `Some(None)`
+    /// clears it (explicit-only). `Some(Some(n))` sets n-second polling.
+    /// `None` leaves the column unchanged.
+    pub plan_auto_refresh_interval_secs: Option<Option<i32>>,
 }
 
 // Private type alias to avoid repetitive complex tuple type annotations in
@@ -1578,9 +1582,9 @@ pub async fn update_project(
     //
     // Simpler approach: always write all columns, using COALESCE to skip
     // unchanged ones. We read the current row first so we can fill gaps.
-    type CurRow = (String, Option<String>, Option<String>, Vec<String>);
+    type CurRow = (String, Option<String>, Option<String>, Vec<String>, Option<i32>);
     let current: Option<CurRow> = sqlx::query_as(
-        "SELECT name, description, git_remote, stack_tags \
+        "SELECT name, description, git_remote, stack_tags, plan_auto_refresh_interval_secs \
          FROM tenant_projects \
          WHERE tenant_id = $1 AND slug = $2",
     )
@@ -1589,7 +1593,7 @@ pub async fn update_project(
     .fetch_optional(db)
     .await?;
 
-    let (cur_name, cur_desc, cur_remote, cur_tags) =
+    let (cur_name, cur_desc, cur_remote, cur_tags, cur_refresh) =
         current.ok_or_else(|| anyhow!("project `{slug}` not found for tenant `{tenant_slug}`"))?;
 
     let new_name = patch.name.as_deref().unwrap_or(&cur_name).to_string();
@@ -1603,10 +1607,15 @@ pub async fn update_project(
         Some(Some(_)) => normalized_remote,
     };
     let new_tags: Vec<String> = patch.stack_tags.unwrap_or(cur_tags);
+    let new_refresh: Option<i32> = match patch.plan_auto_refresh_interval_secs {
+        None => cur_refresh,
+        Some(v) => v,
+    };
 
     let row: ProjectRow = sqlx::query_as(
             "UPDATE tenant_projects \
-             SET name = $3, description = $4, git_remote = $5, stack_tags = $6, updated_at = now() \
+             SET name = $3, description = $4, git_remote = $5, stack_tags = $6, \
+                 plan_auto_refresh_interval_secs = $7, updated_at = now() \
              WHERE tenant_id = $1 AND slug = $2 \
              RETURNING id, slug::text, name, description, git_remote, stack_tags, created_at, updated_at",
         )
@@ -1616,6 +1625,7 @@ pub async fn update_project(
         .bind(&new_desc)
         .bind(&new_remote)
         .bind(&new_tags)
+        .bind(new_refresh)
         .fetch_one(db)
         .await
         .with_context(|| format!("update project `{slug}` for tenant `{tenant_slug}`"))?;
@@ -1737,6 +1747,612 @@ pub async fn resolve_project_by_remote(
         created_at: r.6,
         updated_at: r.7,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Project Plans (PL server-side — Layer 2 extension)
+// ---------------------------------------------------------------------------
+
+/// A project-plan version row as returned by admin functions.
+#[derive(Debug, Clone)]
+pub struct Plan {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub version: i32,
+    pub body_md: String,
+    pub body_sha256: String,
+    pub source_type: String,
+    pub source_url: Option<String>,
+    pub source_etag: Option<String>,
+    pub imported_by: Option<Uuid>,
+    pub imported_at: chrono::DateTime<chrono::Utc>,
+    pub status: String,
+    pub fetch_error: Option<String>,
+    pub fetch_error_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Outcome of a `refresh_plan_from_source` call.
+#[derive(Debug)]
+pub enum RefreshOutcome {
+    /// Content unchanged (hash match).
+    Unchanged,
+    /// New version imported. Boxed to equalise variant sizes.
+    Updated(Box<Plan>),
+    /// Fetch or parse failed; last-good version retained.
+    Failed(String),
+}
+
+// Private type alias to avoid repeating the long tuple in multiple query_as calls.
+// Columns: (id, project_id, version, body_md, body_sha256, source_type,
+//           source_url, source_etag, imported_by, imported_at, status,
+//           fetch_error, fetch_error_at)
+type PlanRow = (
+    Uuid,
+    Uuid,
+    i32,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<Uuid>,
+    chrono::DateTime<chrono::Utc>,
+    String,
+    Option<String>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+
+fn plan_from_row(r: PlanRow) -> Plan {
+    Plan {
+        id: r.0,
+        project_id: r.1,
+        version: r.2,
+        body_md: r.3,
+        body_sha256: r.4,
+        source_type: r.5,
+        source_url: r.6,
+        source_etag: r.7,
+        imported_by: r.8,
+        imported_at: r.9,
+        status: r.10,
+        fetch_error: r.11,
+        fetch_error_at: r.12,
+    }
+}
+
+/// Compute SHA-256 of `body_md` and return it as lowercase hex.
+pub fn sha256_hex(body: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(body.as_bytes());
+    hex::encode(hash)
+}
+
+/// Arguments for [`import_plan`]. Bundled in a struct to stay within
+/// clippy's `too-many-arguments` limit (max 7) while keeping all fields
+/// explicit at call sites.
+pub struct ImportPlanArgs<'a> {
+    pub tenant_slug: &'a str,
+    pub project_slug: &'a str,
+    pub body_md: &'a str,
+    pub source_type: &'a str,
+    pub source_url: Option<&'a str>,
+    pub etag: Option<&'a str>,
+    pub imported_by: Option<Uuid>,
+}
+
+/// Import a plan version for a project.
+///
+/// Atomically:
+///   1. Compute SHA-256 of `body_md`. If it matches the current active row,
+///      return that row unchanged (no-op idempotency).
+///   2. INSERT a new version row (`version = MAX + 1`, `status = 'active'`).
+///   3. UPDATE all previous `active` rows for this project to `superseded`.
+///
+/// The partial unique index `idx_project_plans_active_one` guarantees at most
+/// one `active` row per project; the transaction ordering (UPDATE before
+/// RETURNING) ensures no transient constraint violation.
+pub async fn import_plan(db: &PgPool, args: ImportPlanArgs<'_>) -> Result<Plan> {
+    let ImportPlanArgs {
+        tenant_slug,
+        project_slug,
+        body_md,
+        source_type,
+        source_url,
+        etag,
+        imported_by,
+    } = args;
+
+    if !matches!(source_type, "file" | "url") {
+        return Err(anyhow!("source_type must be 'file' or 'url'"));
+    }
+
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let proj: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(project_slug)
+    .fetch_optional(db)
+    .await?;
+    let (project_id,) = proj.ok_or_else(|| {
+        anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`")
+    })?;
+
+    let new_hash = sha256_hex(body_md);
+
+    // Dedup: if active row has same content, return it as-is.
+    let existing: Option<PlanRow> = sqlx::query_as(
+        "SELECT id, project_id, version, body_md, body_sha256, source_type, \
+                source_url, source_etag, imported_by, imported_at, status, \
+                fetch_error, fetch_error_at \
+         FROM tenant_project_plans \
+         WHERE project_id = $1 AND status = 'active' AND body_sha256 = $2",
+    )
+    .bind(project_id)
+    .bind(&new_hash)
+    .fetch_optional(db)
+    .await?;
+
+    if let Some(row) = existing {
+        return Ok(plan_from_row(row));
+    }
+
+    let mut tx = db.begin().await?;
+
+    // Get next version number.
+    let next_version: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(version), 0) + 1 FROM tenant_project_plans WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Mark any existing active row as superseded before inserting the new one
+    // (avoids transient conflict on the partial unique index).
+    sqlx::query(
+        "UPDATE tenant_project_plans SET status = 'superseded' \
+         WHERE project_id = $1 AND status = 'active'",
+    )
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Insert new active row.
+    let row: PlanRow = sqlx::query_as(
+        "INSERT INTO tenant_project_plans \
+           (tenant_id, project_id, version, body_md, body_sha256, \
+            source_type, source_url, source_etag, imported_by, status) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active') \
+         RETURNING id, project_id, version, body_md, body_sha256, source_type, \
+                   source_url, source_etag, imported_by, imported_at, status, \
+                   fetch_error, fetch_error_at",
+    )
+    .bind(tenant_id)
+    .bind(project_id)
+    .bind(next_version)
+    .bind(body_md)
+    .bind(&new_hash)
+    .bind(source_type)
+    .bind(source_url)
+    .bind(etag)
+    .bind(imported_by)
+    .fetch_one(&mut *tx)
+    .await
+    .with_context(|| {
+        format!("insert plan v{next_version} for project `{project_slug}`")
+    })?;
+
+    tx.commit().await?;
+    Ok(plan_from_row(row))
+}
+
+/// Return the active plan for a project, or `None` if no plan has been imported.
+pub async fn get_active_plan(
+    db: &PgPool,
+    tenant_slug: &str,
+    project_slug: &str,
+) -> Result<Option<Plan>> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let proj: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(project_slug)
+    .fetch_optional(db)
+    .await?;
+    let Some((project_id,)) = proj else {
+        return Err(anyhow!(
+            "project `{project_slug}` not found for tenant `{tenant_slug}`"
+        ));
+    };
+
+    let row: Option<PlanRow> = sqlx::query_as(
+        "SELECT id, project_id, version, body_md, body_sha256, source_type, \
+                source_url, source_etag, imported_by, imported_at, status, \
+                fetch_error, fetch_error_at \
+         FROM tenant_project_plans \
+         WHERE project_id = $1 AND status = 'active'",
+    )
+    .bind(project_id)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.map(plan_from_row))
+}
+
+/// List plan versions for a project in descending version order.
+/// Body text is intentionally included for completeness; callers that
+/// only need the slim listing should project body out in the response layer.
+pub async fn list_plan_versions(
+    db: &PgPool,
+    tenant_slug: &str,
+    project_slug: &str,
+    limit: i64,
+) -> Result<Vec<Plan>> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let proj: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(project_slug)
+    .fetch_optional(db)
+    .await?;
+    let Some((project_id,)) = proj else {
+        return Err(anyhow!(
+            "project `{project_slug}` not found for tenant `{tenant_slug}`"
+        ));
+    };
+
+    let rows: Vec<PlanRow> = sqlx::query_as(
+        "SELECT id, project_id, version, body_md, body_sha256, source_type, \
+                source_url, source_etag, imported_by, imported_at, status, \
+                fetch_error, fetch_error_at \
+         FROM tenant_project_plans \
+         WHERE project_id = $1 \
+         ORDER BY version DESC \
+         LIMIT $2",
+    )
+    .bind(project_id)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows.into_iter().map(plan_from_row).collect())
+}
+
+/// Activate a historical version (revert). Atomically:
+///   1. Mark the requested version as `active`.
+///   2. Mark the previous `active` row as `superseded`.
+pub async fn activate_plan_version(
+    db: &PgPool,
+    tenant_slug: &str,
+    project_slug: &str,
+    version: i32,
+) -> Result<Plan> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let proj: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(project_slug)
+    .fetch_optional(db)
+    .await?;
+    let Some((project_id,)) = proj else {
+        return Err(anyhow!(
+            "project `{project_slug}` not found for tenant `{tenant_slug}`"
+        ));
+    };
+
+    // Verify the target version exists.
+    let target: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM tenant_project_plans WHERE project_id = $1 AND version = $2",
+    )
+    .bind(project_id)
+    .bind(version)
+    .fetch_optional(db)
+    .await?;
+    if target.is_none() {
+        return Err(anyhow!(
+            "plan version {version} not found for project `{project_slug}`"
+        ));
+    }
+
+    let mut tx = db.begin().await?;
+
+    // Supersede current active (if any).
+    sqlx::query(
+        "UPDATE tenant_project_plans SET status = 'superseded' \
+         WHERE project_id = $1 AND status = 'active'",
+    )
+    .bind(project_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Activate the target version and clear any stale fetch_error from it.
+    let row: PlanRow = sqlx::query_as(
+        "UPDATE tenant_project_plans \
+         SET status = 'active', fetch_error = NULL, fetch_error_at = NULL \
+         WHERE project_id = $1 AND version = $2 \
+         RETURNING id, project_id, version, body_md, body_sha256, source_type, \
+                   source_url, source_etag, imported_by, imported_at, status, \
+                   fetch_error, fetch_error_at",
+    )
+    .bind(project_id)
+    .bind(version)
+    .fetch_one(&mut *tx)
+    .await
+    .with_context(|| {
+        format!("activate plan version {version} for project `{project_slug}`")
+    })?;
+
+    tx.commit().await?;
+    Ok(plan_from_row(row))
+}
+
+/// Re-fetch the plan from its source URL and import a new version if the
+/// content has changed.
+///
+/// Returns:
+///   - `Unchanged` — hash matches; nothing written.
+///   - `Updated(plan)` — new version created and activated.
+///   - `Failed(reason)` — network/parse error; `fetch_error` written to the
+///     active row; version unchanged.
+///
+/// On `Failed`, the function attempts to persist the error message on the
+/// current active row and then returns `Failed`. The caller should log at
+/// `warn!` level; this function does not panic.
+pub async fn refresh_plan_from_source(
+    db: &PgPool,
+    http: &reqwest::Client,
+    tenant_slug: &str,
+    project_slug: &str,
+) -> Result<RefreshOutcome> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let proj: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM tenant_projects WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(project_slug)
+    .fetch_optional(db)
+    .await?;
+    let Some((project_id,)) = proj else {
+        return Err(anyhow!(
+            "project `{project_slug}` not found for tenant `{tenant_slug}`"
+        ));
+    };
+
+    // Load the active plan — we need its source_url and source_type.
+    let active: Option<(Uuid, Option<String>, String, String, i32)> = sqlx::query_as(
+        "SELECT id, source_url, source_type, body_sha256, version \
+         FROM tenant_project_plans \
+         WHERE project_id = $1 AND status = 'active'",
+    )
+    .bind(project_id)
+    .fetch_optional(db)
+    .await?;
+
+    let Some((active_id, source_url, source_type, current_hash, _version)) = active else {
+        // No active plan — nothing to refresh.
+        return Ok(RefreshOutcome::Unchanged);
+    };
+
+    let url = match source_url {
+        None => return Ok(RefreshOutcome::Unchanged),
+        Some(u) => u,
+    };
+
+    // Actually fetch.
+    let fetch_result = fetch_url_as_markdown(http, &url).await;
+
+    match fetch_result {
+        Err(e) => {
+            let reason = e.to_string();
+            tracing::warn!(
+                url = %url,
+                project = %project_slug,
+                error = %reason,
+                "plan refresh failed; keeping last-good version"
+            );
+            // Persist error on active row without changing the version.
+            let _ = sqlx::query(
+                "UPDATE tenant_project_plans \
+                 SET fetch_error = $1, fetch_error_at = now() \
+                 WHERE id = $2",
+            )
+            .bind(&reason)
+            .bind(active_id)
+            .execute(db)
+            .await;
+            Ok(RefreshOutcome::Failed(reason))
+        }
+        Ok((body_md, new_etag)) => {
+            let new_hash = sha256_hex(&body_md);
+            if new_hash == current_hash {
+                return Ok(RefreshOutcome::Unchanged);
+            }
+            // New content — import as a new version.
+            let plan = import_plan(
+                db,
+                ImportPlanArgs {
+                    tenant_slug,
+                    project_slug,
+                    body_md: &body_md,
+                    source_type: &source_type,
+                    source_url: Some(&url),
+                    etag: new_etag.as_deref(),
+                    imported_by: None, // system refresh — no user
+                },
+            )
+            .await?;
+            Ok(RefreshOutcome::Updated(Box::new(plan)))
+        }
+    }
+}
+
+/// Set or clear the auto-refresh interval for a project.
+///
+/// `secs = Some(n)` — refresh every n seconds.
+/// `secs = None`    — explicit-only (clears the column).
+pub async fn set_plan_auto_refresh(
+    db: &PgPool,
+    tenant_slug: &str,
+    project_slug: &str,
+    secs: Option<i32>,
+) -> Result<()> {
+    let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
+
+    let result = sqlx::query(
+        "UPDATE tenant_projects \
+         SET plan_auto_refresh_interval_secs = $3 \
+         WHERE tenant_id = $1 AND slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(project_slug)
+    .bind(secs)
+    .execute(db)
+    .await
+    .with_context(|| {
+        format!("set auto-refresh for project `{project_slug}` (tenant `{tenant_slug}`)")
+    })?;
+
+    if result.rows_affected() == 0 {
+        return Err(anyhow!(
+            "project `{project_slug}` not found for tenant `{tenant_slug}`"
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// HTTP fetch helper (URL source type)
+// ---------------------------------------------------------------------------
+
+const FETCH_MAX_BYTES: usize = 5 * 1024 * 1024; // 5 MB
+
+/// Fetch a URL and return `(body_md, etag)`.
+///
+/// - Only `https://` is accepted.
+/// - Supported Content-Types: `text/markdown`, `text/x-markdown`, `text/plain`
+///   (stored as-is) and `text/html` (converted via `htmd`).
+/// - Body is capped at `FETCH_MAX_BYTES`.
+pub async fn fetch_url_as_markdown(
+    http: &reqwest::Client,
+    url: &str,
+) -> Result<(String, Option<String>)> {
+    // HTTPS-only policy.
+    if !url.starts_with("https://") {
+        return Err(anyhow!("only https:// URLs are supported (got: {url})"));
+    }
+
+    let response = http
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("HTTP GET {url}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow!("HTTP {status} fetching {url}"));
+    }
+
+    // Capture ETag before consuming the body.
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+
+    // Check Content-Length before streaming.
+    if let Some(len) = response.content_length() {
+        if len as usize > FETCH_MAX_BYTES {
+            return Err(anyhow!(
+                "response body too large: {len} bytes (max {FETCH_MAX_BYTES})"
+            ));
+        }
+    }
+
+    // Determine content type (base type only, ignore params like charset).
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("text/plain")
+        .split(';')
+        .next()
+        .unwrap_or("text/plain")
+        .trim()
+        .to_lowercase();
+
+    // Stream body with a cap.
+    let bytes = response.bytes().await.with_context(|| format!("read body of {url}"))?;
+    if bytes.len() > FETCH_MAX_BYTES {
+        return Err(anyhow!(
+            "response body too large: {} bytes (max {FETCH_MAX_BYTES})",
+            bytes.len()
+        ));
+    }
+
+    let body_str = String::from_utf8(bytes.to_vec())
+        .with_context(|| format!("UTF-8 decode body of {url}"))?;
+
+    let body_md = match content_type.as_str() {
+        "text/markdown" | "text/x-markdown" | "text/plain" => body_str,
+        "text/html" => {
+            htmd::convert(&body_str)
+                .with_context(|| format!("HTML→Markdown conversion for {url}"))?
+        }
+        other => {
+            return Err(anyhow!(
+                "unsupported Content-Type `{other}` for {url}; \
+                 expected text/markdown, text/html, or text/plain"
+            ));
+        }
+    };
+
+    Ok((body_md, etag))
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    #[test]
+    fn sha256_hex_stable() {
+        // SHA-256 of the empty string is the well-known constant.
+        assert_eq!(
+            sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn sha256_hex_hello_world() {
+        assert_eq!(
+            sha256_hex("hello"),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn sha256_hex_different_inputs_differ() {
+        assert_ne!(sha256_hex("plan A"), sha256_hex("plan B"));
+    }
+
+    #[tokio::test]
+    async fn fetch_rejects_http_url() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap();
+        let result = fetch_url_as_markdown(&client, "http://example.com/plan.md").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("https://"));
+    }
 }
 
 #[cfg(test)]
