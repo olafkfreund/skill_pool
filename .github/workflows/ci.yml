@@ -154,3 +154,81 @@ jobs:
             --set server.env.SKILL_POOL_STORAGE_URI='s3://x' \
             --set web.env.ORIGIN='https://x.example.com' \
             | kubectl apply --dry-run=client -f -
+
+  # ---------------------------------------------------------------------------
+  # Security: cargo audit — RustSec advisory database scan.
+  #
+  # Fetches the advisory database and checks Cargo.lock for:
+  #   - Known CVEs / security advisories (exit 1 = fail)
+  #   - Unmaintained crates (warning, do not fail)
+  #   - Yanked crate versions (warning, do not fail)
+  #
+  # This job runs on push to main AND on every PR so advisories are caught
+  # before merge. It does not require any cloud credentials.
+  #
+  # Known advisories suppressed via deny.toml ignore list (not here) so
+  # cargo audit and cargo deny stay in sync.
+  # ---------------------------------------------------------------------------
+  cargo-audit:
+    name: Security audit (cargo audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust
+          # Read-only in non-main branches — saves cache space.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo audit
+        # rustsec/audit-check creates per-advisory PR annotations and fails
+        # the job on unignored vulnerabilities.  Advisories ignored in
+        # deny.toml are also ignored here so both tools stay in sync.
+        #
+        # Ignored advisories (must mirror deny.toml [advisories].ignore):
+        #   RUSTSEC-2026-0119 hickory-proto: upgrade blocked, hickory 0.26 not on crates.io
+        #   RUSTSEC-2023-0071 rsa: no upstream fix; no RSA ops in our code paths
+        #   RUSTSEC-2025-0119 number_prefix: unmaintained, fastembed optional dep only
+        #   RUSTSEC-2024-0436 paste: unmaintained, fastembed optional dep only
+        #   RUSTSEC-2025-0134 rustls-pemfile: unmaintained, redis upgrade will drop it
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ignore: |
+            RUSTSEC-2026-0119
+            RUSTSEC-2023-0071
+            RUSTSEC-2025-0119
+            RUSTSEC-2024-0436
+            RUSTSEC-2025-0134
+
+  # ---------------------------------------------------------------------------
+  # Security: cargo deny — license, bans, and source policy checks.
+  #
+  # Enforces the rules defined in deny.toml:
+  #   - [advisories]  duplicate of cargo-audit for cross-validation
+  #   - [licenses]    only explicitly allowed SPDX identifiers
+  #   - [bans]        duplicate-version warnings, openssl-src banned
+  #   - [sources]     only crates.io, no unknown registries
+  #
+  # Uses --all-features so optional dep trees (fastembed, otlp) are included.
+  # The official EmbarkStudios action handles caching of the advisory DB.
+  # ---------------------------------------------------------------------------
+  cargo-deny:
+    name: Dependency policy (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargo deny check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # Check all four sections: advisories, licenses, bans, sources.
+          command: check
+          # Match the local dev command: include optional feature dep trees.
+          arguments: --all-features
+          # Use deny.toml at the repo root (default; explicit for clarity).
+          manifest-path: Cargo.toml

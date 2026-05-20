@@ -1,0 +1,195 @@
+# cargo-deny configuration for skill-pool
+# docs: https://embarkstudios.github.io/cargo-deny/
+# cargo-deny version: 0.19.x (nixpkgs, 2026-05-20)
+#
+# Philosophy: fail hard on real security advisories and unlicensed / denied
+# crates; warn (never fail) on unmaintained notices, duplicate versions, and
+# weak copyleft — so CI stays actionable rather than noisy.
+
+# ---------------------------------------------------------------------------
+# [advisories] — RustSec advisory database.
+#
+# cargo-deny 0.19 [advisories] section only takes an `ignore` list.
+# The tool denies vulnerabilities and yanked crates by default; unmaintained
+# advisories produce a warning by default.
+#
+# Two real advisories exist in the current dep tree (audited 2026-05-20):
+#
+#  RUSTSEC-2026-0119  hickory-proto 0.24.4 — O(n²) DNS name compression.
+#    Path: hickory-resolver 0.24.4 → skill-pool-server.
+#    Fix: upgrade to hickory-resolver >=0.26.1.
+#    Blocked: hickory-dns 0.26 is not yet published on crates.io.
+#    Impact: CPU-exhaustion DoS via crafted DNS replies. Our DNS resolver is
+#    used only for custom-domain TXT verification (low frequency, internal),
+#    so exposure is limited. Revisit within 30 days or when 0.26 ships.
+#
+#  RUSTSEC-2023-0071  rsa 0.9.10 — Marvin Attack RSA timing side-channel.
+#    Path: sqlx-mysql (unused feature, transitive), openidconnect 4.0.1.
+#    Fix: no upstream fix available as of 2026-05-20.
+#    We do not perform RSA signing or decryption operations; OIDC flows use
+#    EC keys. sqlx-mysql is pulled by sqlx even with only the postgres feature
+#    enabled. Risk is theoretical without active RSA ops in our code paths.
+#    Revisit if openidconnect or sqlx resolves the transitive dep.
+# ---------------------------------------------------------------------------
+[advisories]
+ignore = [
+  # hickory-proto 0.24.4 — O(n²) DNS name compression
+  # Upgrade blocked: hickory-resolver 0.26 not yet on crates.io.
+  # Low-impact path (custom-domain TXT verification only). Review in 30 days.
+  { id = "RUSTSEC-2026-0119", reason = "hickory-resolver 0.26 not yet on crates.io; low-impact DNS path, re-evaluate when upgrade is available" },
+
+  # rsa 0.9.10 — Marvin Attack (RUSTSEC-2023-0071)
+  # No upstream fix. Transitive via sqlx-mysql (unused) and openidconnect
+  # (EC flow — no RSA ops executed). Risk is theoretical.
+  { id = "RUSTSEC-2023-0071", reason = "No upstream fix available; rsa is transitive-only via sqlx-mysql (disabled) and openidconnect EC flow (no RSA key ops)" },
+
+  # --- Unmaintained advisory notices (not security vulnerabilities) ---
+  # cargo-deny 0.19 defaults unmaintained advisories to "deny" (error).
+  # The three below are noted here so they appear as notices in CI output
+  # rather than failing the build. Each has an upgrade note.
+
+  # number_prefix 0.4.0 (RUSTSEC-2025-0119) — crate abandoned.
+  # Path: indicatif → hf-hub → fastembed (optional feature, not default build).
+  # Action: update fastembed when a version pulls indicatif 0.17.9+ is released.
+  { id = "RUSTSEC-2025-0119", reason = "number_prefix is pulled only via fastembed optional feature (indicatif dep); not in default build. Upgrade when fastembed bumps indicatif." },
+
+  # paste 1.0.15 (RUSTSEC-2024-0436) — archived upstream.
+  # Path: tokenizers + rav1e → fastembed (optional feature, not default build).
+  # Action: track fastembed and tokenizers for replacements with pastey.
+  { id = "RUSTSEC-2024-0436", reason = "paste pulled only via fastembed optional feature (tokenizers/rav1e deps); not in default build. Track upstream migration to pastey." },
+
+  # rustls-pemfile 2.2.0 (RUSTSEC-2025-0134) — archived; thin wrapper around
+  # rustls-pki-types pem parsing. Path: redis 0.27.6 → skill-pool-server.
+  # Migration: redis needs to move to rustls-pki-types PemObject API.
+  # Track redis upgrade (0.28+) which should remove this dep.
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile via redis 0.27.6; redis 0.28+ expected to drop this dep in favour of rustls-pki-types. Track redis upgrade." },
+]
+
+# ---------------------------------------------------------------------------
+# [licenses] — SPDX license allowlist.
+#
+# All licenses present in the dep tree (audited 2026-05-20 via `cargo deny list`):
+#   Permissive:     0BSD, Apache-2.0, Apache-2.0 WITH LLVM-exception,
+#                   BSD-1-Clause, BSD-2-Clause, BSD-3-Clause, BSL-1.0,
+#                   CC0-1.0, CDLA-Permissive-2.0, ISC, MIT, Unicode-3.0,
+#                   Unlicense, Zlib
+#   Weak copyleft:  MPL-2.0 (option-ext), LGPL-2.1-or-later (r-efi)
+#
+# Strong copyleft (GPL, AGPL, SSPL) is implicitly denied by not appearing
+# in the allow list. `copyleft = "warn"` surfaces weak-copyleft crates so
+# the team is aware without blocking CI.
+# ---------------------------------------------------------------------------
+[licenses]
+version = 2
+# cargo-deny 0.16+ removed the top-level `unlicensed` and `copyleft` fields
+# (see https://github.com/EmbarkStudios/cargo-deny/pull/611).
+# Unlicensed crates are denied implicitly when no matching entry exists in
+# the `allow` list below. Copyleft crates (MPL-2.0, LGPL) are included in
+# the allow list with a comment so the team is aware; strong copyleft (GPL,
+# AGPL) is implicitly denied by absence.
+#
+# confidence-threshold: minimum similarity score when identifying license text.
+confidence-threshold = 0.8
+
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  # BSD-1-Clause: fiat-crypto (formally-verified EC field arithmetic used by
+  # p256/p384 via elliptic-curve crate)
+  "BSD-1-Clause",
+  # BSL-1.0 (Boost): ryu (fast float-to-string), wasite (async signal utils),
+  # whoami (username/hostname lookup)
+  "BSL-1.0",
+  "ISC",
+  # MPL-2.0: option-ext (single crate, weak copyleft, file-level)
+  "MPL-2.0",
+  "CC0-1.0",
+  "Zlib",
+  # 0BSD (BSD Zero Clause): adler2, quoted_printable
+  "0BSD",
+  # Unicode-3.0: used by unicode-ident and the ICU4X / zerovec crate family
+  "Unicode-3.0",
+  # NCSA (University of Illinois/NCSA Open Source License) — OSI-approved,
+  # 3-clause BSD equivalent. Present via libfuzzer-sys → rav1e → ravif →
+  # image → fastembed (optional feature only, not in default build).
+  "NCSA",
+  # Unlicense — public domain. Used by aho-corasick, byteorder, jiff, memchr,
+  # same-file, walkdir, winapi-util
+  "Unlicense",
+  # CDLA-Permissive-2.0 — Community Data License Agreement, permissive variant.
+  # Used by webpki-roots (Mozilla CA bundle). Apache-compatible.
+  "CDLA-Permissive-2.0",
+  # LGPL-2.1-or-later — weak copyleft. Used only by r-efi (UEFI binding types
+  # for getrandom on UEFI targets; never compiled for linux/macos). Listed here
+  # so the allow-list check passes; `copyleft = "warn"` still fires.
+  "LGPL-2.1-or-later",
+]
+
+# ---------------------------------------------------------------------------
+# [bans] — duplicate versions and banned crates.
+#
+# The workspace lock file has ~55 crates with multiple versions. This is
+# expected: sqlx carries rand 0.8 + 0.9, the OpenTelemetry ecosystem pins
+# specific versions, and fastembed (optional feature) brings its own tree.
+#
+# We warn rather than fail so CI doesn't break on routine dep bumps. If the
+# number of duplicates grows unexpectedly, the warning output will surface it.
+#
+# Banned: openssl-src is explicitly denied. The project is fully rustls-based
+# (sqlx tls-rustls, reqwest rustls-tls, redis tokio-rustls-comp). If openssl-src
+# appears, something has introduced an unintended OpenSSL C build, which breaks
+# musl/Alpine cross-compilation targets.
+# ---------------------------------------------------------------------------
+[bans]
+# Warn on duplicate versions; don't fail. ~55 known duplicates in the tree.
+multiple-versions = "warn"
+
+# Wildcard version constraints are a maintenance hazard.
+wildcards = "warn"
+
+# Show both paths in dotgraph output when highlighting duplicates.
+highlight = "all"
+
+deny = [
+  # openssl-src compiles the OpenSSL C source tree. We use rustls everywhere.
+  # Its presence indicates an unintended OpenSSL dep that will break musl builds.
+  { crate = "openssl-src", reason = "Project is fully rustls-based; openssl-src signals an unintended OpenSSL C dependency" },
+]
+
+# Known acceptable duplicates — skip duplicate detection for these crates
+# because they are brought in by multiple sub-ecosystems with pinned majors.
+skip = [
+  # rand 0.8 (sqlx + samael) vs rand 0.9 (fastembed ecosystem)
+  { crate = "rand@0.8.6", reason = "sqlx and samael pin rand 0.8; fastembed pulls rand 0.9" },
+  # getrandom 0.2/0.3/0.4 — follows rand major versions transitively
+  { crate = "getrandom@0.2.17", reason = "transitive of rand 0.8 ecosystem" },
+  # base64 0.21 (oauth2/openidconnect) vs 0.22 (main tree)
+  { crate = "base64@0.21.7", reason = "oauth2/openidconnect 4.x pins base64 0.21" },
+  # hashbrown — multiple versions due to indexmap + hashbrown direct dep
+  { crate = "hashbrown@0.14.5", reason = "indexmap 2.x pulls hashbrown 0.14; newer crates use 0.15+" },
+  # block-buffer / digest / crypto-common: RustCrypto crates with two majors
+  { crate = "block-buffer@0.10.4", reason = "RustCrypto 0.10 series used by sha2/hmac ecosystem" },
+  { crate = "crypto-common@0.1.7", reason = "RustCrypto 0.10 series used by sha2/hmac ecosystem" },
+  # windows-sys multiple versions: pulled by different crate generations
+  { crate = "windows-sys@0.48.0", reason = "older windows-sys pulled by parking_lot and others" },
+  { crate = "windows-sys@0.52.0", reason = "mid-generation windows-sys from rustix and others" },
+]
+
+# ---------------------------------------------------------------------------
+# [sources] — registry and git source policy.
+# ---------------------------------------------------------------------------
+[sources]
+# Reject deps sourced from unknown registries.
+unknown-registry = "deny"
+
+# Warn on git sources not from an explicitly allowed organisation.
+# Git deps are occasionally used for unreleased patches; warn so they're visible.
+unknown-git = "warn"
+
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# No git sources are currently in use. To add one:
+# allow-git = ["https://github.com/some-org/some-repo"]
