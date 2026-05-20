@@ -1,17 +1,21 @@
-# skill-pool — CLI showcase tape
+# skill-pool — CLI showcase tape (v2: Projects + Plans)
 #
 # Renders the README/docs demo deterministically. Run with:
 #
 #   nix develop -c vhs scripts/demo.tape
 #
-# This produces docs/demo.webm and docs/demo.gif. The tape uses a
-# scratch project under /tmp and an isolated SKILL_POOL_CONFIG so it
-# never touches the developer's real config. It assumes the local
-# stack (server on http://127.0.0.1:8080, tenant `acme`) is running
-# and that a working API token has been minted — see
-# scripts/demo.README for how the demo token is seeded. If the token
-# is missing the tape still finishes, but `search` / `add` will show
-# an auth error instead of a result table.
+# Produces docs/demo.webm and docs/demo.gif. The tape uses a scratch
+# project under /tmp and an isolated XDG_CONFIG_HOME so it never
+# touches the developer's real config. It assumes the local stack
+# (server on http://127.0.0.1:8080, tenant `acme`) is running and
+# that an API token has been minted via:
+#
+#   SKILL_POOL_DATABASE_URL=postgres://skillpool:skillpool@127.0.0.1:55432/skillpool \
+#     ./target/debug/skill-pool-server admin token-create \
+#     --tenant acme --name vhs-demo-v2 \
+#     --scope "tenant:admin skills:read skills:publish"
+#
+# The recorded token below is the one minted for this tape run.
 
 Output docs/demo.webm
 Output docs/demo.gif
@@ -22,8 +26,8 @@ Output docs/demo.gif
 
 Set Shell "bash"
 Set FontSize 14
-Set Width 1200
-Set Height 720
+Set Width 1400
+Set Height 760
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 28ms
 Set PlaybackSpeed 1
@@ -35,9 +39,10 @@ Type "export PS1='$ '"
 Enter
 Type "export PROMPT_COMMAND="
 Enter
+Type "export _ZO_DOCTOR=0"
+Enter
 # Ensure the locally-built skill-pool binary is on PATH for the
-# duration of the recording. The CI/render entry-point can also
-# build a Nix-packaged binary into PATH and skip this line.
+# duration of the recording.
 Type "export PATH=/home/olafkfreund/Source/Calitii/skill_pool/target/release:$PATH"
 Enter
 Type "clear"
@@ -46,97 +51,125 @@ Type "rm -rf /tmp/sp-demo && mkdir -p /tmp/sp-demo && cd /tmp/sp-demo"
 Enter
 # Redirect XDG_CONFIG_HOME so `skill-pool login` saves credentials
 # under /tmp/sp-demo instead of the developer's real ~/.config.
-# (Config::save() always uses the default path, so SKILL_POOL_CONFIG
-# alone is not enough — see cli/src/config.rs.)
 Type "export XDG_CONFIG_HOME=/tmp/sp-demo/xdg"
 Enter
-Type "cargo init --name demo-app -q 2>/dev/null"
+# Stand up a fake Rust project so `detect` finds Cargo.toml and
+# `bootstrap` actually installs items. Fake the git remote too so
+# `project show` / `doctor` light up.
+Type "cargo init --name billing-service -q 2>/dev/null"
+Enter
+Type "git remote add origin https://github.com/acme/billing-service.git 2>/dev/null"
+Enter
+# Stage the Act 3 plan file now (hidden) so we don't have to do a
+# mid-tape Hide/Show dance that occasionally leaks the command to
+# the recording.
+Type "printf '# Updated Plan\n\n## New Sprint\nProration logic shipping next week\n' > /tmp/sprint.md"
 Enter
 Type "clear"
 Enter
 Sleep 500ms
 Show
 
-# --- Act 1: a fresh Rust project meets skill-pool ---
-Type "# A fresh Rust project — let's onboard it to the team's skill registry."
-Sleep 600ms
+# ─────────────────────────────────────────────────────────────────────
+# Act 1 — Onboarding a new project (init → login → bootstrap)
+# ─────────────────────────────────────────────────────────────────────
+Type "# Onboard a new repo to its team's project on the registry."
+Sleep 700ms
 Enter
 Sleep 400ms
 
-Type "ls"
+Type "skill-pool init --project acme-billing-service"
 Enter
-Sleep 1200ms
-
-Type "skill-pool init"
-Enter
-Sleep 1800ms
+Sleep 2800ms
 
 Type "cat .skill-pool/manifest.toml"
 Enter
-Sleep 2000ms
+Sleep 2800ms
 
-# --- Act 2: point the CLI at the registry ---
-Type "# Authenticate against the registry. Token comes from the portal."
+Type "# Authenticate against the registry."
 Sleep 600ms
 Enter
 Sleep 300ms
 
 Type "skill-pool login --registry http://127.0.0.1:8080 --tenant acme"
 Enter
-Sleep 1200ms
+Sleep 1300ms
 # `skill-pool login` reads the token from stdin via rpassword. VHS
 # drives a real TTY so typing + Enter is exactly what a user would do.
-Type "spk_demo_9901204c7a3d6782e8f5007f7d4aa940"
+Type "spk_df2b41d1487f20c4e31b130b9af5c419be66a8cf07e88441169c8ac7cb86d57b"
 Enter
 Sleep 1800ms
 
-# --- Act 3: detect stack ---
-Type "# Detect the stack from filesystem fingerprints — no LLM, no network."
+Type "# Bootstrap: pull the project's curated skills + agents."
 Sleep 600ms
 Enter
 Sleep 300ms
 
-Type "skill-pool detect"
+Type "skill-pool bootstrap --yes"
 Enter
-Sleep 2500ms
+Sleep 7500ms
 
-# --- Act 4: search the catalog ---
-Type "# Browse what the team has published."
+# ─────────────────────────────────────────────────────────────────────
+# Act 2 — Discovering projects + viewing the active plan
+# ─────────────────────────────────────────────────────────────────────
+Type "clear"
+Enter
+Sleep 400ms
+
+Type "# Which projects does the tenant publish?"
 Sleep 600ms
 Enter
 Sleep 300ms
 
-Type "skill-pool search"
+Type "skill-pool project list"
+Enter
+Sleep 4000ms
+
+Type "skill-pool project show acme-billing-service"
+Enter
+Sleep 5500ms
+
+Type "# Each project ships an active plan — the AI agent context."
+Sleep 600ms
+Enter
+Sleep 300ms
+
+Type "skill-pool plan show acme-billing-service"
+Enter
+Sleep 9500ms
+
+# ─────────────────────────────────────────────────────────────────────
+# Act 3 — Importing a plan revision + verifying drift
+# ─────────────────────────────────────────────────────────────────────
+Type "clear"
+Enter
+Sleep 400ms
+
+Type "# A curator imports a new plan revision from a markdown file."
+Sleep 600ms
+Enter
+Sleep 300ms
+
+Type "cat /tmp/sprint.md"
 Enter
 Sleep 2800ms
 
-Type "skill-pool search axum"
+Type "skill-pool plan import acme-billing-service --file /tmp/sprint.md"
 Enter
-Sleep 2500ms
+Sleep 3000ms
 
-# --- Act 5: install a skill ---
-Type "# Install one into .claude/skills/ and the manifest."
-Sleep 600ms
+Type "skill-pool plan history acme-billing-service"
 Enter
-Sleep 300ms
+Sleep 5500ms
 
-Type "skill-pool add a11y-audit"
-Enter
-Sleep 2500ms
-
-Type "ls .claude/skills/"
-Enter
-Sleep 1800ms
-
-# --- Act 6: health check ---
-Type "# doctor: drift, dangling symlinks, registry reachability."
+Type "# Finally — doctor checks drift, dangling symlinks, registry health."
 Sleep 600ms
 Enter
 Sleep 300ms
 
 Type "skill-pool doctor"
 Enter
-Sleep 2500ms
+Sleep 6500ms
 
 # Final hold
-Sleep 1500ms
+Sleep 2500ms

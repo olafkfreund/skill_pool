@@ -27,7 +27,7 @@ The trick: **retrospective capture**. When Claude finishes a non-trivial fix in 
 
 ![demo (gif fallback)](docs/demo.gif)
 
-A 48-second walkthrough: login → catalog → skill detail with version history → editor → drafts inbox → theme settings.
+A 90-second walkthrough in three acts: (1) `init --project` + `login` + `bootstrap` (project-aware install), (2) `project list` + `project show` + `plan show` (browse the curated bundle + its plan), (3) `plan import` + `plan history` + `doctor` (import an updated plan and verify state).
 
 ## Screenshots
 
