@@ -1,0 +1,70 @@
+[
+  {
+    "name": "login",
+    "url": "/login",
+    "skipAuth": true,
+    "waitForSelector": "form",
+    "fullPage": false
+  },
+  {
+    "name": "catalog",
+    "url": "/",
+    "waitForSelector": "main",
+    "fullPage": true
+  },
+  {
+    "name": "skill-detail",
+    "url": "/skills/design-auditor",
+    "waitForSelector": "main",
+    "fullPage": true
+  },
+  {
+    "name": "editor",
+    "url": "/skills/new",
+    "waitForSelector": "main",
+    "fullPage": false
+  },
+  {
+    "name": "drafts",
+    "url": "/drafts",
+    "waitForSelector": "main",
+    "fullPage": false
+  },
+  {
+    "name": "theme",
+    "url": "/admin/theme",
+    "waitForSelector": "main",
+    "fullPage": true
+  },
+  {
+    "name": "sso",
+    "url": "/admin/sso",
+    "waitForSelector": "main",
+    "fullPage": true,
+    "noJs": true
+  },
+  {
+    "name": "domain",
+    "url": "/admin/domain",
+    "waitForSelector": "main",
+    "fullPage": true
+  },
+  {
+    "name": "members",
+    "url": "/admin/members",
+    "waitForSelector": "main",
+    "fullPage": false
+  },
+  {
+    "name": "profile",
+    "url": "/profile",
+    "waitForSelector": "main",
+    "fullPage": true
+  },
+  {
+    "name": "graveyard",
+    "url": "/admin/decay?days=0&max_uses=100",
+    "waitForSelector": "main",
+    "fullPage": true
+  }
+]

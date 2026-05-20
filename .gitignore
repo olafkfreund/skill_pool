@@ -12,6 +12,12 @@
 /web/node_modules/
 /web/package-lock.json.bak
 
+# Screenshot tooling — Playwright install, ~45 MB; capture is run on-demand.
+/scripts/screenshots/node_modules/
+
+# borghei/Claude-Skills clone target used by scripts/import-skills.sh
+/tmp-claude-skills/
+
 # Phase 0 — local library cache; tracked separately by user installs
 /.local-library/
 

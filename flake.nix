@@ -125,6 +125,20 @@
 
             # General tooling
             git direnv just
+
+            # Terminal recording for showcase demos (scripts/demo.tape).
+            # vhs renders deterministic .gif/.webm output from a tape script
+            # so the README/docs demo stays reproducible across machines.
+            vhs
+
+            # Playwright-driven portal screenshots (scripts/screenshots/).
+            # Use the Nix-provided Chromium to keep the renderer pinned and
+            # reproducible; PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD avoids the
+            # npm post-install browser fetch.
+            chromium
+            # ImageMagick for assembling the hero collage from individual
+            # screenshots (scripts/screenshots → docs/images/hero.webp).
+            imagemagick
           ];
 
           shellHook = ''
@@ -132,6 +146,11 @@
             export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
             # Make sure pkg-config finds Nix-provided headers, not /usr/.
             unset OPENSSL_DIR
+            # Pin Playwright to the Nix-provided Chromium so screenshot
+            # capture is reproducible and doesn't try to download a
+            # platform-specific browser at npm install time.
+            export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+            export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=${pkgs.chromium}/bin/chromium
             echo "skill-pool dev shell"
             echo "  cargo check --workspace"
             echo "  docker compose -f server/compose.yaml up    # local stack"
