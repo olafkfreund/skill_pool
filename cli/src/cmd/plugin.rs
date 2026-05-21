@@ -121,14 +121,16 @@ async fn publish(cfg: &Config, dir: &Path) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         PluginEndpointOutcome::Unavailable { issue } => {
-            // Local validation succeeded; the server-side route just isn't
-            // live yet. Exit 0 — we did the part we could.
+            // Local validation succeeded but the publish itself didn't
+            // happen. Exit 2 (operation unavailable) — exit 0 would
+            // silently break shell chains like `publish && deploy`,
+            // because the user asked us to publish, not just validate.
             println!(
                 "  note:      plugin publish endpoint not yet available on the registry \
                  (tracking: issue #{issue}). Validated `plugin.json` locally; \
                  nothing was published."
             );
-            Ok(ExitCode::SUCCESS)
+            Ok(ExitCode::from(2))
         }
     }
 }

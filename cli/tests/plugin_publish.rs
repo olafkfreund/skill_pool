@@ -1,10 +1,13 @@
 //! `skill-pool plugin publish <dir>` integration test (#33).
 //!
 //! Server-side `POST /v1/plugins` is in flight (#30). Two cases:
-//!   1. **Happy path**: wiremock returns 201 → CLI prints "published …".
-//!   2. **Server not yet shipped**: wiremock returns 404 → CLI falls back
-//!      cleanly with the "tracking: issue #30" message and exits 0
-//!      (local validation still succeeded).
+//!   1. **Happy path**: wiremock returns 201 → CLI prints "published …"
+//!      and exits 0.
+//!   2. **Server not yet shipped**: wiremock returns 404 → CLI falls
+//!      back with the "tracking: issue #30" message and exits **2**
+//!      (operation unavailable). Exit 0 would silently break shell
+//!      chains like `publish && deploy` because the user asked us to
+//!      publish, not to validate.
 
 mod common;
 
@@ -84,7 +87,9 @@ async fn plugin_publish_falls_back_cleanly_when_server_returns_404() {
         .args(["plugin", "publish"])
         .arg(&plugin_dir)
         .assert()
-        .success() // exit 0 — local validation still succeeded
+        // Exit 2 so `publish && deploy` chains halt — exit 0 would
+        // silently advance past the unpublished plugin.
+        .code(2)
         .stdout(contains("validated: my-plugin@1.0.0"))
         .stdout(contains("tracking: issue #30"));
 }
