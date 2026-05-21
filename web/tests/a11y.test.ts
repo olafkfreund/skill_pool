@@ -41,6 +41,10 @@ import LoginPage from '../src/routes/(public)/login/+page.svelte';
 import CatalogPage from '../src/routes/(authed)/+page.svelte';
 import ThemePage from '../src/routes/(authed)/admin/theme/+page.svelte';
 import DraftsPage from '../src/routes/(authed)/drafts/+page.svelte';
+import PluginsListPage from '../src/routes/(authed)/admin/plugins/+page.svelte';
+import NewPluginPage from '../src/routes/(authed)/admin/plugins/new/+page.svelte';
+import PluginDetailPage from '../src/routes/(authed)/admin/plugins/[slug]/+page.svelte';
+import ImportPluginPage from '../src/routes/(authed)/admin/plugins/import/+page.svelte';
 
 import { DEFAULT_THEME, themeToCss, type Theme } from '../src/lib/theme';
 import { checkThemeContrast } from '../src/lib/contrast';
@@ -217,6 +221,150 @@ const DRAFTS_DATA = {
   ],
 } as const;
 
+// One row per sourcing mode so the axe sweep covers each chip + status
+// combo on the list page.
+const PLUGINS_LIST_DATA = {
+  tenant: { slug: 'acme', authed: true },
+  theme: DEFAULT_THEME,
+  pendingDrafts: 0,
+  plugins: [
+    {
+      slug: 'rust-axum-toolkit',
+      version: '1.2.0',
+      name: 'Rust + Axum Toolkit',
+      description: 'Curated skills for Rust + Axum',
+      status: 'published',
+      sourcing_mode: 'internal',
+      tags: ['rust', 'axum'],
+      created_at: '2026-04-01T00:00:00Z',
+    },
+    {
+      slug: 'acme-formatter',
+      version: '0.4.1',
+      name: 'Acme Formatter',
+      description: 'Mirrored from acme-corp/formatter',
+      status: 'published',
+      sourcing_mode: 'mirror',
+      tags: ['formatter'],
+      created_at: '2026-04-02T00:00:00Z',
+    },
+    {
+      slug: 'external-linter',
+      version: '2.0.0',
+      name: 'External Linter',
+      description: 'Lives upstream, listed only',
+      status: 'published',
+      sourcing_mode: 'external',
+      tags: [],
+      created_at: '2026-04-03T00:00:00Z',
+    },
+  ],
+  sourcingMode: null,
+  userRole: 'curator',
+} as const;
+
+// A handful of catalogue entries per kind so the type-ahead picker has
+// something to render against. 500-entry realism is gated by client-side
+// filtering, not by the page itself — three is enough to exercise axe.
+const PLUGINS_NEW_DATA = {
+  tenant: { slug: 'acme', authed: true },
+  theme: DEFAULT_THEME,
+  pendingDrafts: 0,
+  userRole: 'curator',
+  skills: [
+    {
+      slug: 'rust-error-handling',
+      version: '1.0.0',
+      description: 'Idiomatic error handling in Rust',
+      tags: ['rust'],
+      status: 'published',
+      created_at: '2026-01-01T00:00:00Z',
+      similarity: null,
+    },
+    {
+      slug: 'rust-axum-handler',
+      version: '0.3.0',
+      description: 'Axum request handlers',
+      tags: ['rust', 'axum'],
+      status: 'published',
+      created_at: '2026-01-02T00:00:00Z',
+      similarity: null,
+    },
+  ],
+  agents: [
+    {
+      slug: 'sql-migration-reviewer',
+      version: '1.1.0',
+      description: 'Reviews SQL migrations',
+      tags: ['sql'],
+      status: 'published',
+      created_at: '2026-01-03T00:00:00Z',
+      similarity: null,
+    },
+  ],
+  commands: [
+    {
+      slug: 'release-notes',
+      version: '0.2.0',
+      description: 'Generate release notes',
+      tags: [],
+      status: 'published',
+      created_at: '2026-01-04T00:00:00Z',
+      similarity: null,
+    },
+  ],
+} as const;
+
+// A fully-formed mirror plugin so the detail page exercises every
+// section: marketplace URL, manifest preview, contents tables, version
+// history, mirror auto-refresh toggle.
+const PLUGIN_DETAIL_DATA = {
+  tenant: { slug: 'acme', authed: true },
+  theme: DEFAULT_THEME,
+  pendingDrafts: 0,
+  userRole: 'curator',
+  marketplaceUrl: 'https://acme.skill-pool.example.com/.claude-plugin/marketplace.json',
+  plugin: {
+    slug: 'acme-formatter',
+    version: '0.4.1',
+    name: 'Acme Formatter',
+    description: 'Mirrored from acme-corp/formatter',
+    status: 'published',
+    sourcing_mode: 'mirror',
+    external_git_url: 'https://github.com/acme-corp/formatter',
+    upstream_url: 'https://github.com/acme-corp/formatter',
+    manifest: {
+      name: 'acme-formatter',
+      version: '0.4.1',
+      description: 'Mirrored from acme-corp/formatter',
+    },
+    contents: [
+      { kind: 'skill', slug: 'rust-error-handling', version: '1.0.0', position: 0 },
+      { kind: 'agent', slug: 'sql-migration-reviewer', version: '1.1.0', position: 1 },
+      { kind: 'command', slug: 'release-notes', version: '0.2.0', position: 2 },
+    ],
+    updated_at: '2026-05-15T00:00:00Z',
+  },
+  versions: [
+    {
+      version: '0.4.1',
+      status: 'published',
+      created_at: '2026-05-15T00:00:00Z',
+      published_by: 'curator@acme.com',
+    },
+    {
+      version: '0.4.0',
+      status: 'archived',
+      created_at: '2026-05-01T00:00:00Z',
+      published_by: 'curator@acme.com',
+    },
+  ],
+} as const;
+
+// Import page consumes only the `form` prop in its component
+// signature — the loader-level layout fields go via the parent layout
+// at runtime. No `data` fixture needed for the axe sweep.
+
 // --- Tests ------------------------------------------------------------------
 
 describe('contrast guarantees', () => {
@@ -298,6 +446,80 @@ describe('a11y: drafts inbox', () => {
       expect(blocking, `drafts page (${name}) violations:\n${formatViolations(blocking)}`).toEqual(
         [],
       );
+    });
+  }
+});
+
+describe('a11y: plugins list', () => {
+  afterEach(() => cleanup());
+  for (const { name, theme } of PALETTES) {
+    it(`no serious/critical axe violations on "${name}" palette`, async () => {
+      const results = await axePage(
+        () => render(PluginsListPage, { props: { data: PLUGINS_LIST_DATA as any, form: null } }),
+        theme,
+      );
+      const blocking = blockingViolations(results);
+      expect(blocking, `plugins list (${name}) violations:\n${formatViolations(blocking)}`).toEqual(
+        [],
+      );
+    });
+  }
+});
+
+describe('a11y: new plugin (composer)', () => {
+  afterEach(() => cleanup());
+  for (const { name, theme } of PALETTES) {
+    it(`no serious/critical axe violations on "${name}" palette`, async () => {
+      const results = await axePage(
+        () => render(NewPluginPage, { props: { data: PLUGINS_NEW_DATA as any, form: null } }),
+        theme,
+      );
+      const blocking = blockingViolations(results);
+      expect(blocking, `new plugin (${name}) violations:\n${formatViolations(blocking)}`).toEqual(
+        [],
+      );
+    });
+  }
+});
+
+describe('a11y: plugin detail (mirror)', () => {
+  afterEach(() => cleanup());
+  for (const { name, theme } of PALETTES) {
+    it(`no serious/critical axe violations on "${name}" palette`, async () => {
+      const results = await axePage(
+        () =>
+          render(PluginDetailPage, {
+            props: { data: PLUGIN_DETAIL_DATA as any, form: null },
+          }),
+        theme,
+      );
+      const blocking = blockingViolations(results);
+      expect(
+        blocking,
+        `plugin detail (${name}) violations:\n${formatViolations(blocking)}`,
+      ).toEqual([]);
+    });
+  }
+});
+
+describe('a11y: import plugin (stub)', () => {
+  afterEach(() => cleanup());
+  for (const { name, theme } of PALETTES) {
+    it(`no serious/critical axe violations on "${name}" palette`, async () => {
+      const results = await axePage(
+        () =>
+          render(ImportPluginPage, {
+            // Import page only consumes `form`; `data` is loader-level
+            // metadata for the layout, not the component itself.
+            props: { form: null } as any,
+          }),
+        theme,
+      );
+      const blocking = blockingViolations(results);
+      expect(
+        blocking,
+        `import plugin (${name}) violations:\n${formatViolations(blocking)}`,
+      ).toEqual([]);
     });
   }
 });

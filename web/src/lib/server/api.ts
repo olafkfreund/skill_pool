@@ -763,10 +763,7 @@ export interface PutSsoOidcBody {
 export async function putSsoOidc(
   auth: Auth,
   body: PutSsoOidcBody,
-): Promise<
-  | { ok: true; config: SsoConfigView }
-  | { ok: false; status: number; error: string }
-> {
+): Promise<{ ok: true; config: SsoConfigView } | { ok: false; status: number; error: string }> {
   const resp = await call('PUT', '/v1/tenant/sso/oidc', auth, { jsonBody: body });
   if (resp.ok) return { ok: true, config: (await resp.json()) as SsoConfigView };
   return { ok: false, status: resp.status, error: await resp.text() };
@@ -781,10 +778,7 @@ export interface PutSsoSamlBody {
 export async function putSsoSaml(
   auth: Auth,
   body: PutSsoSamlBody,
-): Promise<
-  | { ok: true; config: SsoConfigView }
-  | { ok: false; status: number; error: string }
-> {
+): Promise<{ ok: true; config: SsoConfigView } | { ok: false; status: number; error: string }> {
   const resp = await call('PUT', '/v1/tenant/sso/saml', auth, { jsonBody: body });
   if (resp.ok) return { ok: true, config: (await resp.json()) as SsoConfigView };
   return { ok: false, status: resp.status, error: await resp.text() };
@@ -978,9 +972,7 @@ export async function createMyToken(
   auth: Auth,
   label: string,
   scopes: string[],
-): Promise<
-  { ok: true; token: CreatedApiToken } | { ok: false; status: number; error: string }
-> {
+): Promise<{ ok: true; token: CreatedApiToken } | { ok: false; status: number; error: string }> {
   const resp = await call('POST', '/v1/profile/tokens', auth, {
     jsonBody: { label, scopes },
   });
@@ -1086,12 +1078,9 @@ export async function setProjectItems(
   slug: string,
   items: ProjectItem[],
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
-  const resp = await call(
-    'PUT',
-    `/v1/tenant/projects/${encodeURIComponent(slug)}/items`,
-    auth,
-    { jsonBody: items },
-  );
+  const resp = await call('PUT', `/v1/tenant/projects/${encodeURIComponent(slug)}/items`, auth, {
+    jsonBody: items,
+  });
   if (resp.ok) return { ok: true };
   return { ok: false, status: resp.status, error: await resp.text() };
 }
@@ -1196,6 +1185,76 @@ export async function archivePlugin(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+/** One row in `GET /v1/plugins/{slug}/versions` — full history, any status. */
+export interface PluginVersionRow {
+  version: string;
+  status: 'draft' | 'published' | 'archived';
+  created_at: string;
+  published_by?: string;
+}
+
+export async function listPluginVersions(auth: Auth, slug: string): Promise<PluginVersionRow[]> {
+  const resp = await call('GET', `/v1/plugins/${encodeURIComponent(slug)}/versions`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+/**
+ * Enqueue a mirror import job for an upstream git URL. Posts to
+ * `POST /v1/plugins/import`, which lands later in tracking issue #32.
+ *
+ * Until that endpoint exists, the server responds with 404 (or 405). The
+ * import page treats those as "not yet available" and surfaces a banner —
+ * see `web/src/routes/(authed)/admin/plugins/import/+page.svelte`. Never
+ * fake a success: the discriminated union forces callers to branch on
+ * `ok` so a missing worker can't be papered over.
+ *
+ * The returned shape mirrors the contract documented in
+ * `docs/plugins.md` — a job id once the worker is implemented; on the
+ * not-yet-available branch we set `notYetAvailable: true` so the page can
+ * render the dedicated banner instead of a generic error.
+ */
+export async function importPlugin(
+  auth: Auth,
+  url: string,
+  opts: { refresh_interval_secs?: number } = {},
+): Promise<
+  | { ok: true; job_id: string }
+  | { ok: false; status: number; error: string; notYetAvailable?: boolean }
+> {
+  const body: { url: string; refresh_interval_secs?: number } = { url };
+  if (opts.refresh_interval_secs !== undefined) {
+    body.refresh_interval_secs = opts.refresh_interval_secs;
+  }
+  const resp = await call('POST', '/v1/plugins/import', auth, { jsonBody: body });
+  if (resp.ok) {
+    const j = (await resp.json()) as { job_id: string };
+    return { ok: true, job_id: j.job_id };
+  }
+  // 404 / 405 → server hasn't shipped the import worker yet (#32).
+  const notYetAvailable = resp.status === 404 || resp.status === 405;
+  return {
+    ok: false,
+    status: resp.status,
+    error: await resp.text(),
+    ...(notYetAvailable ? { notYetAvailable: true } : {}),
+  };
+}
+
+/**
+ * Public marketplace URL for the current API base. Claude Code's
+ * `/plugin marketplace add` command consumes this URL unauthenticated, so
+ * we don't gate it on tenant headers — operators paste it into Claude
+ * Code as-is.
+ *
+ * Lives next to `logoUrl()` in spirit: a pure URL helper that surfaces
+ * the API base to the UI. Callers display it in the plugin detail page's
+ * "Copy marketplace URL" button.
+ */
+export function marketplaceUrl(): string {
+  return `${base()}/.claude-plugin/marketplace.json`;
+}
+
 // --- Project Plan API -------------------------------------------------------
 
 /** Active plan version returned by GET /v1/tenant/projects/{slug}/plan */
@@ -1225,15 +1284,8 @@ export interface ProjectPlanVersion {
  * Fetch the active plan version for a project. Returns `null` when the
  * project has no plan imported yet (404 from the server).
  */
-export async function getActiveProjectPlan(
-  auth: Auth,
-  slug: string,
-): Promise<ProjectPlan | null> {
-  const resp = await call(
-    'GET',
-    `/v1/tenant/projects/${encodeURIComponent(slug)}/plan`,
-    auth,
-  );
+export async function getActiveProjectPlan(auth: Auth, slug: string): Promise<ProjectPlan | null> {
+  const resp = await call('GET', `/v1/tenant/projects/${encodeURIComponent(slug)}/plan`, auth);
   if (resp.status === 404) return null;
   if (!resp.ok) throw new ApiError(resp.status, await resp.text());
   return resp.json();
