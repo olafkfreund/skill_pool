@@ -216,6 +216,74 @@ pub struct PublishedPlugin {
     pub status: String,
 }
 
+/// One `(kind, slug, version)` entry inside a `PluginDetail.contents`.
+/// Mirrors `server::routes::plugins::PluginContentResponse`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginContentEntry {
+    pub kind: String,
+    pub slug: String,
+    pub version: String,
+    #[serde(default)]
+    pub position: i32,
+}
+
+/// Full plugin response from `GET /v1/plugins/{slug}`. Used by the #36
+/// transitive resolver in `ensure.rs` to walk a plugin's bundled
+/// skills/agents/commands and merge them into the install plan.
+///
+/// Mirrors `server::routes::plugins::PluginResponse`. Loose `manifest`
+/// passthrough so the Claude Code spec (hooks / MCP / etc.) can evolve
+/// without forcing CLI updates; only the `contents` array is consumed
+/// by the resolver. `manifest.plugins[]` is also walked transitively
+/// — see [`Self::nested_plugin_slugs`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginDetail {
+    pub slug: String,
+    pub version: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub contents: Vec<PluginContentEntry>,
+    #[serde(default)]
+    pub manifest: serde_json::Value,
+}
+
+impl PluginDetail {
+    /// Slugs declared in the plugin manifest's `dependencies[]` field
+    /// (per the Claude Code `plugin.json` spec — see
+    /// `docs/plugin-manifest-schema.md` and
+    /// <https://code.claude.com/docs/en/plugin-dependencies>). Used by
+    /// the #36 BFS resolver to enqueue transitively-required plugins.
+    ///
+    /// The spec allows two shapes per entry, both normalised to the
+    /// dependency's `name` (used as the registry slug):
+    ///   - bare string `"foo"` — treated as `{name: "foo", version: "*"}`.
+    ///   - object `{"name": "foo", "version": "~2.1.0"}` — the full pin.
+    ///
+    /// We only return the names — the BFS resolver doesn't enforce the
+    /// semver `version` constraint yet (the server's
+    /// `GET /v1/plugins/{slug}` always returns the latest published
+    /// version regardless of pin). A version-aware variant is left for
+    /// a follow-up once the registry supports semver-range queries.
+    /// Any entry that doesn't match either shape is silently skipped —
+    /// loose JSON, not strict schema.
+    pub fn nested_plugin_slugs(&self) -> Vec<String> {
+        let Some(arr) = self.manifest.get("dependencies").and_then(|v| v.as_array()) else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(arr.len());
+        for v in arr {
+            if let Some(s) = v.as_str() {
+                out.push(s.to_string());
+            } else if let Some(s) = v.get("name").and_then(|s| s.as_str()) {
+                out.push(s.to_string());
+            }
+        }
+        out
+    }
+}
+
 /// Outcome of a plugin endpoint call that may legitimately 404 while the
 /// server-side route is still in flight (#30 publish/list, #32 import).
 ///
@@ -770,5 +838,58 @@ impl Client {
         }
         let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
         Ok(PluginEndpointOutcome::Ok(body))
+    }
+
+    /// `GET /v1/plugins/{slug}` — fetch the latest published version of
+    /// `slug` with its full `contents[]` and `manifest` body. Used by
+    /// the #36 transitive resolver in `ensure.rs`.
+    ///
+    /// Returns `Unavailable { issue: 30 }` on 404 so callers can soft-
+    /// fail when the registry hasn't shipped the plugin route yet (or
+    /// when the plugin slug genuinely doesn't exist — both surface as
+    /// 404 from the server; we treat them identically so a stale
+    /// manifest pin doesn't hard-fail `ensure`).
+    pub async fn get_plugin(
+        &self,
+        slug: &str,
+    ) -> Result<PluginEndpointOutcome<PluginDetail>> {
+        let url = self.base.join(&format!("/v1/plugins/{slug}"))?;
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(PluginEndpointOutcome::Unavailable { issue: 30 });
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("get_plugin({slug}): {status} — {body}"));
+        }
+        let detail: PluginDetail = resp.json().await?;
+        Ok(PluginEndpointOutcome::Ok(detail))
+    }
+
+    /// `PUT /v1/tenant/projects/{slug}/items` — atomically replace the
+    /// project's curated item list. Used by `skill-pool project
+    /// add-plugin` after fetching the current items and appending the
+    /// new `(slug, "plugin")` pair.
+    pub async fn set_project_items(
+        &self,
+        project_slug: &str,
+        items: &[(String, String)],
+    ) -> Result<()> {
+        let url = self
+            .base
+            .join(&format!("/v1/tenant/projects/{project_slug}/items"))?;
+        // Wire shape mirrors `routes::projects::ItemInput { slug, kind }`.
+        let body: Vec<serde_json::Value> = items
+            .iter()
+            .map(|(slug, kind)| serde_json::json!({ "slug": slug, "kind": kind }))
+            .collect();
+        let resp = self.http.put(url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("set_project_items: {status} — {text}"));
+        }
+        Ok(())
     }
 }

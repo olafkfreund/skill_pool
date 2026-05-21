@@ -1474,6 +1474,237 @@ pub async fn get_project(
     Ok(Some(ProjectWithItems { project, items }))
 }
 
+/// One item in the install plan returned by [`resolve_project_items_expanded`].
+///
+/// `source` carries provenance so the CLI / web admin / bootstrap-debug
+/// view can answer "why is this skill in my install plan?" without
+/// scraping logs:
+///   - `"direct"` — the project pinned this slug directly.
+///   - `"plugin:<plugin-slug>"` — the slug was contributed by a plugin
+///     bundled into the project (transitively or otherwise).
+///
+/// `position` mirrors the curator's `tenant_project_items.position` for
+/// direct items; plugin-bundled items inherit their parent plugin's
+/// `position` so the relative order of "this plugin, then that skill,
+/// then that plugin" is preserved across the expansion.
+#[derive(Debug, Clone)]
+pub struct ResolvedProjectItem {
+    pub slug: String,
+    pub kind: String,
+    pub source: String,
+    pub position: i32,
+}
+
+/// Resolve a project's items with plugin expansion.
+///
+/// Given a `ProjectWithItems`, walk each `tenant_project_items` row:
+///   - `kind` ∈ {skill, agent, command}  → pass through as `source="direct"`.
+///   - `kind == "plugin"`                → look up `plugins`/`plugin_contents`
+///     and BFS-expand the bundled contents into the result list.
+///
+/// Dedup precedence mirrors the CLI resolver (`cli/src/cmd/ensure.rs::resolve_plugins`):
+///   1. Direct items always win (seeded into the dedup set first).
+///   2. Among plugin-bundled items, BFS-shallower wins; siblings at the
+///      same depth resolve by first-encountered.
+///   3. Cycles → `AppError::PluginCycle` with a normalised path.
+///
+/// `nested_plugin_slugs_from_manifest` extracts a plugin's
+/// `manifest.dependencies[]` array (the Claude Code `plugin.json`
+/// spec field — bare-string and `{name, version}` shapes both
+/// tolerated, matching `cli::client::PluginDetail::nested_plugin_slugs`).
+///
+/// Latest published version per plugin slug. A plugin slug listed in a
+/// project that has no published version is silently dropped (a debug
+/// trace explains) — same forward-reference policy as the skill closure
+/// walk.
+pub async fn resolve_project_items_expanded(
+    db: &PgPool,
+    tenant_id: Uuid,
+    items: &[ProjectItem],
+) -> std::result::Result<Vec<ResolvedProjectItem>, crate::error::AppError> {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut out: Vec<ResolvedProjectItem> = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+
+    // 1. Direct atomic items first. Seeding `seen` from these makes the
+    //    later plugin walk's dedup rule "first-wins" produce the right
+    //    answer for the "direct pin shadows plugin-bundled" case.
+    for item in items {
+        if item.kind == "plugin" {
+            continue; // handled in pass 2
+        }
+        if seen.insert((item.skill_slug.clone(), item.kind.clone())) {
+            out.push(ResolvedProjectItem {
+                slug: item.skill_slug.clone(),
+                kind: item.kind.clone(),
+                source: "direct".into(),
+                position: item.position,
+            });
+        }
+    }
+
+    // 2. BFS plugin expansion. Each queue entry carries the slug to
+    //    fetch, its BFS depth, the position offset (so plugin-bundled
+    //    items stay near their parent plugin in the output), and the
+    //    parent-chain path for cycle detection.
+    struct Queued {
+        slug: String,
+        depth: u32,
+        position: i32,
+        path: Vec<String>,
+    }
+
+    let mut queue: VecDeque<Queued> = VecDeque::new();
+    let mut visited: HashSet<String> = HashSet::new();
+
+    for item in items {
+        if item.kind != "plugin" {
+            continue;
+        }
+        if visited.insert(item.skill_slug.clone()) {
+            queue.push_back(Queued {
+                slug: item.skill_slug.clone(),
+                depth: 1,
+                position: item.position,
+                path: vec![item.skill_slug.clone()],
+            });
+        }
+    }
+
+    while let Some(q) = queue.pop_front() {
+        // Look up the latest published version of this plugin slug.
+        let plugin_row = sqlx::query!(
+            "SELECT id, manifest \
+             FROM plugins \
+             WHERE tenant_id = $1 AND slug = $2 AND status = 'published' \
+             ORDER BY created_at DESC LIMIT 1",
+            tenant_id,
+            &q.slug,
+        )
+        .fetch_optional(db)
+        .await?;
+
+        let Some(plugin) = plugin_row else {
+            tracing::debug!(
+                plugin_slug = %q.slug,
+                "plugin pinned in project has no published version; skipping"
+            );
+            continue;
+        };
+
+        // 2a. Fan out the bundled contents.
+        let content_rows = sqlx::query!(
+            "SELECT content_slug, content_kind, position \
+             FROM plugin_contents \
+             WHERE plugin_id = $1 \
+             ORDER BY position ASC, content_slug ASC",
+            plugin.id,
+        )
+        .fetch_all(db)
+        .await?;
+
+        let source = format!("plugin:{}", q.slug);
+        for c in content_rows {
+            let key = (c.content_slug.clone(), c.content_kind.clone());
+            if seen.insert(key) {
+                out.push(ResolvedProjectItem {
+                    slug: c.content_slug,
+                    kind: c.content_kind,
+                    source: source.clone(),
+                    position: q.position,
+                });
+            } else {
+                tracing::debug!(
+                    plugin_slug = %q.slug,
+                    content_slug = %c.content_slug,
+                    content_kind = %c.content_kind,
+                    "plugin content shadowed by earlier project item"
+                );
+            }
+        }
+
+        // 2b. Enqueue dependency-plugins declared in the plugin's
+        //     `manifest.dependencies[]` (per the Claude Code plugin.json
+        //     spec — see `docs/plugin-manifest-schema.md`).
+        let nested = nested_plugin_slugs_from_manifest(&plugin.manifest);
+        for nested_slug in nested {
+            if q.path.contains(&nested_slug) {
+                // Cycle. Build the loop slice, normalise, and bail.
+                let start = q
+                    .path
+                    .iter()
+                    .position(|s| s == &nested_slug)
+                    .unwrap_or(0);
+                let mut loop_slugs: Vec<String> = q.path[start..].to_vec();
+                loop_slugs.push(nested_slug.clone());
+                return Err(crate::error::AppError::PluginCycle(normalise_cycle(
+                    &loop_slugs,
+                )));
+            }
+            if !visited.insert(nested_slug.clone()) {
+                continue;
+            }
+            let mut next_path = q.path.clone();
+            next_path.push(nested_slug.clone());
+            queue.push_back(Queued {
+                slug: nested_slug,
+                depth: q.depth + 1,
+                position: q.position,
+                path: next_path,
+            });
+        }
+    }
+
+    Ok(out)
+}
+
+/// Extract dependency-plugin names from a plugin manifest's
+/// `dependencies[]` field (per the Claude Code `plugin.json` spec —
+/// see `docs/plugin-manifest-schema.md` +
+/// <https://code.claude.com/docs/en/plugin-dependencies>). Tolerates
+/// both shapes the spec allows: bare string `"foo"` (treated as
+/// `{name:"foo", version:"*"}`) and object `{name, version}` — matches
+/// the CLI client's `PluginDetail::nested_plugin_slugs`. Entries that
+/// don't match either shape are silently skipped (loose JSON, not
+/// strict schema).
+fn nested_plugin_slugs_from_manifest(manifest: &serde_json::Value) -> Vec<String> {
+    let Some(arr) = manifest.get("dependencies").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for v in arr {
+        if let Some(s) = v.as_str() {
+            out.push(s.to_string());
+        } else if let Some(s) = v.get("name").and_then(|s| s.as_str()) {
+            out.push(s.to_string());
+        }
+    }
+    out
+}
+
+/// Rotate the loop so the lexicographically-smallest slug leads, then
+/// re-append it so the diagnostic reads `a → b → a`. Mirrors the CLI's
+/// `cmd::ensure::PluginCycle::new` so server- and client-side cycle
+/// reports look identical.
+fn normalise_cycle(loop_slugs: &[String]) -> Vec<String> {
+    debug_assert!(!loop_slugs.is_empty());
+    let body = &loop_slugs[..loop_slugs.len() - 1];
+    let pivot = body
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.cmp(b))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let mut path: Vec<String> = body[pivot..]
+        .iter()
+        .chain(body[..pivot].iter())
+        .cloned()
+        .collect();
+    path.push(path[0].clone());
+    path
+}
+
 /// List all projects for the tenant (without items). Ordered by slug.
 pub async fn list_projects(db: &PgPool, tenant_slug: &str) -> Result<Vec<Project>> {
     let tenant_id = lookup_tenant_id(db, tenant_slug).await?;
