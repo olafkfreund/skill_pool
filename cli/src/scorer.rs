@@ -407,10 +407,7 @@ fn rule_test_recovery(events: &[Event]) -> Vec<Signal> {
                 kind: SignalKind::TestRecovery,
                 weight: W_TEST_RECOVERY,
                 evidence: truncate(
-                    &format!(
-                        "`{}` failed {}× then passed",
-                        cmd, current_fail_streak
-                    ),
+                    &format!("`{}` failed {}× then passed", cmd, current_fail_streak),
                     240,
                 ),
             });
@@ -560,11 +557,7 @@ fn rule_cross_session_recurrence(
     let fp = fingerprint?;
     // Count distinct sessions sharing this fingerprint, including the
     // current one whether or not it's already been written to the index.
-    let mut sessions = index
-        .fingerprints
-        .get(fp)
-        .cloned()
-        .unwrap_or_default();
+    let mut sessions = index.fingerprints.get(fp).cloned().unwrap_or_default();
     if !sessions.iter().any(|s| s == this_session_id) {
         sessions.push(this_session_id.to_string());
     }
@@ -572,13 +565,7 @@ fn rule_cross_session_recurrence(
         Some(Signal {
             kind: SignalKind::CrossSessionRecurrence,
             weight: W_CROSS_SESSION_RECURRENCE,
-            evidence: truncate(
-                &format!(
-                    "`{fp}` seen in {} sessions",
-                    sessions.len()
-                ),
-                240,
-            ),
+            evidence: truncate(&format!("`{fp}` seen in {} sessions", sessions.len()), 240),
         })
     } else {
         None
@@ -657,9 +644,7 @@ fn ingest_history_file(path: &Path, stems: &mut std::collections::HashSet<String
         let Ok(content) = std::fs::read_to_string(path) else {
             return;
         };
-        let start = content
-            .len()
-            .saturating_sub(NOVEL_HISTORY_BYTE_CAP);
+        let start = content.len().saturating_sub(NOVEL_HISTORY_BYTE_CAP);
         // Snap to a UTF-8 boundary just in case.
         let mut s = start;
         while !content.is_char_boundary(s) && s < content.len() {
@@ -821,7 +806,13 @@ pub fn save_score_in(score: &SessionScore, dir: &Path) -> Result<std::path::Path
 
 fn sanitize(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -854,7 +845,11 @@ pub fn load_all_scores_in(dir: &Path) -> Result<Vec<SessionScore>> {
             Err(e) => tracing::warn!(file = %path.display(), error = ?e, "skip unreadable score"),
         }
     }
-    out.sort_by(|a, b| b.score.cmp(&a.score).then(b.last_scored_at.cmp(&a.last_scored_at)));
+    out.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then(b.last_scored_at.cmp(&a.last_scored_at))
+    });
     Ok(out)
 }
 
@@ -894,7 +889,10 @@ impl RecurrenceIndex {
     /// index changed (i.e. needs persisting). A session_id already
     /// present is a no-op.
     pub fn touch(&mut self, fingerprint: &str, session_id: &str) -> bool {
-        let entry = self.fingerprints.entry(fingerprint.to_string()).or_default();
+        let entry = self
+            .fingerprints
+            .entry(fingerprint.to_string())
+            .or_default();
         if entry.iter().any(|s| s == session_id) {
             return false;
         }
@@ -921,8 +919,7 @@ pub fn load_recurrence_index_at(path: &Path) -> Result<RecurrenceIndex> {
     if !path.exists() {
         return Ok(RecurrenceIndex::default());
     }
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     if raw.trim().is_empty() {
         return Ok(RecurrenceIndex::default());
     }
@@ -1053,11 +1050,7 @@ mod tests {
 
     #[test]
     fn no_signals_on_quiet_session() {
-        let s = score(
-            &[user("hi"), ass(), user("thanks"), ass()],
-            "quiet",
-            None,
-        );
+        let s = score(&[user("hi"), ass(), user("thanks"), ass()], "quiet", None);
         assert_eq!(s.score, 0);
         assert!(s.signals.is_empty());
     }
@@ -1215,7 +1208,13 @@ mod tests {
         assert!(
             matches!(&events[3], Event::ToolUse { name, target: Some(t) } if name=="Bash" && t == "cargo test")
         );
-        assert!(matches!(&events[4], Event::ToolResult { is_error: false, .. }));
+        assert!(matches!(
+            &events[4],
+            Event::ToolResult {
+                is_error: false,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1323,10 +1322,7 @@ mod tests {
 
     #[test]
     fn fingerprint_strips_env_var_prefix() {
-        let ev = vec![
-            bash_cmd("RUST_LOG=info cargo test"),
-            err_result(),
-        ];
+        let ev = vec![bash_cmd("RUST_LOG=info cargo test"), err_result()];
         assert_eq!(fingerprint_from_events(&ev).as_deref(), Some("cargo test"));
     }
 
@@ -1397,8 +1393,7 @@ mod tests {
         let events = vec![bash_cmd("cargo test"), err_result()];
         let s = score_with_recurrence(&events, "me", None, &idx);
         assert_eq!(
-            s.breakdown.cross_session_recurrence,
-            W_CROSS_SESSION_RECURRENCE,
+            s.breakdown.cross_session_recurrence, W_CROSS_SESSION_RECURRENCE,
             "{s:?}"
         );
         assert!(s
@@ -1453,13 +1448,7 @@ mod tests {
             bash_cmd("cargo test --release"), // stem: cargo test
             err_result(),
         ];
-        let s = score_full(
-            &events,
-            "s1",
-            None,
-            &RecurrenceIndex::default(),
-            &history,
-        );
+        let s = score_full(&events, "s1", None, &RecurrenceIndex::default(), &history);
         assert_eq!(s.breakdown.novel_command, W_NOVEL_COMMAND, "{s:?}");
         assert!(s
             .signals

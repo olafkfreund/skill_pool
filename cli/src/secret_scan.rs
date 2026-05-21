@@ -155,9 +155,7 @@ pub fn scan_bundle(bundle: &Bytes) -> Result<Vec<Finding>> {
     let gz = GzDecoder::new(&bundle[..]);
     let mut tar = tar::Archive::new(gz);
     let mut findings = Vec::new();
-    let entries = tar
-        .entries()
-        .map_err(|e| anyhow!("tar entries: {e}"))?;
+    let entries = tar.entries().map_err(|e| anyhow!("tar entries: {e}"))?;
     for entry in entries {
         let mut entry = entry.map_err(|e| anyhow!("tar entry: {e}"))?;
         let is_md = entry
@@ -188,7 +186,14 @@ fn redact(s: &str) -> String {
         return "…".repeat(chars.len().min(3));
     }
     let head: String = chars.iter().take(4).collect();
-    let tail: String = chars.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = chars
+        .iter()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{head}…{tail}")
 }
 
@@ -356,7 +361,9 @@ mod tests {
     fn generic_quoted_secret_negative_frontmatter_description() {
         // The frontmatter `description:` field is the most common
         // long-quoted-string in our domain. Must not trip.
-        let f = scan_text(r#"description: "A skill for doing something useful that is at least twenty chars long""#);
+        let f = scan_text(
+            r#"description: "A skill for doing something useful that is at least twenty chars long""#,
+        );
         assert!(
             !kinds(&f).contains(&"generic-quoted-secret"),
             "frontmatter description triggered the generic rule: {f:?}"

@@ -335,7 +335,11 @@ mod tests {
         let outcome = enqueue_if_above_threshold(weird, 50, &sessions, &queue).unwrap();
         match outcome {
             EnqueueOutcome::Queued { marker_path, .. } => {
-                let name = marker_path.file_name().unwrap().to_string_lossy().into_owned();
+                let name = marker_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
                 assert!(!name.contains('/'), "no path component");
                 assert!(!name.contains(".."), "no traversal");
             }

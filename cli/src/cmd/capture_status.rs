@@ -19,7 +19,10 @@ pub fn run(json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let draft_worthy: Vec<&SessionScore> = scores.iter().filter(|s| s.score >= DRAFT_THRESHOLD).collect();
+    let draft_worthy: Vec<&SessionScore> = scores
+        .iter()
+        .filter(|s| s.score >= DRAFT_THRESHOLD)
+        .collect();
     println!(
         "{} session{} scored ({} ≥ draft threshold of {})",
         scores.len(),
@@ -31,7 +34,11 @@ pub fn run(json: bool) -> Result<()> {
     println!("  {:<5} {:<14} {:<40} SESSION", "SCORE", "TURNS", "CWD");
     for s in &scores {
         let cwd = s.cwd.as_deref().unwrap_or("—");
-        let marker = if s.score >= DRAFT_THRESHOLD { "★" } else { " " };
+        let marker = if s.score >= DRAFT_THRESHOLD {
+            "★"
+        } else {
+            " "
+        };
         println!(
             "  {marker}{:<4} {:<14} {:<40} {}",
             s.score,

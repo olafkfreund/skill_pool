@@ -153,10 +153,7 @@ mod tests {
     #[test]
     fn trims_trailing_slash_on_web_url() {
         let b = body_for("s", "id", Some("https://example.com/"));
-        assert!(
-            b.contains("https://example.com/drafts/id"),
-            "got: {b}"
-        );
+        assert!(b.contains("https://example.com/drafts/id"), "got: {b}");
     }
 
     /// `notify_draft_ready(enabled=false, …)` must be a true no-op — no

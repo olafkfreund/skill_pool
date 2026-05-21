@@ -20,15 +20,11 @@ use bytes::Bytes;
 use chrono::Utc;
 
 use crate::anthropic::AnthropicClient;
-use crate::capturer::{
-    self, AnthropicStages, Stages, DEFAULT_STAGE1_MODEL, DEFAULT_STAGE2_MODEL,
-};
+use crate::capturer::{self, AnthropicStages, Stages, DEFAULT_STAGE1_MODEL, DEFAULT_STAGE2_MODEL};
 use crate::client::{CaptureMetadata, CapturedDraft, Client};
 use crate::config::Config;
 use crate::notify;
-use crate::scorer::{
-    self, CaptureStage, CaptureState, SessionScore,
-};
+use crate::scorer::{self, CaptureStage, CaptureState, SessionScore};
 use crate::secret_scan;
 
 /// Server submit seam. Production uses `Client`; tests inject a stub that
@@ -158,9 +154,7 @@ pub async fn run(
     }
 
     println!();
-    println!(
-        "summary: {drafted} drafted, {rejected} rejected by pipeline, {errored} errored"
-    );
+    println!("summary: {drafted} drafted, {rejected} rejected by pipeline, {errored} errored");
     Ok(())
 }
 
@@ -286,8 +280,8 @@ where
     // 4a. Pre-POST secret scan. Sonnet can introduce strings that were
     // never in the transcript (hallucinated tokens, mirrored values), so
     // the bundle scan is the real safety net.
-    let bundle_findings = secret_scan::scan_bundle(&bundle)
-        .context("scan generated bundle for secrets")?;
+    let bundle_findings =
+        secret_scan::scan_bundle(&bundle).context("scan generated bundle for secrets")?;
     if !bundle_findings.is_empty() {
         let summary = secret_scan::summarise(&bundle_findings);
         if allow_secret {
@@ -371,7 +365,10 @@ fn build_capture_notes(s: &SessionScore, stage1: &capturer::Stage1Analysis) -> S
 /// Resolve the transcript file path. Claude Code stores transcripts under
 /// `<home>/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Walks the
 /// `.claude/projects` tree under `home_root` looking for the matching file.
-pub(crate) fn find_transcript_in(home_root: &std::path::Path, session_id: &str) -> Result<std::path::PathBuf> {
+pub(crate) fn find_transcript_in(
+    home_root: &std::path::Path,
+    session_id: &str,
+) -> Result<std::path::PathBuf> {
     let projects = home_root.join(".claude").join("projects");
     if !projects.exists() {
         return Err(anyhow!(
@@ -484,7 +481,13 @@ mod tests {
     /// Build a tempdir laid out like `~/.claude/projects/<dir>/<id>.jsonl`
     /// and write a synthetic transcript inside it. Returns the resolver
     /// closure pointing at it.
-    fn fixture_transcript(jsonl: &str, session_id: &str) -> (tempfile::TempDir, impl Fn(&SessionScore) -> Result<std::path::PathBuf>) {
+    fn fixture_transcript(
+        jsonl: &str,
+        session_id: &str,
+    ) -> (
+        tempfile::TempDir,
+        impl Fn(&SessionScore) -> Result<std::path::PathBuf>,
+    ) {
         let tmp = tempfile::tempdir().unwrap();
         let proj_dir = tmp.path().join(".claude").join("projects").join("dummy");
         std::fs::create_dir_all(&proj_dir).unwrap();
@@ -508,12 +511,17 @@ mod tests {
             generalizable: g,
             scope: Some("tool".into()),
             preconditions: vec![],
-            reason: Some(if g { "ok".into() } else { "too specific".into() }),
+            reason: Some(if g {
+                "ok".into()
+            } else {
+                "too specific".into()
+            }),
         }
     }
 
     fn valid_md() -> String {
-        "---\nname: foo\ndescription: A captured pattern.\ntags: [test]\n---\n\n# foo\n\nsteps.\n".into()
+        "---\nname: foo\ndescription: A captured pattern.\ntags: [test]\n---\n\n# foo\n\nsteps.\n"
+            .into()
     }
 
     #[tokio::test]
@@ -528,10 +536,15 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None)
+            .await
+            .unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage1Rejected));
         assert!(state.reason.unwrap().contains("too specific"));
-        assert!(submit.calls.lock().unwrap().is_empty(), "no draft POST expected");
+        assert!(
+            submit.calls.lock().unwrap().is_empty(),
+            "no draft POST expected"
+        );
     }
 
     #[tokio::test]
@@ -546,7 +559,9 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None)
+            .await
+            .unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage1ParseFailure));
         assert!(state.reason.unwrap().contains("malformed JSON"));
     }
@@ -559,18 +574,26 @@ mod tests {
             stage1: Mutex::new(vec![Ok(ok_analysis(true))]),
             // Stage 2 returns markdown with a /home/ path → server-style rejection.
             stage2: Mutex::new(vec![Ok(
-                "---\nname: foo\ndescription: bad.\n---\n\nrun /home/alice/scripts\n"
-                    .to_string(),
+                "---\nname: foo\ndescription: bad.\n---\n\nrun /home/alice/scripts\n".to_string(),
             )]),
         };
         let submit = StubSubmit {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None)
+            .await
+            .unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage2Rejected));
-        assert!(state.reason.unwrap().to_lowercase().contains("absolute path"));
-        assert!(submit.calls.lock().unwrap().is_empty(), "no POST after Stage2 reject");
+        assert!(state
+            .reason
+            .unwrap()
+            .to_lowercase()
+            .contains("absolute path"));
+        assert!(
+            submit.calls.lock().unwrap().is_empty(),
+            "no POST after Stage2 reject"
+        );
     }
 
     #[tokio::test]
@@ -585,7 +608,9 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None)
+            .await
+            .unwrap();
         assert!(matches!(state.stage, CaptureStage::Drafted));
         assert_eq!(state.draft_id.as_deref(), Some("stub-draft-id"));
         assert_eq!(state.slug.as_deref(), Some("foo"));
@@ -606,7 +631,9 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: true,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None)
+            .await
+            .unwrap();
         assert!(matches!(state.stage, CaptureStage::ServerRejected));
         assert!(state.reason.unwrap().contains("server rejected"));
     }
@@ -630,7 +657,9 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None)
+            .await
+            .unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage1Rejected));
         let reason = state.reason.unwrap();
         assert!(reason.contains("secrets"), "reason: {reason}");
@@ -651,7 +680,9 @@ mod tests {
             fail: false,
         };
         // allow_secret = true → pipeline should proceed past the gate.
-        let state = process_one(&stages, &submit, &s, resolver, true, false, None).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, true, false, None)
+            .await
+            .unwrap();
         assert!(matches!(state.stage, CaptureStage::Drafted));
     }
 
@@ -673,12 +704,16 @@ mod tests {
             calls: Mutex::new(vec![]),
             fail: false,
         };
-        let state = process_one(&stages, &submit, &s, resolver, false, false, None).await.unwrap();
+        let state = process_one(&stages, &submit, &s, resolver, false, false, None)
+            .await
+            .unwrap();
         assert!(matches!(state.stage, CaptureStage::Stage2Rejected));
         let reason = state.reason.unwrap();
-        assert!(reason.contains("bundle contained secrets"), "reason: {reason}");
+        assert!(
+            reason.contains("bundle contained secrets"),
+            "reason: {reason}"
+        );
         assert!(reason.contains("slack-token"), "reason: {reason}");
         assert!(submit.calls.lock().unwrap().is_empty());
     }
 }
-

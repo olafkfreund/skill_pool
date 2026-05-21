@@ -166,8 +166,7 @@ pub fn stage1_user_prompt(transcript: &str) -> String {
 /// Same for Stage 2 — embeds the Stage 1 verdict so Sonnet has structured
 /// context without re-deriving it.
 pub fn stage2_user_prompt(analysis: &Stage1Analysis, transcript: &str) -> String {
-    let analysis_json = serde_json::to_string_pretty(analysis)
-        .unwrap_or_else(|_| "{}".to_string());
+    let analysis_json = serde_json::to_string_pretty(analysis).unwrap_or_else(|_| "{}".to_string());
     format!(
         "Stage 1 analysis:\n{}\n\nTranscript:\n<<<\n{}\n>>>\n\nWrite the SKILL.md now.",
         analysis_json, transcript
@@ -314,9 +313,8 @@ pub fn validate_skill_md(md: &str) -> Result<ValidatedSkill, ValidationError> {
         .or_else(|| rest[end + 1..].strip_prefix("---\r\n"))
         .unwrap_or(&rest[end + 1..]);
 
-    let fm: LocalFrontmatter = serde_yaml::from_str(yaml).map_err(|_| {
-        ValidationError::MissingDescription
-    })?;
+    let fm: LocalFrontmatter =
+        serde_yaml::from_str(yaml).map_err(|_| ValidationError::MissingDescription)?;
     if fm.description.is_empty() || fm.description.len() > 1500 {
         return Err(ValidationError::BadDescription(fm.description.len()));
     }
@@ -390,7 +388,8 @@ pub fn bundle_skill_md(md: &str) -> Result<Bytes> {
     let tar_bytes = tar.into_inner().map_err(|e| anyhow!("tar finish: {e}"))?;
 
     let mut gz = GzEncoder::new(Vec::new(), Compression::default());
-    gz.write_all(&tar_bytes).map_err(|e| anyhow!("gz write: {e}"))?;
+    gz.write_all(&tar_bytes)
+        .map_err(|e| anyhow!("gz write: {e}"))?;
     let gz_bytes = gz.finish().map_err(|e| anyhow!("gz finish: {e}"))?;
     Ok(Bytes::from(gz_bytes))
 }
@@ -486,8 +485,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_home_path() {
-        let md =
-            "---\nname: foo\ndescription: A test.\n---\n\nstep 1: cd /home/alice/repos/x\n";
+        let md = "---\nname: foo\ndescription: A test.\n---\n\nstep 1: cd /home/alice/repos/x\n";
         assert!(matches!(
             validate_skill_md(md),
             Err(ValidationError::AbsolutePath(_))

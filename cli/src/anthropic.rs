@@ -95,10 +95,7 @@ impl AnthropicClient {
             "x-api-key",
             HeaderValue::from_str(&self.api_key).context("invalid api key bytes")?,
         );
-        headers.insert(
-            "anthropic-version",
-            HeaderValue::from_static(API_VERSION),
-        );
+        headers.insert("anthropic-version", HeaderValue::from_static(API_VERSION));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         let resp = self

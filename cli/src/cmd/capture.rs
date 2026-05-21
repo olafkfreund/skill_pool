@@ -63,8 +63,7 @@ pub async fn run(
     // but the same hazard applies: a SKILL.md may have grown a token paste
     // during authoring. `--allow-secret` downgrades this to a warning for
     // skills that legitimately discuss credentials.
-    let findings = secret_scan::scan_bundle(&bundle)
-        .context("scan bundle for secrets")?;
+    let findings = secret_scan::scan_bundle(&bundle).context("scan bundle for secrets")?;
     if !findings.is_empty() {
         let summary = secret_scan::summarise(&findings);
         if allow_secret {
@@ -98,6 +97,9 @@ pub async fn run(
     println!("  draft:    {} ({})", draft.slug, draft.id);
     println!("  status:   {}", draft.status);
     println!();
-    println!("Review in the inbox: {}/drafts", reg.url.trim_end_matches('/'));
+    println!(
+        "Review in the inbox: {}/drafts",
+        reg.url.trim_end_matches('/')
+    );
     Ok(())
 }

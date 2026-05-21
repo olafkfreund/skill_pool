@@ -70,10 +70,7 @@ mod tests {
     fn returns_none_in_non_repo_dir() {
         // /tmp is guaranteed not to be a git repo.
         let result = detect_origin_url_in(std::path::Path::new("/tmp"));
-        assert!(
-            result.is_none(),
-            "expected None for /tmp, got {result:?}"
-        );
+        assert!(result.is_none(), "expected None for /tmp, got {result:?}");
     }
 
     #[test]

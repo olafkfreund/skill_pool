@@ -129,8 +129,7 @@ async fn import(
 /// multi-gigabyte file.
 pub(crate) fn guard_file_size(path: &Path) -> Result<()> {
     use std::io::Read as _;
-    let f = std::fs::File::open(path)
-        .with_context(|| format!("open `{}`", path.display()))?;
+    let f = std::fs::File::open(path).with_context(|| format!("open `{}`", path.display()))?;
     let mut probe = Vec::with_capacity(MAX_FILE_BYTES as usize + 1);
     f.take(MAX_FILE_BYTES + 1).read_to_end(&mut probe)?;
     if probe.len() as u64 > MAX_FILE_BYTES {
@@ -146,9 +145,7 @@ pub(crate) fn guard_file_size(path: &Path) -> Result<()> {
 /// Reject non-HTTPS URLs client-side (defence-in-depth).
 pub(crate) fn guard_https_url(raw: &str) -> Result<()> {
     if raw.starts_with("http://") {
-        bail!(
-            "plain HTTP URLs are not allowed for plan import; use HTTPS: `{raw}`"
-        );
+        bail!("plain HTTP URLs are not allowed for plan import; use HTTPS: `{raw}`");
     }
     Ok(())
 }
@@ -220,7 +217,10 @@ async fn history(cfg: &Config, project_slug: &str, json: bool) -> Result<()> {
         "{:<col_ver$}  {:<col_status$}  {:<col_at$}  {:<col_by$}  SOURCE",
         "VERSION", "STATUS", "IMPORTED_AT", "IMPORTED_BY"
     );
-    println!("{}", "-".repeat(col_ver + col_status + col_at + col_by + 20));
+    println!(
+        "{}",
+        "-".repeat(col_ver + col_status + col_at + col_by + 20)
+    );
 
     for v in &versions {
         let by = v.imported_by_email.as_deref().unwrap_or("—");
@@ -266,12 +266,7 @@ async fn refresh(cfg: &Config, project_slug: &str) -> Result<()> {
 
 // ── activate ─────────────────────────────────────────────────────────────────
 
-async fn activate(
-    cfg: &Config,
-    project_slug: &str,
-    version: u32,
-    yes: bool,
-) -> Result<()> {
+async fn activate(cfg: &Config, project_slug: &str, version: u32, yes: bool) -> Result<()> {
     if !yes {
         // Reverting to an older plan version is mildly dangerous — confirm.
         eprint!("activate version {version} for project `{project_slug}`? [Y/n] ");
@@ -291,9 +286,7 @@ async fn activate(
     client
         .activate_plan_version(project_slug, version)
         .await
-        .with_context(|| {
-            format!("activate version {version} for project `{project_slug}`")
-        })?;
+        .with_context(|| format!("activate version {version} for project `{project_slug}`"))?;
     println!("activated version {version} for project `{project_slug}`");
     Ok(())
 }
