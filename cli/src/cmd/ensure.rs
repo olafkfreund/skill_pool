@@ -78,12 +78,7 @@ pub async fn run_with_opts(
 ///
 /// Errors are logged but NOT propagated — a plan-sync failure must never
 /// abort a successful skill install.
-async fn sync_project_plan(
-    project_root: &Path,
-    client: &Client,
-    project_slug: &str,
-    quiet: bool,
-) {
+async fn sync_project_plan(project_root: &Path, client: &Client, project_slug: &str, quiet: bool) {
     let plan_path = project_root.join(".claude").join("PROJECT_PLAN.md");
 
     match client.get_active_plan(project_slug).await {
@@ -92,9 +87,7 @@ async fn sync_project_plan(
             let new_hash = sha256_of(body.as_bytes());
 
             // Compare against the existing file's hash (if any).
-            let existing_hash = std::fs::read(&plan_path)
-                .ok()
-                .map(|b| sha256_of(&b));
+            let existing_hash = std::fs::read(&plan_path).ok().map(|b| sha256_of(&b));
 
             if existing_hash.as_deref() == Some(&new_hash) {
                 if !quiet {
@@ -124,9 +117,7 @@ async fn sync_project_plan(
                 }
                 Err(e) => {
                     if !quiet {
-                        println!(
-                            "  warn:     could not write PROJECT_PLAN.md: {e}"
-                        );
+                        println!("  warn:     could not write PROJECT_PLAN.md: {e}");
                     }
                 }
             }
@@ -137,7 +128,9 @@ async fn sync_project_plan(
                 match std::fs::remove_file(&plan_path) {
                     Ok(()) => {
                         if !quiet {
-                            println!("  plan:     removed stale PROJECT_PLAN.md (no plan on server)");
+                            println!(
+                                "  plan:     removed stale PROJECT_PLAN.md (no plan on server)"
+                            );
                         }
                     }
                     Err(e) => {
@@ -191,11 +184,7 @@ pub(crate) struct InstallTarget {
 /// install plan. Pure-ish — the only side effect is the network calls
 /// we make on `client`. Extracted so the unit tests can drive it with
 /// a stubbed Client (see the `tests` submodule).
-async fn build_plan(
-    mf: &Manifest,
-    client: &Client,
-    quiet: bool,
-) -> Result<Vec<InstallTarget>> {
+async fn build_plan(mf: &Manifest, client: &Client, quiet: bool) -> Result<Vec<InstallTarget>> {
     // Dedup by (slug, kind). A top-level skill that pulls itself via
     // a transitive cycle collapses; the same slug at two different kinds
     // (rare but legal) installs once per kind.
@@ -211,6 +200,13 @@ async fn build_plan(
             queue_with_closure(client, entry, kind, &mut work, &mut seen, quiet).await;
         }
     }
+
+    // TODO(#36): resolve `mf.plugins` to their bundled
+    // skills/agents/commands and merge them into the install plan
+    // (deduping against direct entries). Tracked separately so #33 can
+    // ship the manifest field + CLI surface without waiting on the
+    // server-side plugin contents endpoint.
+    let _ = &mf.plugins;
 
     // Order: deepest first so leaves are on disk before their dependents.
     // Alphabetical slug as a stable tiebreaker for reproducible output
