@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO plugins (tenant_id, slug, version, name, manifest, sourcing_mode) VALUES ($1, $2, $3, $4, $5, 'internal')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "456e18c12531257a63865b665fd9c6a9fc7d59c15ffe5fb21bbae7ebc8e05099"
+}

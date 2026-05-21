@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO plugin_contents (plugin_id, content_slug, content_kind, content_version) VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8c5ae46b5b225acd951cdc37f831095d2b4d8e262fedf130c3d4197699f96c7d"
+}
