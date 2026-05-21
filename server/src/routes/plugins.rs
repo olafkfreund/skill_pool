@@ -19,7 +19,7 @@
 //! reads are impossible by construction.
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -207,6 +207,7 @@ fn require_read(scope: &str) -> AppResult<()> {
 pub async fn publish(
     State(state): State<AppState>,
     caller: AuthedCaller,
+    headers: HeaderMap,
     Json(body): Json<PublishBody>,
 ) -> AppResult<(StatusCode, Json<PluginResponse>)> {
     require_publish(&caller.scope)?;
@@ -437,6 +438,97 @@ pub async fn publish(
     }
 
     tx.commit().await?;
+
+    // Marketplace materialisation hook (#31). Two best-effort side effects
+    // that run after the publish DB row is durable:
+    //
+    //   1. Internal plugins: write the canonical filesystem layout into a
+    //      bare git repo so Claude Code's `/plugin install` can clone us.
+    //   2. Upsert plugin_marketplace_entries so the next
+    //      `.claude-plugin/marketplace.json` fetch surfaces this plugin.
+    //
+    // Both are best-effort: a transient storage hiccup logs a warning but
+    // does not roll back the API publish. The plugin row still exists; an
+    // admin can republish to retry. A successful publish without a
+    // marketplace entry simply doesn't appear in marketplace.json yet —
+    // safer than failing the whole publish and surfacing an inconsistent
+    // mid-state to the caller.
+    if target_status == "published" {
+        if body.sourcing_mode == "internal" {
+            let content_refs: Vec<crate::plugin_git::ContentRef> = body
+                .contents
+                .iter()
+                .map(|c| crate::plugin_git::ContentRef {
+                    kind: c.kind.clone(),
+                    slug: c.slug.clone(),
+                    version: c.version.clone(),
+                })
+                .collect();
+            if let Err(e) = crate::plugin_git::materialise_internal(
+                &state,
+                &caller.tenant,
+                slug,
+                &version,
+                &row.manifest,
+                &content_refs,
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = ?e,
+                    tenant = %caller.tenant.tenant_slug,
+                    slug = %slug,
+                    version = %version,
+                    "plugin git materialisation failed; marketplace entry skipped",
+                );
+            } else if let Err(e) = crate::routes::marketplace::regenerate_entry(
+                &state,
+                &caller.tenant,
+                slug,
+                &version,
+                row.id,
+                &body.sourcing_mode,
+                ext.as_deref(),
+                &row.manifest,
+                &crate::routes::marketplace::origin_from_request(&headers),
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = ?e,
+                    tenant = %caller.tenant.tenant_slug,
+                    slug = %slug,
+                    "marketplace entry upsert failed",
+                );
+            }
+        } else {
+            // External/mirror: no local git materialisation, just the
+            // marketplace entry. (Mirror plugins' git tree is written by
+            // the mirror worker landing in #36 follow-up; the entry's
+            // source URL still points at our git endpoint via the
+            // `mirror` branch in build_source.)
+            if let Err(e) = crate::routes::marketplace::regenerate_entry(
+                &state,
+                &caller.tenant,
+                slug,
+                &version,
+                row.id,
+                &body.sourcing_mode,
+                ext.as_deref(),
+                &row.manifest,
+                &crate::routes::marketplace::origin_from_request(&headers),
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = ?e,
+                    tenant = %caller.tenant.tenant_slug,
+                    slug = %slug,
+                    "marketplace entry upsert failed (external/mirror)",
+                );
+            }
+        }
+    }
 
     audit::record_best_effort(
         state.db(),

@@ -73,6 +73,11 @@ serde_yaml = "0.9"
 tar = "0.4"
 flate2 = "1"
 bytes = "1"
+
+# In-process git server for the per-plugin dumb-HTTP endpoint (#31). Vendored
+# libgit2 keeps the deploy hermetic — no system `git` binary needed at runtime.
+# We don't enable `https` or `ssh` because we're the server, not a client.
+git2 = { version = "0.19", default-features = false }
 mime = "0.3"
 clap = { version = "4", features = ["derive", "env"] }
 regex = "1"

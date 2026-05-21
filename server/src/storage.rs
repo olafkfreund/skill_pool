@@ -2,6 +2,7 @@
 //! against a local filesystem, S3, GCS, Azure Blob, or MinIO. Phase 1 wires FS
 //! and documents the URI scheme for swapping in S3 without code changes.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -14,6 +15,11 @@ const PRESIGN_TTL: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 pub struct Storage {
     op: Operator,
+    /// Filesystem root for `fs://` backends. Required by the plugin git
+    /// endpoint, which needs a real on-disk path to host a bare repo via
+    /// libgit2. `None` for non-fs backends — `plugin_git_path` rejects
+    /// those with a clear error (S3-backed plugin git is a follow-up).
+    fs_root: Option<PathBuf>,
 }
 
 impl Storage {
@@ -25,7 +31,7 @@ impl Storage {
     pub fn from_uri(uri: &str) -> Result<Self> {
         let parsed = url::Url::parse(uri).with_context(|| format!("parse storage URI: {uri}"))?;
 
-        let op = match parsed.scheme() {
+        let (op, fs_root) = match parsed.scheme() {
             "fs" => {
                 let root = parsed.path();
                 if root.is_empty() || root == "/" {
@@ -34,7 +40,8 @@ impl Storage {
                 std::fs::create_dir_all(root)
                     .with_context(|| format!("create storage root {root}"))?;
                 let builder = opendal::services::Fs::default().root(root);
-                Operator::new(builder)?.finish()
+                let op = Operator::new(builder)?.finish();
+                (op, Some(PathBuf::from(root)))
             }
             other => {
                 return Err(anyhow!(
@@ -44,7 +51,7 @@ impl Storage {
             }
         };
 
-        Ok(Self { op })
+        Ok(Self { op, fs_root })
     }
 
     /// Object key for a bundle. Tenant-namespaced so even a leaked URL can't
@@ -59,6 +66,31 @@ impl Storage {
     /// overwrites. `draft_id` is the row UUID from `skill_drafts`.
     pub fn draft_bundle_key(tenant_id: Uuid, draft_id: Uuid) -> String {
         format!("{tenant_id}/drafts/{draft_id}.tar.gz")
+    }
+
+    /// Absolute filesystem path of the bare git repo backing a plugin's
+    /// dumb-HTTP git endpoint (issue #31).
+    ///
+    /// Layout: `<fs-root>/<tenant-id>/plugins/<slug>.git/` — tenant-namespaced
+    /// alongside the bundle layout so a single `rm -rf <fs-root>/<tenant>/`
+    /// cleans both. Caller is responsible for `git init --bare` on first
+    /// publish; this just computes the path.
+    ///
+    /// Returns `Err` when the backend is not `fs://`. The plugin git endpoint
+    /// needs a real on-disk path for libgit2; S3-backed plugin git would
+    /// require a per-process checkout cache (deliberately deferred — see the
+    /// fs-only constraint already documented in `from_uri`).
+    pub fn plugin_git_path(&self, tenant_id: Uuid, slug: &str) -> Result<PathBuf> {
+        let root = self.fs_root.as_ref().ok_or_else(|| {
+            anyhow!(
+                "plugin git endpoint requires fs:// storage; \
+                 S3-backed plugin git is a follow-up"
+            )
+        })?;
+        Ok(root
+            .join(tenant_id.to_string())
+            .join("plugins")
+            .join(format!("{slug}.git")))
     }
 
     /// Object key for a tenant's uploaded brand logo. One key per tenant —
