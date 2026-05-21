@@ -26,6 +26,7 @@ mod profile;
 mod saml;
 mod scim;
 mod session_policy;
+mod plugins;
 mod skills;
 mod sso_admin;
 mod projects;
@@ -49,6 +50,16 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/skills/{slug}/skill-md", get(skills::get_skill_md))
         .route("/v1/skills/{slug}/deps", get(skills::get_deps))
         .route("/v1/skills/{slug}/versions", get(skills::get_versions))
+        // Plugins (Layer 3) — see routes/plugins.rs for the per-handler
+        // scope/audit story. Writes require `skills:publish` (granted to
+        // both curator + admin roles); reads accept any authed member.
+        .route("/v1/plugins", get(plugins::list).post(plugins::publish))
+        .route("/v1/plugins/{slug}", get(plugins::get_one))
+        .route("/v1/plugins/{slug}/versions", get(plugins::get_versions))
+        .route(
+            "/v1/plugins/{slug}/versions/{version}",
+            delete(plugins::archive),
+        )
         .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
         .route(
             "/v1/theme/logo",

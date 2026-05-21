@@ -1096,6 +1096,106 @@ export async function setProjectItems(
   return { ok: false, status: resp.status, error: await resp.text() };
 }
 
+// --- Plugins (Layer 3) ----------------------------------------------------
+
+/** One row in `GET /v1/plugins` — flat list shape. */
+export interface Plugin {
+  slug: string;
+  version: string;
+  name: string;
+  description: string | null;
+  status: 'draft' | 'published' | 'archived';
+  sourcing_mode: 'internal' | 'external' | 'mirror';
+  tags: string[];
+  created_at: string;
+}
+
+/** A single bundled item inside a plugin (`/v1/plugins/{slug}`). */
+export interface PluginContent {
+  kind: 'skill' | 'agent' | 'command';
+  slug: string;
+  version: string;
+  position: number;
+}
+
+/** Full plugin detail returned by `GET /v1/plugins/{slug}`. */
+export interface PluginDetail extends Omit<Plugin, 'tags'> {
+  external_git_url?: string;
+  upstream_url?: string;
+  manifest: Record<string, unknown>;
+  contents: PluginContent[];
+  updated_at: string;
+}
+
+/** Body for `POST /v1/plugins`. */
+export interface PublishPluginBody {
+  slug: string;
+  manifest: Record<string, unknown>;
+  contents: Array<{ kind: 'skill' | 'agent' | 'command'; slug: string; version: string }>;
+  sourcing_mode: 'internal' | 'external' | 'mirror';
+  external_git_url?: string;
+  upstream_url?: string;
+  status?: 'draft' | 'published';
+}
+
+export interface PluginListPage {
+  items: Plugin[];
+  next_cursor?: string;
+}
+
+export interface ListPluginsOptions {
+  tags?: string[];
+  status?: 'draft' | 'published' | 'archived';
+  sourcing_mode?: 'internal' | 'external' | 'mirror';
+  limit?: number;
+  cursor?: string;
+}
+
+export async function listPlugins(
+  auth: Auth,
+  opts: ListPluginsOptions = {},
+): Promise<PluginListPage> {
+  const qs = new URLSearchParams();
+  if (opts.tags && opts.tags.length) qs.set('tags', opts.tags.join(','));
+  if (opts.status) qs.set('status', opts.status);
+  if (opts.sourcing_mode) qs.set('sourcing_mode', opts.sourcing_mode);
+  if (opts.limit !== undefined) qs.set('limit', String(opts.limit));
+  if (opts.cursor) qs.set('cursor', opts.cursor);
+  const path = qs.toString() ? `/v1/plugins?${qs.toString()}` : '/v1/plugins';
+  const resp = await call('GET', path, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function getPlugin(auth: Auth, slug: string): Promise<PluginDetail> {
+  const resp = await call('GET', `/v1/plugins/${encodeURIComponent(slug)}`, auth);
+  if (!resp.ok) throw new ApiError(resp.status, await resp.text());
+  return resp.json();
+}
+
+export async function publishPlugin(
+  auth: Auth,
+  body: PublishPluginBody,
+): Promise<{ ok: true; plugin: PluginDetail } | { ok: false; status: number; error: string }> {
+  const resp = await call('POST', '/v1/plugins', auth, { jsonBody: body });
+  if (resp.ok) return { ok: true, plugin: (await resp.json()) as PluginDetail };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
+export async function archivePlugin(
+  auth: Auth,
+  slug: string,
+  version: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const resp = await call(
+    'DELETE',
+    `/v1/plugins/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`,
+    auth,
+  );
+  if (resp.ok) return { ok: true };
+  return { ok: false, status: resp.status, error: await resp.text() };
+}
+
 // --- Project Plan API -------------------------------------------------------
 
 /** Active plan version returned by GET /v1/tenant/projects/{slug}/plan */
