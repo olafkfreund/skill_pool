@@ -1509,7 +1509,8 @@ pub struct ResolvedProjectItem {
 ///   3. Cycles → `AppError::PluginCycle` with a normalised path.
 ///
 /// `nested_plugin_slugs_from_manifest` extracts a plugin's
-/// `manifest.plugins[]` array (string or `{slug:""}` shapes both
+/// `manifest.dependencies[]` array (the Claude Code `plugin.json`
+/// spec field — bare-string and `{name, version}` shapes both
 /// tolerated, matching `cli::client::PluginDetail::nested_plugin_slugs`).
 ///
 /// Latest published version per plugin slug. A plugin slug listed in a
@@ -1623,7 +1624,9 @@ pub async fn resolve_project_items_expanded(
             }
         }
 
-        // 2b. Enqueue nested plugins declared in the plugin's manifest.
+        // 2b. Enqueue dependency-plugins declared in the plugin's
+        //     `manifest.dependencies[]` (per the Claude Code plugin.json
+        //     spec — see `docs/plugin-manifest-schema.md`).
         let nested = nested_plugin_slugs_from_manifest(&plugin.manifest);
         for nested_slug in nested {
             if q.path.contains(&nested_slug) {
@@ -1656,18 +1659,24 @@ pub async fn resolve_project_items_expanded(
     Ok(out)
 }
 
-/// Extract slugs from a plugin manifest's `plugins[]` field. Tolerates
-/// both `["foo", "bar"]` and `[{"slug":"foo"}, …]` shapes (matches the
-/// CLI client's `PluginDetail::nested_plugin_slugs`).
+/// Extract dependency-plugin names from a plugin manifest's
+/// `dependencies[]` field (per the Claude Code `plugin.json` spec —
+/// see `docs/plugin-manifest-schema.md` +
+/// <https://code.claude.com/docs/en/plugin-dependencies>). Tolerates
+/// both shapes the spec allows: bare string `"foo"` (treated as
+/// `{name:"foo", version:"*"}`) and object `{name, version}` — matches
+/// the CLI client's `PluginDetail::nested_plugin_slugs`. Entries that
+/// don't match either shape are silently skipped (loose JSON, not
+/// strict schema).
 fn nested_plugin_slugs_from_manifest(manifest: &serde_json::Value) -> Vec<String> {
-    let Some(arr) = manifest.get("plugins").and_then(|v| v.as_array()) else {
+    let Some(arr) = manifest.get("dependencies").and_then(|v| v.as_array()) else {
         return Vec::new();
     };
     let mut out = Vec::with_capacity(arr.len());
     for v in arr {
         if let Some(s) = v.as_str() {
             out.push(s.to_string());
-        } else if let Some(s) = v.get("slug").and_then(|s| s.as_str()) {
+        } else if let Some(s) = v.get("name").and_then(|s| s.as_str()) {
             out.push(s.to_string());
         }
     }

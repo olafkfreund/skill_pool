@@ -6,9 +6,12 @@
 //!   1. **Happy path** — a manifest that pins a plugin walks the plugin's
 //!      `contents[]` and installs each bundled atom under the matching
 //!      `~/.claude/skills/...` / `agents/...` directory.
-//!   2. **Cycle detection** — plugin A → manifest.plugins=[B], plugin B →
-//!      manifest.plugins=[A]. `ensure` exits 3 (the dedicated
-//!      `EXIT_PLUGIN_CYCLE`) and prints a self-contained diagnostic.
+//!   2. **Cycle detection** — plugin A → manifest.dependencies=[B],
+//!      plugin B → manifest.dependencies=[A]. `ensure` exits 3 (the
+//!      dedicated `EXIT_PLUGIN_CYCLE`) and prints a self-contained
+//!      diagnostic. `dependencies[]` is the Claude Code plugin.json
+//!      field for plugin-to-plugin transitivity (see
+//!      `docs/plugin-manifest-schema.md`).
 //!   3. **Forward-reference forgiveness** — a plugin slug that 404s
 //!      doesn't abort the run; the direct manifest atoms still install.
 //!
@@ -203,7 +206,11 @@ async fn ensure_detects_plugin_cycle_and_exits_3() {
 
     let server = MockServer::start().await;
 
-    // Plugin A's manifest declares it requires plugin B.
+    // Plugin A's manifest declares it requires plugin B via the
+    // Claude Code plugin.json `dependencies[]` spec field. We use the
+    // bare-string shorthand here (equivalent to `{name:"b",version:"*"}`)
+    // and the full object shape in B below, so this single test exercises
+    // both forms of the spec-allowed entry shape.
     Mock::given(method("GET"))
         .and(wpath("/v1/plugins/a"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -216,7 +223,7 @@ async fn ensure_detects_plugin_cycle_and_exits_3() {
             "manifest": {
                 "name": "a",
                 "version": "1.0.0",
-                "plugins": ["b"]
+                "dependencies": ["b"]
             },
             "contents": [],
             "created_at": "2025-01-01T00:00:00Z",
@@ -225,7 +232,7 @@ async fn ensure_detects_plugin_cycle_and_exits_3() {
         .mount(&server)
         .await;
 
-    // Plugin B's manifest declares it requires plugin A. Closes the loop.
+    // Plugin B closes the loop with the object shape (`{name, version}`).
     Mock::given(method("GET"))
         .and(wpath("/v1/plugins/b"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -238,7 +245,7 @@ async fn ensure_detects_plugin_cycle_and_exits_3() {
             "manifest": {
                 "name": "b",
                 "version": "1.0.0",
-                "plugins": ["a"]
+                "dependencies": [{"name": "a", "version": "^1.0.0"}]
             },
             "contents": [],
             "created_at": "2025-01-01T00:00:00Z",

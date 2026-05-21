@@ -250,25 +250,33 @@ pub struct PluginDetail {
 }
 
 impl PluginDetail {
-    /// Slugs declared in `manifest.plugins[]` — used by the BFS
-    /// resolver to enqueue transitively-required plugins.
+    /// Slugs declared in the plugin manifest's `dependencies[]` field
+    /// (per the Claude Code `plugin.json` spec — see
+    /// `docs/plugin-manifest-schema.md` and
+    /// <https://code.claude.com/docs/en/plugin-dependencies>). Used by
+    /// the #36 BFS resolver to enqueue transitively-required plugins.
     ///
-    /// We tolerate two shapes for forward-compatibility:
-    ///   - `[{"slug": "foo"}, …]` (the shape we'd publish today)
-    ///   - `["foo", …]`           (a bare-string alternative)
+    /// The spec allows two shapes per entry, both normalised to the
+    /// dependency's `name` (used as the registry slug):
+    ///   - bare string `"foo"` — treated as `{name: "foo", version: "*"}`.
+    ///   - object `{"name": "foo", "version": "~2.1.0"}` — the full pin.
     ///
-    /// Any entry that isn't a string or an object with a `slug` field
-    /// is silently skipped — the manifest is loose JSON, not a strict
-    /// schema, so being liberal here matches the publish path.
+    /// We only return the names — the BFS resolver doesn't enforce the
+    /// semver `version` constraint yet (the server's
+    /// `GET /v1/plugins/{slug}` always returns the latest published
+    /// version regardless of pin). A version-aware variant is left for
+    /// a follow-up once the registry supports semver-range queries.
+    /// Any entry that doesn't match either shape is silently skipped —
+    /// loose JSON, not strict schema.
     pub fn nested_plugin_slugs(&self) -> Vec<String> {
-        let Some(arr) = self.manifest.get("plugins").and_then(|v| v.as_array()) else {
+        let Some(arr) = self.manifest.get("dependencies").and_then(|v| v.as_array()) else {
             return Vec::new();
         };
         let mut out = Vec::with_capacity(arr.len());
         for v in arr {
             if let Some(s) = v.as_str() {
                 out.push(s.to_string());
-            } else if let Some(s) = v.get("slug").and_then(|s| s.as_str()) {
+            } else if let Some(s) = v.get("name").and_then(|s| s.as_str()) {
                 out.push(s.to_string());
             }
         }

@@ -397,9 +397,10 @@ async fn resolve_plugins(
             }
         }
 
-        // 2. Enqueue nested `[[plugins]]` declared in the plugin's manifest.
-        //    Cycle check happens here so the path includes the offending
-        //    parent for a clear diagnostic.
+        // 2. Enqueue dependency-plugins declared in the plugin's
+        //    `manifest.dependencies[]` (per the Claude Code plugin.json
+        //    spec). Cycle check happens here so the path includes the
+        //    offending parent for a clear diagnostic.
         for nested_slug in detail.nested_plugin_slugs() {
             if item.path.contains(&nested_slug) {
                 let start = item
@@ -856,6 +857,8 @@ mod tests {
 
     #[test]
     fn nested_plugin_slugs_handles_string_shape() {
+        // Bare-string dependency entry per the Claude Code plugin.json
+        // spec — `"foo"` is shorthand for `{name:"foo", version:"*"}`.
         let detail = crate::client::PluginDetail {
             slug: "base".into(),
             version: "1.0".into(),
@@ -863,7 +866,7 @@ mod tests {
             description: None,
             contents: vec![],
             manifest: serde_json::json!({
-                "plugins": ["alpha", "beta"]
+                "dependencies": ["alpha", "beta"]
             }),
         };
         assert_eq!(detail.nested_plugin_slugs(), vec!["alpha", "beta"]);
@@ -871,6 +874,10 @@ mod tests {
 
     #[test]
     fn nested_plugin_slugs_handles_object_shape() {
+        // Object dependency entry per the spec: `{name, version}`. The
+        // semver `version` constraint is not enforced by the BFS resolver
+        // yet (the server always returns the latest published version);
+        // we only extract the name here.
         let detail = crate::client::PluginDetail {
             slug: "base".into(),
             version: "1.0".into(),
@@ -878,7 +885,10 @@ mod tests {
             description: None,
             contents: vec![],
             manifest: serde_json::json!({
-                "plugins": [{"slug": "alpha"}, {"slug": "beta", "version": "2.0"}]
+                "dependencies": [
+                    {"name": "alpha"},
+                    {"name": "beta", "version": "~2.1.0"}
+                ]
             }),
         };
         assert_eq!(detail.nested_plugin_slugs(), vec!["alpha", "beta"]);
@@ -911,7 +921,7 @@ mod tests {
 
     struct StubPlugin {
         contents: Vec<(String, String, String)>, // (kind, slug, version)
-        nested: Vec<String>,                     // slugs in manifest.plugins[]
+        nested: Vec<String>,                     // names in manifest.dependencies[]
     }
 
     fn simulate_with_plugins(

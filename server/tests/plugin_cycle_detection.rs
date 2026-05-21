@@ -1,15 +1,18 @@
 //! Plugin → plugin cycle detection in the bootstrap resolver (#36).
 //!
-//! Plugin A's manifest declares `plugins: [{"slug": "b"}]`; plugin B's
-//! manifest declares `plugins: [{"slug": "a"}]`. A project pins plugin A
-//! as a `kind="plugin"` item; bootstrap walks A → B → A and must reject
-//! with a 422 + `{"error":"plugin_cycle","cycle":[...]}` whose cycle path
-//! is normalised (smallest slug leads).
+//! Plugin A's manifest declares `dependencies: [{"name": "b"}]`;
+//! plugin B's manifest declares `dependencies: ["a"]`. A project pins
+//! plugin A as a `kind="plugin"` item; bootstrap walks A → B → A and
+//! must reject with a 422 + `{"error":"plugin_cycle","cycle":[...]}`
+//! whose cycle path is normalised (smallest slug leads).
 //!
-//! The cycle lives in the loose `manifest.plugins[]` JSON passthrough —
-//! the publish handler doesn't validate the nested-plugin slugs (they
-//! may legitimately forward-reference plugins published later), so we
-//! don't need any tricks to seed the cycle.
+//! `dependencies[]` is the Claude Code `plugin.json` field for
+//! plugin-to-plugin transitivity (see `docs/plugin-manifest-schema.md`).
+//! The publish handler stores the manifest verbatim as JSONB without
+//! validating the nested-plugin names (they may legitimately
+//! forward-reference plugins published later), so we don't need any
+//! tricks to seed the cycle. We exercise both spec-allowed shapes
+//! (bare string vs. `{name, version}` object) across the two fixtures.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -113,11 +116,15 @@ fn authed(b: reqwest::RequestBuilder, t: &str) -> reqwest::RequestBuilder {
     b.bearer_auth(t)
 }
 
-async fn publish_plugin_with_nested(
+/// Publish a content-less plugin whose `manifest.dependencies[]`
+/// carries the supplied JSON entries verbatim. Callers pass already-
+/// shaped JSON values so a single test can exercise both spec-allowed
+/// dependency shapes (bare string + `{name, version}` object).
+async fn publish_plugin_with_dependencies(
     cl: &reqwest::Client,
     h: &Harness,
     slug: &str,
-    nested_slugs: &[&str],
+    dependencies: Vec<Value>,
 ) -> Result<()> {
     let body = json!({
         "slug": slug,
@@ -125,10 +132,12 @@ async fn publish_plugin_with_nested(
             "name": slug,
             "version": "1.0.0",
             "description": format!("Cycle-detection fixture {slug}"),
-            // Loose passthrough — the publish handler stores `extra`
-            // fields verbatim (#30). The bootstrap-tier resolver reads
-            // `manifest.plugins[]` to enqueue transitive plugins.
-            "plugins": nested_slugs.iter().map(|s| json!({"slug": *s})).collect::<Vec<_>>()
+            // `dependencies` is the Claude Code plugin.json spec field
+            // for plugin-to-plugin transitivity. The publish handler
+            // stores the manifest verbatim as JSONB without validating
+            // dependency names (forward references are legal — a plugin
+            // may legitimately ship before the package it depends on).
+            "dependencies": dependencies
         },
         "contents": [],
         "sourcing_mode": "internal",
@@ -155,9 +164,18 @@ async fn bootstrap_returns_422_plugin_cycle_when_project_pins_cycle_root() -> Re
     let cl = c();
 
     // Seed the cycle: a → b → a. Both plugins are content-less; the
-    // cycle lives entirely in the loose `manifest.plugins[]` field.
-    publish_plugin_with_nested(&cl, &h, "a", &["b"]).await?;
-    publish_plugin_with_nested(&cl, &h, "b", &["a"]).await?;
+    // cycle lives entirely in the spec-correct `manifest.dependencies[]`
+    // field. A uses the object shape (`{name, version}`); B uses the
+    // bare-string shorthand. Mixing the two proves the resolver handles
+    // both forms in one round-trip.
+    publish_plugin_with_dependencies(
+        &cl,
+        &h,
+        "a",
+        vec![json!({"name": "b", "version": "^1.0.0"})],
+    )
+    .await?;
+    publish_plugin_with_dependencies(&cl, &h, "b", vec![json!("a")]).await?;
 
     // Create a project whose only item is plugin `a` — bootstrap will
     // BFS-walk into the cycle when it tries to expand the item list.
