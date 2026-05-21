@@ -1,3 +1,5 @@
+use std::process::ExitCode;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
@@ -245,10 +247,16 @@ enum Cmd {
         #[command(subcommand)]
         cmd: cmd::plan::PlanCmd,
     },
+    /// Publish, list, install, import, and inspect Claude Code plugins
+    /// (per-tenant marketplace surface).
+    Plugin {
+        #[command(subcommand)]
+        action: cmd::plugin::PluginAction,
+    },
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<ExitCode> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -265,6 +273,13 @@ async fn main() -> Result<()> {
     // `cli/src/banner.rs` for the full set of guards.
     banner::show_if_due(&cfg).await;
 
+    // Most subcommands return `Result<()>` and exit with status 0 on success.
+    // `Cmd::Plugin` returns `Result<ExitCode>` so its `Unavailable` import
+    // path can surface exit 2 to CI. Bridged here.
+    if let Cmd::Plugin { action } = cli.command {
+        return cmd::plugin::run(&cfg, action).await;
+    }
+
     match cli.command {
         Cmd::Init(args) => cmd::init::run(&cfg, &args),
         Cmd::Login { registry, tenant } => {
@@ -274,9 +289,7 @@ async fn main() -> Result<()> {
             quiet,
             no_telemetry,
             skip_plan,
-        } => {
-            cmd::ensure::run_with_opts(&cfg, quiet, !no_telemetry, !skip_plan).await
-        }
+        } => cmd::ensure::run_with_opts(&cfg, quiet, !no_telemetry, !skip_plan).await,
         Cmd::Add { slug } => cmd::add::run(&cfg, &slug).await,
         Cmd::AddAgent { slug } => cmd::add::run_with_kind(&cfg, &slug, "agent").await,
         Cmd::AddCommand { slug } => cmd::add::run_with_kind(&cfg, &slug, "command").await,
@@ -365,5 +378,7 @@ async fn main() -> Result<()> {
         } => cmd::hook_install::run(remove, print, with_scorer),
         Cmd::Project { cmd: project_cmd } => cmd::project::run(&cfg, project_cmd).await,
         Cmd::Plan { cmd: plan_cmd } => cmd::plan::run(&cfg, plan_cmd).await,
+        Cmd::Plugin { .. } => unreachable!("handled above"),
     }
+    .map(|()| ExitCode::SUCCESS)
 }

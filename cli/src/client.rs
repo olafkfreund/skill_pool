@@ -163,6 +163,71 @@ pub struct RefreshOutcome {
     pub error: Option<String>,
 }
 
+// ── Plugin types (CLI-side wire shapes for #30 / #32 / #36) ──────────────────
+//
+// Mirrors the canonical Rust types in `server/src/plugin.rs` (#29 schema).
+// Kept CLI-local so the CLI crate doesn't pull in the server crate as a
+// dependency; the wire JSON shape is the contract.
+
+/// One bundled `{kind, slug, version}` entry inside a plugin manifest body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginContentRef {
+    pub kind: String,
+    pub slug: String,
+    pub version: String,
+}
+
+/// The body of a `.claude-plugin/plugin.json`. Extra fields (hooks, MCP
+/// servers, etc.) flow through `extra` so the Claude Code spec can evolve
+/// without forcing CLI changes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginManifest {
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub contents: Vec<PluginContentRef>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One row from `GET /v1/plugins`. Tolerant of additional server fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginListEntry {
+    pub slug: String,
+    pub version: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// `"draft" | "published" | "archived"` (DB CHECK in migration 0031).
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Server response from a successful `POST /v1/plugins`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PublishedPlugin {
+    pub slug: String,
+    pub version: String,
+    #[serde(default)]
+    pub status: String,
+}
+
+/// Outcome of a plugin endpoint call that may legitimately 404 while the
+/// server-side route is still in flight (#30 publish/list, #32 import).
+///
+/// `Unavailable.issue` carries the tracking issue number so the call site
+/// can print a specific "tracking: issue #N" message without stringly-typing
+/// it across the codebase.
+#[derive(Debug)]
+pub enum PluginEndpointOutcome<T> {
+    Ok(T),
+    Unavailable { issue: u32 },
+}
+
 impl Client {
     pub fn new(reg: &RegistryConfig) -> Result<Self> {
         let mut headers = HeaderMap::new();
@@ -261,9 +326,7 @@ impl Client {
         let url = self.base.join("/v1/tenant/skills/decay")?;
         let resp = self.http.get(url).send().await?;
         let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Ok(vec![]);
         }
         if !status.is_success() {
@@ -335,8 +398,7 @@ impl Client {
         bundle: Bytes,
     ) -> Result<CapturedDraft> {
         let url = self.base.join("/v1/drafts")?;
-        let metadata_json =
-            serde_json::to_string(&metadata).context("serialise draft metadata")?;
+        let metadata_json = serde_json::to_string(&metadata).context("serialise draft metadata")?;
 
         let form = Form::new().text("metadata", metadata_json).part(
             "bundle",
@@ -464,13 +526,16 @@ impl Client {
     /// Reads `path` in streaming chunks so a 5 MB file does not require
     /// 5 MB + 1 byte of RAM before the size check triggers.  Returns the
     /// version number assigned by the server.
-    pub async fn import_plan_file(&self, project_slug: &str, path: &std::path::Path) -> Result<u32> {
+    pub async fn import_plan_file(
+        &self,
+        project_slug: &str,
+        path: &std::path::Path,
+    ) -> Result<u32> {
         const MAX_BYTES: u64 = 5 * 1024 * 1024;
 
         // Stream-read up to MAX_BYTES + 1 so we can distinguish "exactly
         // at the limit" from "too large" without loading the entire file.
-        let file = std::fs::File::open(path)
-            .with_context(|| format!("open {}", path.display()))?;
+        let file = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
         let mut buf = Vec::with_capacity(MAX_BYTES as usize + 1);
         use std::io::Read as _;
         file.take(MAX_BYTES + 1).read_to_end(&mut buf)?;
@@ -624,5 +689,86 @@ impl Client {
             return Err(anyhow!("publish: {status} — {body}"));
         }
         Ok(resp.json().await?)
+    }
+
+    // ── Plugin endpoints ─────────────────────────────────────────────────────
+
+    /// `POST /v1/plugins` — publish a plugin from its `.claude-plugin/plugin.json`.
+    ///
+    /// Returns `Unavailable { issue: 30 }` on 404 so the caller can print a
+    /// friendly "tracking: issue #30" message until the server-side route
+    /// lands. Other non-success statuses surface as `Err`.
+    pub async fn publish_plugin(
+        &self,
+        manifest: &PluginManifest,
+    ) -> Result<PluginEndpointOutcome<PublishedPlugin>> {
+        let url = self.base.join("/v1/plugins")?;
+        let resp = self.http.post(url).json(manifest).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(PluginEndpointOutcome::Unavailable { issue: 30 });
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("publish_plugin: {status} — {body}"));
+        }
+        let published: PublishedPlugin = resp.json().await?;
+        Ok(PluginEndpointOutcome::Ok(published))
+    }
+
+    /// `GET /v1/plugins` — list plugins in the current tenant.
+    ///
+    /// Returns `Unavailable { issue: 30 }` on 404 so the caller can render
+    /// an empty list with a "not yet available" hint until #30 lands.
+    pub async fn list_plugins(
+        &self,
+        tags: &[String],
+        status_filter: Option<&str>,
+    ) -> Result<PluginEndpointOutcome<Vec<PluginListEntry>>> {
+        let mut url = self.base.join("/v1/plugins")?;
+        {
+            let mut q = url.query_pairs_mut();
+            if !tags.is_empty() {
+                q.append_pair("tags", &tags.join(","));
+            }
+            if let Some(s) = status_filter {
+                q.append_pair("status", s);
+            }
+        }
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(PluginEndpointOutcome::Unavailable { issue: 30 });
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("list_plugins: {status} — {body}"));
+        }
+        let entries: Vec<PluginListEntry> = resp.json().await?;
+        Ok(PluginEndpointOutcome::Ok(entries))
+    }
+
+    /// `POST /v1/plugins/import` — enqueue an import of an external plugin
+    /// git URL into the tenant's marketplace.
+    ///
+    /// Returns `Unavailable { issue: 32 }` on 404 — the import worker lands
+    /// in a separate issue from the publish/list routes.
+    pub async fn import_plugin(
+        &self,
+        git_url: &str,
+    ) -> Result<PluginEndpointOutcome<serde_json::Value>> {
+        let url = self.base.join("/v1/plugins/import")?;
+        let body = serde_json::json!({ "url": git_url });
+        let resp = self.http.post(url).json(&body).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(PluginEndpointOutcome::Unavailable { issue: 32 });
+        }
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("import_plugin: {status} — {text}"));
+        }
+        let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        Ok(PluginEndpointOutcome::Ok(body))
     }
 }

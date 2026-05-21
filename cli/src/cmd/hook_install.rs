@@ -45,7 +45,10 @@ pub fn run(remove: bool, print_only: bool, with_scorer: bool) -> Result<()> {
             json!({})
         } else {
             serde_json::from_str::<Value>(&raw).with_context(|| {
-                format!("parse {} as JSON — fix it manually first", settings_path.display())
+                format!(
+                    "parse {} as JSON — fix it manually first",
+                    settings_path.display()
+                )
             })?
         }
     } else {
@@ -336,7 +339,10 @@ mod tests {
             }
         });
         assert!(remove_hook(&mut s));
-        assert!(s.get("hooks").is_none(), "empty hooks block should be pruned: {s}");
+        assert!(
+            s.get("hooks").is_none(),
+            "empty hooks block should be pruned: {s}"
+        );
     }
 
     #[test]

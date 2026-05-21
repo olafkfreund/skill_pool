@@ -455,10 +455,7 @@ fn print_human(r: &DoctorReport) {
         println!("  (none)");
     } else {
         for c in &r.decay.candidates {
-            let last = c
-                .last_used_at
-                .as_deref()
-                .unwrap_or("never");
+            let last = c.last_used_at.as_deref().unwrap_or("never");
             println!(
                 "  • {slug}@{version}  used {n}×  last_used={last}{installed}",
                 slug = c.slug,

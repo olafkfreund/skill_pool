@@ -14,6 +14,12 @@ pub struct Manifest {
     pub agents: Vec<SkillRef>,
     #[serde(default)]
     pub commands: Vec<SkillRef>,
+    /// Plugin pins. Full transitive resolution (fetching each plugin's
+    /// contained skills/agents/commands and merging them into the install
+    /// plan) lands in #36 — this issue only wires the field through so
+    /// manifests round-trip cleanly.
+    #[serde(default)]
+    pub plugins: Vec<PluginRef>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -49,6 +55,22 @@ fn default_version() -> String {
 }
 fn default_scope() -> String {
     "project".into()
+}
+
+/// A plugin pin in `manifest.plugins`. Same shape as `SkillRef` so the
+/// TOML writer emits a uniform `[[plugins]]` array block. Distinct type
+/// so the install-plan code can dispatch on plugin vs. atomic content
+/// (and so the parallel-array `kind` dispatch in `ensure.rs` doesn't
+/// accidentally treat a plugin slug as a skill slug).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginRef {
+    pub slug: String,
+    #[serde(default = "default_version")]
+    pub version: String,
+    /// Symlink scope when the plugin's contained items are eventually
+    /// installed (#36). Today: parsed and round-tripped, otherwise inert.
+    #[serde(default = "default_scope")]
+    pub scope: String,
 }
 
 pub fn manifest_path_in(dir: &Path) -> PathBuf {
@@ -116,6 +138,46 @@ pub fn add_to_manifest(manifest: &mut Manifest, slug: &str, kind: &str) -> Resul
         scope: default_scope(),
     });
     Ok(true)
+}
+
+/// Outcome of adding a plugin pin. Distinguishes the three user-visible
+/// states so the calling subcommand can print the right message.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PluginAddOutcome {
+    /// A new `[[plugins]]` entry was appended.
+    Inserted,
+    /// An entry with the same `(slug, version)` was already present — no-op.
+    AlreadyPresent,
+    /// An entry for `slug` existed at a different version; the version was
+    /// updated in place. Carries the prior version for the user message.
+    Updated { previous_version: String },
+}
+
+/// Add (or update) a `[[plugins]]` entry by slug. See `PluginAddOutcome`
+/// for the three branches: insert / no-op / update-in-place.
+///
+/// Distinct from `add_to_manifest` because plugins pin an explicit
+/// version (`plugin add foo@1.2.0`), so re-adding a different version is
+/// a meaningful update, whereas re-adding a skill at `version = "*"` is
+/// always a no-op.
+pub fn add_plugin_to_manifest(
+    manifest: &mut Manifest,
+    slug: &str,
+    version: &str,
+) -> PluginAddOutcome {
+    if let Some(existing) = manifest.plugins.iter_mut().find(|p| p.slug == slug) {
+        if existing.version == version {
+            return PluginAddOutcome::AlreadyPresent;
+        }
+        let previous_version = std::mem::replace(&mut existing.version, version.to_string());
+        return PluginAddOutcome::Updated { previous_version };
+    }
+    manifest.plugins.push(PluginRef {
+        slug: slug.to_string(),
+        version: version.to_string(),
+        scope: default_scope(),
+    });
+    PluginAddOutcome::Inserted
 }
 
 #[cfg(test)]
@@ -202,8 +264,14 @@ scope = "project"
         // that the [project] section does not emit a `slug` key of its own.
         // The simplest way: re-parse and confirm the fields are still None.
         let mf2: Manifest = toml::from_str(&toml_out).expect("re-parse");
-        assert!(mf2.project.slug.is_none(), "project.slug must stay None after round-trip");
-        assert!(mf2.project.remote.is_none(), "project.remote must stay None after round-trip");
+        assert!(
+            mf2.project.slug.is_none(),
+            "project.slug must stay None after round-trip"
+        );
+        assert!(
+            mf2.project.remote.is_none(),
+            "project.remote must stay None after round-trip"
+        );
         // Also confirm the [project] block itself has no `slug =` line.
         // We look for `slug =` appearing *before* the first `[[skills]]` line.
         let project_section_end = toml_out.find("[[skills]]").unwrap_or(toml_out.len());
@@ -216,5 +284,91 @@ scope = "project"
             !project_section.contains("\nremote ="),
             "project section must not contain 'remote =': {project_section}"
         );
+    }
+
+    // ── plugin pin helpers ────────────────────────────────────────────────────
+
+    #[test]
+    fn add_plugin_to_manifest_inserts_new_entry() {
+        let mut mf = Manifest::default();
+        let outcome = add_plugin_to_manifest(&mut mf, "acme-toolkit", "1.2.0");
+        assert_eq!(outcome, PluginAddOutcome::Inserted);
+        assert_eq!(mf.plugins.len(), 1);
+        assert_eq!(mf.plugins[0].slug, "acme-toolkit");
+        assert_eq!(mf.plugins[0].version, "1.2.0");
+        assert_eq!(mf.plugins[0].scope, "project");
+    }
+
+    #[test]
+    fn add_plugin_to_manifest_dedups_same_version() {
+        let mut mf = Manifest::default();
+        add_plugin_to_manifest(&mut mf, "acme-toolkit", "1.2.0");
+        let outcome = add_plugin_to_manifest(&mut mf, "acme-toolkit", "1.2.0");
+        assert_eq!(outcome, PluginAddOutcome::AlreadyPresent);
+        assert_eq!(mf.plugins.len(), 1, "no second entry appended");
+    }
+
+    #[test]
+    fn add_plugin_to_manifest_updates_version_in_place() {
+        let mut mf = Manifest::default();
+        add_plugin_to_manifest(&mut mf, "acme-toolkit", "1.2.0");
+        let outcome = add_plugin_to_manifest(&mut mf, "acme-toolkit", "1.3.0");
+        assert_eq!(
+            outcome,
+            PluginAddOutcome::Updated {
+                previous_version: "1.2.0".to_string(),
+            }
+        );
+        assert_eq!(mf.plugins.len(), 1);
+        assert_eq!(mf.plugins[0].version, "1.3.0");
+    }
+
+    #[test]
+    fn plugin_manifest_round_trips() {
+        // Manifest with skills + plugins must parse, re-serialise, and
+        // re-parse to the same logical content. Catches accidental
+        // breakage of the new `[[plugins]]` array block.
+        let toml_in = r#"
+[project]
+stack = ["rust"]
+
+[[skills]]
+slug = "code-review-mastery"
+version = "*"
+scope = "project"
+
+[[plugins]]
+slug = "acme-toolkit"
+version = "1.2.0"
+scope = "project"
+"#;
+        let mf: Manifest = toml::from_str(toml_in).expect("parse");
+        assert_eq!(mf.plugins.len(), 1);
+        assert_eq!(mf.plugins[0].slug, "acme-toolkit");
+        assert_eq!(mf.plugins[0].version, "1.2.0");
+
+        let toml_out = toml::to_string_pretty(&mf).expect("serialize");
+        let mf2: Manifest = toml::from_str(&toml_out).expect("re-parse");
+        assert_eq!(mf2.plugins.len(), 1);
+        assert_eq!(mf2.plugins[0].slug, mf.plugins[0].slug);
+        assert_eq!(mf2.plugins[0].version, mf.plugins[0].version);
+        assert_eq!(mf2.plugins[0].scope, mf.plugins[0].scope);
+    }
+
+    #[test]
+    fn legacy_manifest_without_plugins_parses() {
+        // Pre-#33 manifests have no [[plugins]] block; they must still
+        // parse cleanly with `plugins` defaulting to empty.
+        let toml_in = r#"
+[project]
+stack = ["python"]
+
+[[skills]]
+slug = "clean-code"
+version = "1.0.0"
+scope = "project"
+"#;
+        let mf: Manifest = toml::from_str(toml_in).expect("parse legacy manifest");
+        assert!(mf.plugins.is_empty(), "plugins should default to empty");
     }
 }

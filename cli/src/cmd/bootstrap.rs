@@ -45,12 +45,7 @@ pub async fn run(cfg: &Config, force_detect: bool, assume_yes: bool, dry_run: bo
 
     // 3a. Ask the server which skills are recommended.
     let recommended = match &resolved_project {
-        Some((slug, _name)) => {
-            client
-                .bootstrap_with_project(slug, &stack)
-                .await?
-                .skills
-        }
+        Some((slug, _name)) => client.bootstrap_with_project(slug, &stack).await?.skills,
         None => client.bootstrap(&stack).await?.skills,
     };
 
