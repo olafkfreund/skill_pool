@@ -167,9 +167,9 @@ fn validate_name(name: &str) -> AppResult<&str> {
 
 fn validate_kind(kind: &str) -> AppResult<()> {
     match kind {
-        "skill" | "agent" | "command" => Ok(()),
+        "skill" | "agent" | "command" | "plugin" => Ok(()),
         _ => Err(AppError::BadRequest(format!(
-            "kind must be one of: skill, agent, command (got `{kind}`)"
+            "kind must be one of: skill, agent, command, plugin (got `{kind}`)"
         ))),
     }
 }

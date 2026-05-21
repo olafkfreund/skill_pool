@@ -280,16 +280,39 @@ async fn main() -> Result<ExitCode> {
         return cmd::plugin::run(&cfg, action).await;
     }
 
+    // `Cmd::Ensure` also returns `Result<ExitCode>` so a plugin → plugin
+    // cycle in the manifest can surface as exit 3 (manifest-correctness
+    // error, distinct from generic anyhow-error exit 1). The cycle is
+    // a real, fixable user mistake — the dedicated exit code lets CI
+    // scripts distinguish "your manifest is bad" from "the registry was
+    // unreachable" without grepping stderr.
+    if let Cmd::Ensure {
+        quiet,
+        no_telemetry,
+        skip_plan,
+    } = cli.command
+    {
+        return match cmd::ensure::run_with_opts(&cfg, quiet, !no_telemetry, !skip_plan).await {
+            Ok(()) => Ok(ExitCode::SUCCESS),
+            Err(e) => {
+                if let Some(cycle) = e.downcast_ref::<cmd::ensure::PluginCycle>() {
+                    eprintln!("error: plugin dependency cycle detected");
+                    eprintln!("  path: {}", cycle.arrow());
+                    eprintln!("  fix:  remove the back-reference from one of the manifests");
+                    Ok(ExitCode::from(cmd::ensure::EXIT_PLUGIN_CYCLE as u8))
+                } else {
+                    Err(e)
+                }
+            }
+        };
+    }
+
     match cli.command {
         Cmd::Init(args) => cmd::init::run(&cfg, &args),
         Cmd::Login { registry, tenant } => {
             cmd::login::run(&cfg, cli.config.as_deref(), &registry, &tenant).await
         }
-        Cmd::Ensure {
-            quiet,
-            no_telemetry,
-            skip_plan,
-        } => cmd::ensure::run_with_opts(&cfg, quiet, !no_telemetry, !skip_plan).await,
+        Cmd::Ensure { .. } => unreachable!("handled above"),
         Cmd::Add { slug } => cmd::add::run(&cfg, &slug).await,
         Cmd::AddAgent { slug } => cmd::add::run_with_kind(&cfg, &slug, "agent").await,
         Cmd::AddCommand { slug } => cmd::add::run_with_kind(&cfg, &slug, "command").await,

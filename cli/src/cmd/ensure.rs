@@ -4,10 +4,68 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 
-use crate::client::{Client, DepEntry, Skill};
+use crate::client::{Client, DepEntry, PluginEndpointOutcome, Skill};
 use crate::config::Config;
 use crate::install::{self, SymlinkResult};
-use crate::manifest::{self, Manifest, SkillRef};
+use crate::manifest::{self, Manifest, PluginRef, SkillRef};
+
+/// Exit code returned by `skill-pool ensure` when manifest resolution
+/// detects a plugin → plugin cycle. Distinct from 2 ("operation
+/// unavailable") because a cycle is a manifest-correctness error, not
+/// a transient server condition the user can wait out.
+pub const EXIT_PLUGIN_CYCLE: i32 = 3;
+
+/// Error returned when the plugin BFS resolver encounters a cycle.
+/// Carries the full path so the CLI's diagnostic can name the loop.
+///
+/// The cycle is normalised so re-runs against the same manifest produce
+/// the same path: see [`PluginCycle::new`] for the rotation rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCycle {
+    /// Slugs in traversal order, with the repeated slug appended so the
+    /// human-readable diagnostic reads `a → b → a`.
+    pub path: Vec<String>,
+}
+
+impl PluginCycle {
+    /// Build a cycle whose first element is the lexicographically-
+    /// smallest slug in the loop. Without this the reported path
+    /// depends on which root happened to BFS-discover the cycle first,
+    /// which makes diagnostics non-deterministic when a user re-orders
+    /// `[[plugins]]` entries in `manifest.toml`.
+    fn new(loop_slugs: &[String]) -> Self {
+        debug_assert!(!loop_slugs.is_empty(), "cycle must have at least one slug");
+        // `loop_slugs` is the BFS-discovery path with the closing slug
+        // already appended. Strip the closing duplicate, rotate so the
+        // smallest slug leads, then re-append the rotated head.
+        let body = &loop_slugs[..loop_slugs.len() - 1];
+        let pivot = body
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.cmp(b))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let mut path: Vec<String> = body[pivot..]
+            .iter()
+            .chain(body[..pivot].iter())
+            .cloned()
+            .collect();
+        path.push(path[0].clone());
+        Self { path }
+    }
+
+    pub fn arrow(&self) -> String {
+        self.path.join(" → ")
+    }
+}
+
+impl std::fmt::Display for PluginCycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "plugin dependency cycle: {}", self.arrow())
+    }
+}
+
+impl std::error::Error for PluginCycle {}
 
 pub async fn run(cfg: &Config) -> Result<()> {
     run_with_opts(cfg, false, true, true).await
@@ -191,6 +249,11 @@ async fn build_plan(mf: &Manifest, client: &Client, quiet: bool) -> Result<Vec<I
     let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut work: Vec<InstallTarget> = Vec::new();
 
+    // ── Pass 1: direct manifest entries (precedence tier 1) ──────────────
+    // Seeding `seen` from these first is what makes "direct manifest pin
+    // wins over plugin-bundled" hold without an explicit precedence
+    // comparison later — the plugin walk's `seen.insert` check will
+    // drop any (slug, kind) the user already pinned explicitly.
     for (kind, bucket) in [
         ("skill", &mf.skills),
         ("agent", &mf.agents),
@@ -201,12 +264,14 @@ async fn build_plan(mf: &Manifest, client: &Client, quiet: bool) -> Result<Vec<I
         }
     }
 
-    // TODO(#36): resolve `mf.plugins` to their bundled
-    // skills/agents/commands and merge them into the install plan
-    // (deduping against direct entries). Tracked separately so #33 can
-    // ship the manifest field + CLI surface without waiting on the
-    // server-side plugin contents endpoint.
-    let _ = &mf.plugins;
+    // ── Pass 2: plugin transitive resolution (precedence tier 2-3) ───────
+    // BFS over `mf.plugins`. The visited set is keyed by plugin SLUG (not
+    // slug+version) so a plugin pinning itself transitively at a different
+    // version is still detected as a cycle. See `resolve_plugins` for the
+    // full ordering rules and cycle-detection contract.
+    if !mf.plugins.is_empty() {
+        resolve_plugins(&mf.plugins, client, &mut work, &mut seen, quiet).await?;
+    }
 
     // Order: deepest first so leaves are on disk before their dependents.
     // Alphabetical slug as a stable tiebreaker for reproducible output
@@ -218,6 +283,151 @@ async fn build_plan(mf: &Manifest, client: &Client, quiet: bool) -> Result<Vec<I
             .then_with(|| a.kind.cmp(&b.kind))
     });
     Ok(work)
+}
+
+/// BFS-resolve `[[plugins]]` entries to their bundled contents.
+///
+/// Invariants:
+///   - Visited set keyed by plugin **slug** (not slug+version). A plugin
+///     transitively pinning itself at a different version is still a
+///     cycle — we don't want to fetch unbounded versions of the same
+///     plugin.
+///   - Closer-to-root depths surface their contents first. The shared
+///     `seen` set then makes the first occurrence of any `(slug, kind)`
+///     win — matching the dedup rule used by the direct-skill closure
+///     walk, so a plugin overlapping with a direct pin loses cleanly.
+///   - Cycle detection rejects with [`PluginCycle`]. Other plugin-fetch
+///     failures (404 forward refs, network errors) are logged and skipped
+///     so a single broken plugin doesn't abort the whole `ensure`.
+///   - `scope` on the queued contents inherits from the plugin's pin in
+///     `manifest.toml` so the user controls install location at the
+///     plugin level (e.g. "give me the whole bundle in `personal`").
+///   - `depth` records the BFS level. Top-level plugin contents land at
+///     depth=1 (deeper than the depth=0 direct manifest atoms above);
+///     transitive plugin contents land deeper still. The deepest-first
+///     sort in `build_plan` then puts plugin atoms behind the direct
+///     atoms they may depend on.
+async fn resolve_plugins(
+    roots: &[PluginRef],
+    client: &Client,
+    work: &mut Vec<InstallTarget>,
+    seen: &mut std::collections::HashSet<(String, String)>,
+    quiet: bool,
+) -> Result<()> {
+    // BFS queue. Each entry is fully owned (slug + scope inherited from
+    // the root pin) so the queue's lifetime is independent of `roots`.
+    // `path` carries the chain of plugin slugs taken to reach this node
+    // — used by cycle detection to produce a self-contained diagnostic.
+    struct Queued {
+        slug: String,
+        scope: String,
+        depth: u32,
+        path: Vec<String>,
+    }
+
+    let mut queue: std::collections::VecDeque<Queued> = std::collections::VecDeque::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for r in roots {
+        // Eager-skip the root if a sibling root already enqueued the
+        // same slug — duplicates in `manifest.plugins[]` should not
+        // count as a cycle.
+        if visited.insert(r.slug.clone()) {
+            queue.push_back(Queued {
+                slug: r.slug.clone(),
+                scope: r.scope.clone(),
+                depth: 1,
+                path: vec![r.slug.clone()],
+            });
+        }
+    }
+
+    while let Some(item) = queue.pop_front() {
+        let detail = match client.get_plugin(&item.slug).await {
+            Ok(PluginEndpointOutcome::Ok(d)) => d,
+            Ok(PluginEndpointOutcome::Unavailable { issue }) => {
+                // 404 → forward reference or unpublished plugin. Warn
+                // and continue so a stale manifest pin can't take down
+                // the whole `ensure` run.
+                if !quiet {
+                    println!(
+                        "  warn:     plugin `{}` not found on registry (tracking: issue #{issue})",
+                        item.slug
+                    );
+                }
+                continue;
+            }
+            Err(e) => {
+                if !quiet {
+                    println!(
+                        "  warn:     could not resolve plugin `{}`: {e}",
+                        item.slug
+                    );
+                }
+                continue;
+            }
+        };
+
+        // 1. Push each `contents[]` entry into the install plan. The
+        //    shared `seen` set takes care of direct-pin precedence and
+        //    sibling-plugin first-wins dedup.
+        for c in &detail.contents {
+            let key = (c.slug.clone(), c.kind.clone());
+            if seen.insert(key) {
+                work.push(InstallTarget {
+                    slug: c.slug.clone(),
+                    version: if c.version.is_empty() {
+                        "*".into()
+                    } else {
+                        c.version.clone()
+                    },
+                    scope: item.scope.clone(),
+                    kind: c.kind.clone(),
+                    depth: item.depth,
+                });
+            } else {
+                // Shadowed by an earlier (higher-precedence) source.
+                // Debug-only so verbose manifests don't spam the user.
+                tracing::debug!(
+                    plugin = %item.slug,
+                    slug = %c.slug,
+                    kind = %c.kind,
+                    "plugin content shadowed by earlier install target"
+                );
+            }
+        }
+
+        // 2. Enqueue nested `[[plugins]]` declared in the plugin's manifest.
+        //    Cycle check happens here so the path includes the offending
+        //    parent for a clear diagnostic.
+        for nested_slug in detail.nested_plugin_slugs() {
+            if item.path.contains(&nested_slug) {
+                let start = item
+                    .path
+                    .iter()
+                    .position(|s| s == &nested_slug)
+                    .unwrap_or(0);
+                let mut loop_slugs: Vec<String> = item.path[start..].to_vec();
+                loop_slugs.push(nested_slug.clone());
+                return Err(PluginCycle::new(&loop_slugs).into());
+            }
+            // Sibling-visited (already-enqueued in another branch) is a
+            // DAG join, not a cycle — skip silently so we don't refetch.
+            if !visited.insert(nested_slug.clone()) {
+                continue;
+            }
+            let mut next_path = item.path.clone();
+            next_path.push(nested_slug.clone());
+            queue.push_back(Queued {
+                slug: nested_slug,
+                scope: item.scope.clone(),
+                depth: item.depth + 1,
+                path: next_path,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// Push a single top-level manifest entry plus its transitive closure
@@ -603,5 +813,285 @@ mod tests {
         let tmp2 = tempfile::tempdir().unwrap();
         let h_other = project_hash(tmp2.path());
         assert_ne!(h1, h_other);
+    }
+
+    // ── PluginCycle normalisation ────────────────────────────────────────
+    //
+    // The cycle path is rotated to lead with the lexicographically-smallest
+    // slug so re-runs against the same manifest produce identical
+    // diagnostics regardless of which BFS root happened to discover the
+    // loop first.
+
+    #[test]
+    fn plugin_cycle_rotates_to_smallest_slug() {
+        // Discovery order: b → c → a → b.  Rotation should anchor on `a`.
+        let cycle = PluginCycle::new(&["b".into(), "c".into(), "a".into(), "b".into()]);
+        assert_eq!(
+            cycle.path,
+            vec!["a".to_string(), "b".into(), "c".into(), "a".into()],
+        );
+        assert_eq!(cycle.arrow(), "a → b → c → a");
+    }
+
+    #[test]
+    fn plugin_cycle_already_anchored_is_idempotent() {
+        // Already starts with the smallest slug — no rotation expected.
+        let cycle = PluginCycle::new(&["a".into(), "b".into(), "a".into()]);
+        assert_eq!(cycle.path, vec!["a".to_string(), "b".into(), "a".into()]);
+    }
+
+    #[test]
+    fn plugin_cycle_self_loop() {
+        // A plugin transitively listing itself is the degenerate cycle.
+        let cycle = PluginCycle::new(&["foo".into(), "foo".into()]);
+        assert_eq!(cycle.path, vec!["foo".to_string(), "foo".into()]);
+        assert_eq!(cycle.arrow(), "foo → foo");
+    }
+
+    // ── PluginDetail.nested_plugin_slugs() shape tolerance ───────────────
+    //
+    // The plugin manifest's `plugins` array can be authored as either
+    // bare strings or `{slug: "..."}` objects. Both shapes must surface
+    // the same slug list.
+
+    #[test]
+    fn nested_plugin_slugs_handles_string_shape() {
+        let detail = crate::client::PluginDetail {
+            slug: "base".into(),
+            version: "1.0".into(),
+            name: "Base".into(),
+            description: None,
+            contents: vec![],
+            manifest: serde_json::json!({
+                "plugins": ["alpha", "beta"]
+            }),
+        };
+        assert_eq!(detail.nested_plugin_slugs(), vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn nested_plugin_slugs_handles_object_shape() {
+        let detail = crate::client::PluginDetail {
+            slug: "base".into(),
+            version: "1.0".into(),
+            name: "Base".into(),
+            description: None,
+            contents: vec![],
+            manifest: serde_json::json!({
+                "plugins": [{"slug": "alpha"}, {"slug": "beta", "version": "2.0"}]
+            }),
+        };
+        assert_eq!(detail.nested_plugin_slugs(), vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn nested_plugin_slugs_missing_field_returns_empty() {
+        let detail = crate::client::PluginDetail {
+            slug: "base".into(),
+            version: "1.0".into(),
+            name: "Base".into(),
+            description: None,
+            contents: vec![],
+            manifest: serde_json::json!({}),
+        };
+        assert!(detail.nested_plugin_slugs().is_empty());
+    }
+
+    // ── Plugin-aware plan simulation (offline) ───────────────────────────
+    //
+    // Mirrors `plan_from_stub` but adds a `plugins` map keyed by slug →
+    // (contents, nested_plugin_slugs). Lets us exercise the §2 dedup
+    // worked example and the BFS depth ordering without spinning up a
+    // wiremock server. Network-touching coverage lives in
+    // `cli/tests/ensure_with_plugins.rs` + `ensure_plugin_dedup.rs`.
+    //
+    // The simulator must mirror EVERY structural rule of `build_plan` +
+    // `resolve_plugins` (same dedup keys, same BFS order, same
+    // visited-set semantics) or it stops being a useful test.
+
+    struct StubPlugin {
+        contents: Vec<(String, String, String)>, // (kind, slug, version)
+        nested: Vec<String>,                     // slugs in manifest.plugins[]
+    }
+
+    fn simulate_with_plugins(
+        mf: &Manifest,
+        plugins: &std::collections::HashMap<&str, StubPlugin>,
+    ) -> Vec<InstallTarget> {
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut work: Vec<InstallTarget> = Vec::new();
+
+        // Direct atoms first (seeds `seen` so plugin-bundled duplicates lose).
+        for (kind, bucket) in [
+            ("skill", &mf.skills),
+            ("agent", &mf.agents),
+            ("command", &mf.commands),
+        ] {
+            for entry in bucket {
+                if seen.insert((entry.slug.clone(), kind.to_string())) {
+                    work.push(InstallTarget {
+                        slug: entry.slug.clone(),
+                        version: entry.version.clone(),
+                        scope: entry.scope.clone(),
+                        kind: kind.to_string(),
+                        depth: 0,
+                    });
+                }
+            }
+        }
+
+        // BFS plugin walk.
+        let mut queue: std::collections::VecDeque<(String, String, u32)> =
+            std::collections::VecDeque::new();
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for r in &mf.plugins {
+            if visited.insert(r.slug.clone()) {
+                queue.push_back((r.slug.clone(), r.scope.clone(), 1));
+            }
+        }
+        while let Some((slug, scope, depth)) = queue.pop_front() {
+            let Some(p) = plugins.get(slug.as_str()) else {
+                continue;
+            };
+            for (kind, content_slug, version) in &p.contents {
+                if seen.insert((content_slug.clone(), kind.clone())) {
+                    work.push(InstallTarget {
+                        slug: content_slug.clone(),
+                        version: version.clone(),
+                        scope: scope.clone(),
+                        kind: kind.clone(),
+                        depth,
+                    });
+                }
+            }
+            for nested in &p.nested {
+                if visited.insert(nested.clone()) {
+                    queue.push_back((nested.clone(), scope.clone(), depth + 1));
+                }
+            }
+        }
+
+        work.sort_by(|a, b| {
+            b.depth
+                .cmp(&a.depth)
+                .then_with(|| a.slug.cmp(&b.slug))
+                .then_with(|| a.kind.cmp(&b.kind))
+        });
+        work
+    }
+
+    fn plugin_ref(slug: &str) -> PluginRef {
+        PluginRef {
+            slug: slug.into(),
+            version: "*".into(),
+            scope: "project".into(),
+        }
+    }
+
+    #[test]
+    fn plugin_bundled_skill_lands_in_plan_with_inherited_scope() {
+        // Manifest pins only `[[plugins]] slug="bundle-alpha"`; plugin
+        // exposes two contents (skill + agent). Both must end up in the
+        // install plan at depth=1 with `scope` inherited from the pin.
+        let mf = Manifest {
+            plugins: vec![plugin_ref("bundle-alpha")],
+            ..Manifest::default()
+        };
+        let mut plugins = std::collections::HashMap::new();
+        plugins.insert(
+            "bundle-alpha",
+            StubPlugin {
+                contents: vec![
+                    ("skill".into(), "a".into(), "1.0".into()),
+                    ("agent".into(), "reviewer".into(), "1.0".into()),
+                ],
+                nested: vec![],
+            },
+        );
+
+        let plan = simulate_with_plugins(&mf, &plugins);
+        let slugs: Vec<&str> = plan.iter().map(|t| t.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["a", "reviewer"], "{plan:?}");
+        assert!(plan.iter().all(|t| t.depth == 1));
+        assert!(plan.iter().all(|t| t.scope == "project"));
+    }
+
+    #[test]
+    fn direct_skill_pin_wins_over_plugin_bundled_at_different_version() {
+        // The §2 worked example. Direct `skill a @ 1.0` plus plugin P
+        // containing `a @ 2.0` plus plugin Q containing `a @ 3.0`.
+        // Expected: exactly one install action for `a`, version `1.0`,
+        // depth 0 (direct).
+        let mf = Manifest {
+            skills: vec![SkillRef {
+                slug: "a".into(),
+                version: "1.0".into(),
+                scope: "project".into(),
+            }],
+            plugins: vec![plugin_ref("p"), plugin_ref("q")],
+            ..Manifest::default()
+        };
+        let mut plugins = std::collections::HashMap::new();
+        plugins.insert(
+            "p",
+            StubPlugin {
+                contents: vec![("skill".into(), "a".into(), "2.0".into())],
+                nested: vec![],
+            },
+        );
+        plugins.insert(
+            "q",
+            StubPlugin {
+                contents: vec![("skill".into(), "a".into(), "3.0".into())],
+                nested: vec![],
+            },
+        );
+
+        let plan = simulate_with_plugins(&mf, &plugins);
+        let a_entries: Vec<&InstallTarget> = plan.iter().filter(|t| t.slug == "a").collect();
+        assert_eq!(a_entries.len(), 1, "a must install exactly once: {plan:?}");
+        assert_eq!(a_entries[0].version, "1.0");
+        assert_eq!(a_entries[0].depth, 0);
+    }
+
+    #[test]
+    fn shallower_plugin_wins_over_deeper_plugin_for_same_slug() {
+        // Two roots: P (contains `x @ 1.0`, declares no nested plugins)
+        // and Q (declares nested plugin R; R contains `x @ 2.0`).
+        // P's `x` is at depth=1, R's `x` is at depth=2. BFS visits P
+        // and Q before R, so P's `x @ 1.0` is what wins.
+        let mf = Manifest {
+            plugins: vec![plugin_ref("p"), plugin_ref("q")],
+            ..Manifest::default()
+        };
+        let mut plugins = std::collections::HashMap::new();
+        plugins.insert(
+            "p",
+            StubPlugin {
+                contents: vec![("skill".into(), "x".into(), "1.0".into())],
+                nested: vec![],
+            },
+        );
+        plugins.insert(
+            "q",
+            StubPlugin {
+                contents: vec![],
+                nested: vec!["r".into()],
+            },
+        );
+        plugins.insert(
+            "r",
+            StubPlugin {
+                contents: vec![("skill".into(), "x".into(), "2.0".into())],
+                nested: vec![],
+            },
+        );
+
+        let plan = simulate_with_plugins(&mf, &plugins);
+        let x_entries: Vec<&InstallTarget> = plan.iter().filter(|t| t.slug == "x").collect();
+        assert_eq!(x_entries.len(), 1, "{plan:?}");
+        assert_eq!(x_entries[0].version, "1.0");
+        assert_eq!(x_entries[0].depth, 1);
     }
 }

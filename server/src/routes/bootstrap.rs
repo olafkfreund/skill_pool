@@ -67,6 +67,26 @@ pub struct ProjectRef {
     pub name: String,
 }
 
+/// One expanded project-tier item with provenance. Surfaced in the
+/// bootstrap response so the CLI knows the `kind` for non-skill items
+/// (`agent`/`command`) and so the admin/debug UI can answer "why is
+/// this slug in my install plan?" without scraping logs.
+///
+/// Added in #36 alongside `[[plugins]]` resolution. The pre-existing
+/// `skills` field stays a `Vec<String>` of all tier-0 slugs (regardless
+/// of kind), so older CLI clients that treat it as "the install plan"
+/// keep working. Newer clients should prefer `project_items` because
+/// it carries `kind` for routing the per-kind bundle download.
+#[derive(Serialize)]
+pub struct ResolvedProjectItem {
+    pub slug: String,
+    pub kind: String,
+    /// `"direct"` for a slug pinned in `tenant_project_items`;
+    /// `"plugin:<plugin-slug>"` for a slug contributed by a bundled
+    /// plugin (transitively or otherwise).
+    pub source: String,
+}
+
 #[derive(Serialize)]
 pub struct BootstrapResponse {
     /// Echoed tags actually used to look up mappings (post-normalisation).
@@ -76,6 +96,12 @@ pub struct BootstrapResponse {
     /// The project that contributed tier-0 items, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<ProjectRef>,
+    /// Project-tier items with full `{slug, kind, source}` provenance.
+    /// Empty (and omitted) when no `?project=` is supplied. Newer CLIs
+    /// prefer this over `skills` because it carries `kind` for agents,
+    /// commands and plugin-bundled items.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub project_items: Vec<ResolvedProjectItem>,
     /// Per-tier attribution. Populated only when `?debug=1`; otherwise
     /// omitted to keep the default response identical to pre-fallback
     /// clients.
@@ -122,8 +148,16 @@ pub async fn bootstrap(
     // in curator-defined position order. A non-existent project slug is a
     // soft miss (no error — fall through to stack tiers) so that a stale
     // manifest entry doesn't hard-fail a developer's bootstrap.
+    //
+    // After #36 the items array may include `kind = "plugin"` entries,
+    // which expand transitively via `admin::resolve_project_items_expanded`.
+    // The expanded list is what feeds both the existing `skills` field
+    // (skill-kind slugs only, in BFS order, for old-client compat) and
+    // the new `project_items: Vec<ResolvedProjectItem>` field that carries
+    // `(slug, kind, source)` for the full plan.
     let mut project_ref: Option<ProjectRef> = None;
-    let mut project_items: Vec<String> = Vec::new();
+    let mut project_all_slugs: Vec<String> = Vec::new();
+    let mut project_resolved: Vec<ResolvedProjectItem> = Vec::new();
 
     if let Some(ref proj_slug) = q.project {
         let proj_slug = proj_slug.trim();
@@ -141,10 +175,35 @@ pub async fn bootstrap(
                     slug: pw.project.slug.clone(),
                     name: pw.project.name.clone(),
                 });
-                project_items = pw
-                    .items
+
+                // Plugin-aware expansion. Cycles surface as
+                // `AppError::PluginCycle` → 422 with the normalised
+                // cycle path (see `error.rs`). Other DB errors bubble
+                // through `AppError::Sqlx`. Tenant scope comes from
+                // `AuthedCaller` (the same tenant that just authorised
+                // `get_project`) — `pw.project` doesn't carry tenant_id
+                // because it's redundant with the lookup that produced it.
+                let resolved = crate::admin::resolve_project_items_expanded(
+                    state.db_read(),
+                    caller.tenant.tenant_id,
+                    &pw.items,
+                )
+                .await?;
+
+                // For backward compat with pre-#36 clients the legacy
+                // `skills: Vec<String>` field carries the slugs of ALL
+                // expanded tier-0 items regardless of kind — the field
+                // name predates per-kind awareness in the CLI. Newer
+                // clients should prefer `project_items` which carries
+                // `(slug, kind, source)`.
+                project_all_slugs = resolved.iter().map(|i| i.slug.clone()).collect();
+                project_resolved = resolved
                     .into_iter()
-                    .map(|i| i.skill_slug)
+                    .map(|i| ResolvedProjectItem {
+                        slug: i.slug,
+                        kind: i.kind,
+                        source: i.source,
+                    })
                     .collect();
             }
             // Non-existent project → soft fall-through (project_ref stays None)
@@ -256,7 +315,7 @@ pub async fn bootstrap(
     let mut breakdown_tagged: Vec<String> = Vec::new();
     let mut breakdown_semantic: Vec<String> = Vec::new();
 
-    for slug in &project_items {
+    for slug in &project_all_slugs {
         if all.len() >= MAX_RESULTS {
             break;
         }
@@ -304,6 +363,7 @@ pub async fn bootstrap(
         stack: tags,
         skills: all,
         project: project_ref,
+        project_items: project_resolved,
         tier_breakdown,
     }))
 }

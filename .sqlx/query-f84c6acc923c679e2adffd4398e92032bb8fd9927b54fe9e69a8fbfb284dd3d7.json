@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT content_slug, content_kind, position FROM plugin_contents WHERE plugin_id = $1 ORDER BY position ASC, content_slug ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content_slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "content_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "position",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f84c6acc923c679e2adffd4398e92032bb8fd9927b54fe9e69a8fbfb284dd3d7"
+}

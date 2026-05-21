@@ -37,6 +37,16 @@ pub enum AppError {
     #[error("unprocessable entity")]
     Unprocessable(serde_json::Value),
 
+    /// 422 with a plugin-resolution cycle path. Serialised as
+    /// `{"error":"plugin_cycle","cycle":[...],"message":"..."}`.
+    /// Emitted by `bootstrap` (and any other endpoint that walks
+    /// `plugin_contents` transitively) when plugin A → … → A is
+    /// detected. The cycle vector is normalised so its first slug is
+    /// the lexicographically-smallest in the loop (matches the CLI
+    /// resolver's diagnostic — see `cmd::ensure::PluginCycle`).
+    #[error("plugin dependency cycle: {0:?}")]
+    PluginCycle(Vec<String>),
+
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 
@@ -61,6 +71,17 @@ impl IntoResponse for AppError {
                     Json(json!({
                         "error": "unprocessable_entity",
                         "fields": fields,
+                    })),
+                )
+                    .into_response();
+            }
+            Self::PluginCycle(cycle) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({
+                        "error": "plugin_cycle",
+                        "message": "plugin dependency cycle detected",
+                        "cycle": cycle,
                     })),
                 )
                     .into_response();
