@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT entry_json FROM plugin_marketplace_entries WHERE tenant_id = $1 ORDER BY plugin_slug ASC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entry_json",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e39044972b702163fe09d2c3b5759f13ff47cfc1bfcf2255170317c85242142f"
+}

@@ -27,6 +27,8 @@ mod saml;
 mod scim;
 mod session_policy;
 mod plugins;
+pub(crate) mod marketplace;
+mod plugin_git;
 mod skills;
 mod sso_admin;
 mod projects;
@@ -59,6 +61,30 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/plugins/{slug}/versions/{version}",
             delete(plugins::archive),
+        )
+        // Marketplace catalogue (#31) — what Claude Code consumes via
+        // `/plugin marketplace add`. Public read, tenant-resolved by Host
+        // or x-skill-pool-tenant header. Per-tenant rate limiter applies
+        // (deliberately NOT in SKIP_PATHS).
+        .route(
+            "/.claude-plugin/marketplace.json",
+            get(marketplace::get_marketplace),
+        )
+        // Per-plugin dumb-HTTP git endpoint (#31) — `git clone` target
+        // for internal + mirror plugins. Two routes: smart-protocol ref
+        // advertisement (GET) + upload-pack negotiation (POST). Both
+        // public, tenant-resolved, rate-limited.
+        //
+        // Axum's path parser allows only one capture per segment, so we
+        // capture the whole `<slug>.git` and strip the suffix inside the
+        // handler.
+        .route(
+            "/git/plugins/{slug_git}/info/refs",
+            get(plugin_git::info_refs),
+        )
+        .route(
+            "/git/plugins/{slug_git}/git-upload-pack",
+            post(plugin_git::upload_pack),
         )
         .route("/v1/theme", get(theme::get_theme).put(theme::put_theme))
         .route(

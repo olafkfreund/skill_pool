@@ -19,6 +19,7 @@ pub mod logo_sanitize;
 pub mod metrics;
 pub mod notify;
 pub mod plugin;
+pub mod plugin_git;
 pub mod queue;
 pub mod rate_limit;
 pub mod routes;
