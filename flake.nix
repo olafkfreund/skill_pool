@@ -76,7 +76,7 @@
           pname = "skill-pool-web";
           version = "0.1.0";
           src = ./web;
-          npmDepsHash = "sha256-JE0ti1bRf02NdVM1dwExqECo/SdmAgOqHPtI+YaqHHs=";
+          npmDepsHash = "sha256-9PGuX5IrU/97FENZJDn1ILdJ4eA2OwS1tPBrUzUELm8=";
           npmBuildScript = "build";
           # adapter-node emits build/ as the server bundle.  Copy everything
           # the runtime needs: the compiled output, the production node_modules
