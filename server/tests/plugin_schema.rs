@@ -139,18 +139,16 @@ async fn tenant_cascade_deletes_plugins_and_contents() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Cross-tenant plugin_id mismatch — documents the API-layer gap
+// 3. Cross-tenant plugin_id — rejected at the schema layer
 // ---------------------------------------------------------------------------
 //
-// The FK on `plugin_marketplace_entries.plugin_id` is to `plugins.id`
-// alone (not composite with tenant). That means the schema PERMITS a row
-// whose `tenant_id` differs from the referenced plugin's tenant. This is
-// intentional (default plan): defense-in-depth lives in the API handler
-// landing in #2. This test pins that reality so a future schema tweak
-// doesn't silently change behaviour.
+// The composite FK `(tenant_id, plugin_id) → plugins(tenant_id, id)` on
+// `plugin_marketplace_entries` rejects any row whose `tenant_id` does not
+// match the referenced plugin's tenant. Belt-and-braces alongside the API
+// handler check in #30.
 
 #[tokio::test]
-async fn cross_tenant_plugin_id_in_marketplace_entry_is_api_layer_concern() -> Result<()> {
+async fn cross_tenant_plugin_id_in_marketplace_entry_rejected_at_schema_layer() -> Result<()> {
     let db = fresh_db().await?;
     let acme = make_tenant(&db.pool, "acme").await?;
     let globex = make_tenant(&db.pool, "globex").await?;
@@ -158,8 +156,7 @@ async fn cross_tenant_plugin_id_in_marketplace_entry_is_api_layer_concern() -> R
     let acme_plugin = insert_plugin(&db.pool, acme, "shared", "1.0.0").await?;
 
     // Insert a marketplace entry with globex's tenant_id but acme's plugin.
-    // We expect this to SUCCEED at the schema layer — the API handler is
-    // the layer that must reject it.
+    // The composite FK MUST reject this.
     let res = sqlx::query!(
         "INSERT INTO plugin_marketplace_entries \
            (tenant_id, plugin_slug, plugin_id, version, source_url, entry_json) \
@@ -170,12 +167,27 @@ async fn cross_tenant_plugin_id_in_marketplace_entry_is_api_layer_concern() -> R
     .execute(&db.pool)
     .await;
 
-    assert!(
-        res.is_ok(),
-        "schema permits cross-tenant plugin_id — API layer (#2) MUST reject. \
-         If this assertion ever flips, update the doc in 0032 and the API \
-         handler's `cross_tenant_check` to match."
+    let err = res.expect_err(
+        "composite FK must reject cross-tenant plugin_id at the schema layer",
     );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("plugin_marketplace_entries_plugin_tenant_match")
+            || msg.contains("foreign key")
+            || msg.contains("violates foreign key constraint"),
+        "expected FK violation on plugin_marketplace_entries_plugin_tenant_match, got: {msg}"
+    );
+
+    // Same-tenant insert still succeeds (proves the FK isn't over-restrictive).
+    sqlx::query!(
+        "INSERT INTO plugin_marketplace_entries \
+           (tenant_id, plugin_slug, plugin_id, version, source_url, entry_json) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+        acme, "shared", acme_plugin, "1.0.0",
+        "https://acme.skill-pool.example.com/git/plugins/shared.git", json!({}),
+    )
+    .execute(&db.pool)
+    .await?;
 
     Ok(())
 }

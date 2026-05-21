@@ -57,6 +57,18 @@ CREATE INDEX idx_plugins_tenant_status
 CREATE INDEX idx_plugins_tenant_recent
   ON plugins(tenant_id, created_at DESC);
 
+-- Backing index for the composite FK from plugin_marketplace_entries
+-- (added in 0032). The FK targets (tenant_id, id); pg requires a unique
+-- index on those columns for the constraint to be legal. id alone is
+-- already unique (PK), so the composite is naturally unique too — this
+-- index just satisfies the constraint requirement.
+--
+-- Cost: ~24 bytes/row; benefit: schema-layer rejection of cross-tenant
+-- plugin_id references in marketplace entries (defense-in-depth — belt
+-- alongside the API handler braces landing in #30).
+CREATE UNIQUE INDEX idx_plugins_tenant_id_pk
+  ON plugins(tenant_id, id);
+
 CREATE TABLE plugin_contents (
   plugin_id        UUID NOT NULL REFERENCES plugins(id) ON DELETE CASCADE,
   content_slug     TEXT NOT NULL,
