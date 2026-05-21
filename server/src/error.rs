@@ -27,6 +27,16 @@ pub enum AppError {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    #[error("payload too large: {0}")]
+    PayloadTooLarge(String),
+
+    /// 422 with a structured field-error map. Serialised as
+    /// `{"error":"unprocessable_entity","fields":<value>}` so callers can
+    /// render per-field validation feedback. Used by the plugins publish
+    /// handler; reusable for any future endpoint with field-level rejection.
+    #[error("unprocessable entity")]
+    Unprocessable(serde_json::Value),
+
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 
@@ -44,6 +54,17 @@ impl IntoResponse for AppError {
             Self::TenantResolution(_) => (StatusCode::BAD_REQUEST, "tenant_resolution_failed"),
             Self::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "not_implemented"),
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            Self::PayloadTooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
+            Self::Unprocessable(fields) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({
+                        "error": "unprocessable_entity",
+                        "fields": fields,
+                    })),
+                )
+                    .into_response();
+            }
             Self::Sqlx(e) => {
                 tracing::error!(error = ?e, "sqlx error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
