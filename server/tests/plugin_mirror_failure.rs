@@ -7,13 +7,12 @@
 //!   3. Call `run_mirror` directly — it should return Err.
 //!   4. Call the handler (which calls run_mirror and writes the error back).
 //!   5. Assert:
-//!        - `fetch_error` is NOT NULL and contains a descriptive message.
+//!        - `fetch_error` is NOT NULL and non-empty.
 //!        - `fetch_error_at` is NOT NULL.
 //!        - `last_pulled_at` is still NULL (the failure didn't advance it).
-//!        - The plugin row is otherwise intact (name/version unchanged).
+//!        - The plugin row name/version are unchanged.
 
 use anyhow::Result;
-use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ImageExt;
@@ -57,7 +56,7 @@ async fn plugin_mirror_failure_records_fetch_error() -> Result<()> {
     .fetch_one(&pool)
     .await?;
 
-    // A URL that is guaranteed to fail (path does not exist on this host).
+    // A URL that is guaranteed to fail.
     let bad_url = "file:///nonexistent/skill_pool_test/plugin.git";
 
     let plugin_id: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
@@ -90,37 +89,45 @@ async fn plugin_mirror_failure_records_fetch_error() -> Result<()> {
     assert!(handle_result.is_err(), "handler should return Err for bad URL");
 
     // 3. Assert: fetch_error is populated, last_pulled_at is still NULL.
-    let row = sqlx::query!(
+    let (name, version, last_pulled_at, fetch_error, fetch_error_at) = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         "SELECT name, version, last_pulled_at, fetch_error, fetch_error_at \
          FROM plugins WHERE id = $1",
-        plugin_id
     )
+    .bind(plugin_id)
     .fetch_one(&pool)
     .await?;
 
     assert!(
-        row.last_pulled_at.is_none(),
+        last_pulled_at.is_none(),
         "last_pulled_at must remain NULL after a failed mirror"
     );
     assert!(
-        row.fetch_error.is_some(),
+        fetch_error.is_some(),
         "fetch_error must be populated after a failed mirror"
     );
     assert!(
-        row.fetch_error_at.is_some(),
+        fetch_error_at.is_some(),
         "fetch_error_at must be set after a failed mirror"
     );
 
-    // The error message should mention the git operation, not be empty.
-    let err_msg = row.fetch_error.unwrap();
+    let err_msg = fetch_error.unwrap();
     assert!(
         !err_msg.is_empty(),
         "fetch_error should contain a non-empty error message"
     );
 
-    // Name and version should be unchanged (failure must not corrupt the row).
-    assert_eq!(row.name, "broken-mirror");
-    assert_eq!(row.version, "pending");
+    // Row fields must be intact.
+    assert_eq!(name, "broken-mirror");
+    assert_eq!(version, "pending");
 
     Ok(())
 }

@@ -254,27 +254,38 @@ pub async fn run_mirror(db: &PgPool, storage: &Storage, job: &PluginMirrorJob) -
     .context("update plugin row")?;
 
     // 6. Regenerate the marketplace entry so the catalog reflects the new
-    //    manifest. Mirrors the pattern in `routes/plugins.rs::publish`.
-    //    The INSERT ... ON CONFLICT ... DO UPDATE ensures idempotency.
+    //    manifest. The entry_json shape matches what `regenerate_entry` in
+    //    routes/marketplace.rs produces; `source_url` is the upstream URL
+    //    (for mirror plugins the local git endpoint would be preferred, but
+    //    the job handler doesn't know the server's origin — the operator
+    //    can re-trigger a publish to get the canonical local URL).
+    //
+    //    ON CONFLICT (tenant_id, plugin_slug) ensures idempotency.
+    let entry_json = serde_json::json!({
+        "name": slug,
+        "version": manifest_version,
+        "source": {
+            "source": "url",
+            "url": upstream_url,
+        },
+    });
     sqlx::query(
         "INSERT INTO plugin_marketplace_entries \
-             (tenant_id, plugin_id, entry) \
-         SELECT p.tenant_id, p.id, \
-                jsonb_build_object( \
-                    'slug',    p.slug, \
-                    'name',    p.name, \
-                    'version', p.version, \
-                    'description', p.description, \
-                    'sourcing_mode', p.sourcing_mode, \
-                    'upstream_url', p.upstream_url \
-                ) \
-         FROM plugins p \
-         WHERE p.id = $1 AND p.tenant_id = $2 \
-         ON CONFLICT (tenant_id, plugin_id) DO UPDATE \
-             SET entry = EXCLUDED.entry, updated_at = now()",
+             (tenant_id, plugin_slug, plugin_id, version, source_url, entry_json) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (tenant_id, plugin_slug) DO UPDATE \
+             SET plugin_id   = EXCLUDED.plugin_id, \
+                 version     = EXCLUDED.version, \
+                 source_url  = EXCLUDED.source_url, \
+                 entry_json  = EXCLUDED.entry_json, \
+                 updated_at  = now()",
     )
-    .bind(job.plugin_id)
     .bind(job.tenant_id)
+    .bind(&slug)
+    .bind(job.plugin_id)
+    .bind(&manifest_version)
+    .bind(&upstream_url)
+    .bind(entry_json)
     .execute(&mut *tx)
     .await
     .context("upsert marketplace entry")?;

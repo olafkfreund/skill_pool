@@ -3,7 +3,7 @@
 //! Flow:
 //!   1. Boot Postgres.
 //!   2. Build an upstream bare repo (v1 manifest).
-//!   3. Insert plugin stub, run_mirror → verifies v1.
+//!   3. Insert plugin stub, run_mirror → verifies v1 is indexed.
 //!   4. Mutate the upstream (add a v2 commit to `main`).
 //!   5. Run run_mirror again — should fast-forward fetch and update the row.
 //!   6. Assert:
@@ -20,10 +20,14 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::ImageExt;
 use testcontainers_modules::postgres::Postgres;
 
-use skill_pool_server::{admin, jobs::plugin_mirror::{run_mirror, PluginMirrorJob}, storage::Storage};
+use skill_pool_server::{
+    admin,
+    jobs::plugin_mirror::{run_mirror, PluginMirrorJob},
+    storage::Storage,
+};
 
 // ---------------------------------------------------------------------------
-// Helpers (reused from plugin_mirror.rs — duplicated to keep tests self-contained)
+// Helpers
 // ---------------------------------------------------------------------------
 
 fn make_upstream_repo_v1(repo_path: &Path) -> Result<()> {
@@ -57,7 +61,6 @@ fn make_upstream_repo_v1(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Add a v2 commit on top of the existing `refs/heads/main`.
 fn push_upstream_v2(repo_path: &Path) -> Result<()> {
     use git2::{Repository, Signature};
 
@@ -120,7 +123,6 @@ async fn plugin_mirror_refresh_propagates_upstream_changes() -> Result<()> {
     make_upstream_repo_v1(&upstream_path)?;
     let upstream_url = format!("file://{}", upstream_path.display());
 
-    // Insert plugin stub.
     let tenant_id: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT id FROM tenants WHERE slug = 'acme'",
     )
@@ -148,42 +150,45 @@ async fn plugin_mirror_refresh_propagates_upstream_changes() -> Result<()> {
 
     // First mirror run — should pick up v1.
     run_mirror(&pool, &storage, &job).await?;
-    let first_pulled_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
-        "SELECT last_pulled_at FROM plugins WHERE id = $1",
-    )
-    .bind(plugin_id)
-    .fetch_one(&pool)
-    .await?;
-    let first_version = sqlx::query_scalar::<_, String>(
-        "SELECT version FROM plugins WHERE id = $1",
-    )
-    .bind(plugin_id)
-    .fetch_one(&pool)
-    .await?;
+    let first_pulled_at: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+            "SELECT last_pulled_at FROM plugins WHERE id = $1",
+        )
+        .bind(plugin_id)
+        .fetch_one(&pool)
+        .await?;
+    let first_version: String =
+        sqlx::query_scalar::<_, String>("SELECT version FROM plugins WHERE id = $1")
+            .bind(plugin_id)
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(first_version, "0.1.0");
 
     // Push v2 to the upstream.
     push_upstream_v2(&upstream_path)?;
 
-    // Brief sleep so timestamps are distinguishable (1ms is enough given TIMESTAMPTZ precision).
+    // Brief sleep so timestamps are distinguishable.
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
     // Second mirror run — should fast-forward and pick up v2.
     run_mirror(&pool, &storage, &job).await?;
-    let second_pulled_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
-        "SELECT last_pulled_at FROM plugins WHERE id = $1",
-    )
-    .bind(plugin_id)
-    .fetch_one(&pool)
-    .await?;
-    let second_version = sqlx::query_scalar::<_, String>(
-        "SELECT version FROM plugins WHERE id = $1",
-    )
-    .bind(plugin_id)
-    .fetch_one(&pool)
-    .await?;
+    let second_pulled_at: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+            "SELECT last_pulled_at FROM plugins WHERE id = $1",
+        )
+        .bind(plugin_id)
+        .fetch_one(&pool)
+        .await?;
+    let second_version: String =
+        sqlx::query_scalar::<_, String>("SELECT version FROM plugins WHERE id = $1")
+            .bind(plugin_id)
+            .fetch_one(&pool)
+            .await?;
 
-    assert_eq!(second_version, "0.2.0", "version should update to 0.2.0 after refresh");
+    assert_eq!(
+        second_version, "0.2.0",
+        "version should update to 0.2.0 after refresh"
+    );
     assert!(
         second_pulled_at >= first_pulled_at,
         "last_pulled_at should advance on refresh"
@@ -196,7 +201,10 @@ async fn plugin_mirror_refresh_propagates_upstream_changes() -> Result<()> {
     let entry = head_tree.get_path(std::path::Path::new(".claude-plugin/plugin.json"))?;
     let blob = local_repo.find_blob(entry.id())?;
     let manifest: serde_json::Value = serde_json::from_slice(blob.content())?;
-    assert_eq!(manifest["version"], "0.2.0", "local repo should reflect upstream v2");
+    assert_eq!(
+        manifest["version"], "0.2.0",
+        "local repo should reflect upstream v2"
+    );
 
     Ok(())
 }
