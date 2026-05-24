@@ -49,6 +49,7 @@ The full 76-skill catalog grid is also available: [`docs/images/catalog.webp`](d
 - **Version history + decay** — every publish is a new immutable version; `last_used > 6 months ∧ uses < 3` flags archive candidates for cleanup.
 - **Semantic search** — `bge-small` embeddings computed on publish; `/v1/skills?semantic=axum middleware` ranks by meaning, not just substring.
 - **Agents + commands too** — same registry surface, same publish/install path for subagents and slash commands. `skill-pool add-agent code-reviewer`.
+- **Plugins (per-tenant Claude Code marketplace)** — bundle skills / agents / commands / hooks / MCP servers into one installable unit; developers run `/plugin marketplace add` once and `/plugin install` per bundle. Internal, external, and mirror sourcing modes.
 - **MCP transport** — Claude can `search_skills` and `install_skill` inline via the registry's MCP JSON-RPC endpoint, no CLI shell-out.
 - **One-binary deploy** — Nix flake, Docker Compose, Helm chart, and Terraform AWS module are all first-class. Pick the surface that fits your platform team.
 - **Pluggable storage** — [opendal](https://opendal.apache.org/) backend speaks S3, GCS, Azure Blob, MinIO, or plain filesystem from the same DSN-style config.
@@ -68,6 +69,7 @@ flowchart LR
     subgraph server["skill-pool server (Rust + Axum)"]
         API[REST API<br/>/v1/*]
         MCP[MCP endpoint<br/>JSON-RPC]
+        Plugins["Plugin surfaces<br/>/.claude-plugin/marketplace.json<br/>/git/plugins/&lt;slug&gt;.git"]
         Capturer["Capturer daemon<br/>Haiku → Sonnet"]
     end
 
@@ -81,6 +83,7 @@ flowchart LR
 
     CLI -->|publish / ensure / search| API
     Claude -->|search_skills / install_skill| MCP
+    Claude -->|/plugin marketplace add<br/>/plugin install| Plugins
     Hooks -->|score → queue| Capturer
     Capturer -->|POST /v1/drafts| API
     Web -->|browse / review / theme| API
@@ -88,6 +91,8 @@ flowchart LR
     API --> OBJ
     API -.->|optional| REDIS
     MCP --> PG
+    Plugins --> PG
+    Plugins --> OBJ
 ```
 
 ## Quickstart
