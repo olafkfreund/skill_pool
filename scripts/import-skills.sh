@@ -31,7 +31,7 @@ TENANT="${SKILL_POOL_TENANT:-acme}"
 SOURCE_DIR="${CLAUDE_SKILLS_SOURCE:-/tmp/claude-skills-source}"
 SOURCE_REPO="${CLAUDE_SKILLS_REPO:-borghei/Claude-Skills}"
 DB_URL="${SKILL_POOL_DATABASE_URL:-postgres://skillpool:skillpool@127.0.0.1:55432/skillpool}"
-PG_ARGS=(-h 127.0.0.1 -p 55432 -U skillpool -d skillpool)
+PG_ARGS=(-h 127.0.0.1 -p "${PGPORT:-55432}" -U skillpool -d skillpool)
 export PGPASSWORD="${PGPASSWORD:-skillpool}"
 
 CLI="$REPO_ROOT/target/debug/skill-pool"

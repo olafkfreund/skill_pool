@@ -13,7 +13,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 TENANT="${SKILL_POOL_TENANT:-acme}"
-PG_ARGS=(-h 127.0.0.1 -p 55432 -U skillpool -d skillpool)
+PG_ARGS=(-h 127.0.0.1 -p "${PGPORT:-55432}" -U skillpool -d skillpool)
 export PGPASSWORD="${PGPASSWORD:-skillpool}"
 
 log() { printf '%s\n' "$*"; }
