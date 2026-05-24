@@ -38,6 +38,8 @@ import { cleanup, render } from '@testing-library/svelte';
 import axe from 'axe-core';
 
 import LoginPage from '../src/routes/(public)/login/+page.svelte';
+import MarketplaceListPage from '../src/routes/(public)/marketplace/+page.svelte';
+import MarketplaceDetailPage from '../src/routes/(public)/marketplace/[slug]/+page.svelte';
 import CatalogPage from '../src/routes/(authed)/+page.svelte';
 import ThemePage from '../src/routes/(authed)/admin/theme/+page.svelte';
 import DraftsPage from '../src/routes/(authed)/drafts/+page.svelte';
@@ -365,6 +367,67 @@ const PLUGIN_DETAIL_DATA = {
 // signature — the loader-level layout fields go via the parent layout
 // at runtime. No `data` fixture needed for the axe sweep.
 
+const MARKETPLACE_INSTALL_BASE = 'https://acme.skill-pool.example.com';
+
+const MARKETPLACE_LIST_DATA = {
+  plugins: [
+    {
+      slug: 'rust-axum-toolkit',
+      version: '1.2.0',
+      name: 'Rust + Axum Toolkit',
+      description: 'Curated skills for Rust + Axum web services.',
+      status: 'published',
+      sourcing_mode: 'internal',
+      tags: ['rust', 'axum'],
+      created_at: '2026-04-01T00:00:00Z',
+    },
+  ],
+  installBase: MARKETPLACE_INSTALL_BASE,
+} as const;
+
+const MARKETPLACE_DETAIL_JSON_LD = JSON.stringify({
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Rust + Axum Toolkit',
+  description: 'Curated skills for Rust + Axum web services.',
+  softwareVersion: '1.2.0',
+  applicationCategory: 'DeveloperApplication',
+  operatingSystem: 'Any',
+  url: `${MARKETPLACE_INSTALL_BASE}/marketplace/rust-axum-toolkit`,
+});
+
+const MARKETPLACE_DETAIL_DATA = {
+  installBase: MARKETPLACE_INSTALL_BASE,
+  jsonLd: MARKETPLACE_DETAIL_JSON_LD,
+  plugin: {
+    slug: 'rust-axum-toolkit',
+    version: '1.2.0',
+    name: 'Rust + Axum Toolkit',
+    description: 'Curated skills for Rust + Axum web services.',
+    status: 'published',
+    sourcing_mode: 'internal',
+    manifest: {
+      name: 'rust-axum-toolkit',
+      version: '1.2.0',
+      description: 'Curated skills for Rust + Axum web services.',
+    },
+    contents: [
+      { kind: 'skill', slug: 'rust-error-handling', version: '1.0.0', position: 0 },
+      { kind: 'agent', slug: 'sql-migration-reviewer', version: '1.1.0', position: 1 },
+      { kind: 'command', slug: 'release-notes', version: '0.2.0', position: 2 },
+    ],
+    updated_at: '2026-05-15T00:00:00Z',
+  },
+  versions: [
+    {
+      version: '1.2.0',
+      status: 'published',
+      created_at: '2026-05-15T00:00:00Z',
+      published_by: 'curator@acme.com',
+    },
+  ],
+} as const;
+
 // --- Tests ------------------------------------------------------------------
 
 describe('contrast guarantees', () => {
@@ -519,6 +582,46 @@ describe('a11y: import plugin (stub)', () => {
       expect(
         blocking,
         `import plugin (${name}) violations:\n${formatViolations(blocking)}`,
+      ).toEqual([]);
+    });
+  }
+});
+
+describe('a11y: marketplace list (public)', () => {
+  afterEach(() => cleanup());
+  for (const { name, theme } of PALETTES) {
+    it(`no serious/critical axe violations on "${name}" palette`, async () => {
+      const results = await axePage(
+        () =>
+          render(MarketplaceListPage, {
+            props: { data: MARKETPLACE_LIST_DATA as any },
+          }),
+        theme,
+      );
+      const blocking = blockingViolations(results);
+      expect(
+        blocking,
+        `marketplace list (${name}) violations:\n${formatViolations(blocking)}`,
+      ).toEqual([]);
+    });
+  }
+});
+
+describe('a11y: marketplace detail (public)', () => {
+  afterEach(() => cleanup());
+  for (const { name, theme } of PALETTES) {
+    it(`no serious/critical axe violations on "${name}" palette`, async () => {
+      const results = await axePage(
+        () =>
+          render(MarketplaceDetailPage, {
+            props: { data: MARKETPLACE_DETAIL_DATA as any },
+          }),
+        theme,
+      );
+      const blocking = blockingViolations(results);
+      expect(
+        blocking,
+        `marketplace detail (${name}) violations:\n${formatViolations(blocking)}`,
       ).toEqual([]);
     });
   }
