@@ -232,7 +232,8 @@ Components must NOT be:    inside .claude-plugin/
 
 - `docs/plugins.md` — conceptual overview, sourcing modes, how plugins fit alongside skills/agents/commands.
 - `docs/manifest-schema.md` — the project-level `.skill-pool/manifest.toml`, a separate TOML manifest unrelated to `plugin.json`.
-- `docs/wiki/Plugin-Authoring.md` — step-by-step walkthrough (lands later in Issue #37).
+- `docs/wiki/Plugin-Authoring.md` — step-by-step composer-to-Claude-Code walkthrough.
+- `docs/api.md` — REST endpoints (`/v1/plugins`, `/.claude-plugin/marketplace.json`, `/git/plugins/<slug>.git/...`) that consume and serve this manifest.
 - [Claude Code: Plugins reference](https://code.claude.com/docs/en/plugins-reference) — upstream spec for `plugin.json` and the on-disk layout.
 - [Claude Code: Plugin marketplaces](https://code.claude.com/docs/en/plugin-marketplaces) — upstream spec for `marketplace.json` and the install flow.
 - [Claude Code: Plugin dependencies](https://code.claude.com/docs/en/plugin-dependencies) — semver constraints and resolution.
