@@ -221,7 +221,9 @@ Public read on the marketplace endpoint is required by Claude Code's installer: 
 ## Related
 
 - `docs/plugin-manifest-schema.md` — the exact reference for `.claude-plugin/plugin.json` and the skill-pool-specific rules on top.
-- `docs/wiki/Plugin-Authoring.md` (placeholder, lands with the wiki authoring walkthrough later in Issue #37) — step-by-step composer-to-Claude-Code walkthrough for a first internal plugin.
+- `docs/wiki/Plugin-Authoring.md` — step-by-step composer-to-Claude-Code walkthrough for a first internal plugin.
+- `docs/api.md` — the REST endpoints (`/v1/plugins`, `/.claude-plugin/marketplace.json`, `/git/plugins/<slug>.git/...`) behind every workflow on this page.
+- `docs/wiki/CLI-Reference.md` — the `skill-pool plugin` subcommand family.
 - `docs/architecture.md` — the broader skill-pool system diagram into which the plugin surfaces above slot.
 - `docs/tenancy.md` — the `tenant_id` invariant plugins inherit.
 - `docs/projects.md` and `docs/plans.md` — the two most recent per-tenant primitives; plugins follow the same RBAC, audit, and refresh-worker patterns.

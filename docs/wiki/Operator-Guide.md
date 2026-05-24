@@ -470,6 +470,104 @@ Full rollback procedures: `docs/ops/rollback.md`.
 
 ---
 
+## Plugin storage
+
+Plugins (per-tenant Claude Code marketplace, see
+[`docs/plugins.md`](../plugins.md)) introduce two operator-visible
+concerns beyond skill bundles: on-disk bare git repos for the
+`/git/plugins/<slug>.git` endpoint, and the per-tenant pre-rendered
+marketplace cache in Postgres.
+
+### On-disk layout
+
+Source of truth: `server/src/storage.rs:71-94`
+(`Storage::plugin_git_path`).
+
+For each `internal`- or `mirror`-sourced plugin, skill-pool
+materialises a bare git repo on first publish at:
+
+```text
+<storage-root>/<tenant-uuid>/plugins/<slug>.git/
+```
+
+`<storage-root>` is the path component of `SKILL_POOL_STORAGE_URI`
+when it starts with `fs://`. The git endpoint **requires `fs://`
+storage** — S3/GCS/Azure backends cannot serve git-upload-pack and
+the endpoint returns an explicit error at publish time. A per-process
+checkout cache for object-store-backed plugin git is deferred.
+
+The tenant UUID prefix is the same one bundle storage uses, so
+`rm -rf <storage-root>/<tenant-uuid>/` cleans plugin repos and skill
+bundles in one shot when a tenant is decommissioned.
+
+### Backup
+
+Bare git repos are append-mostly trees of immutable blobs (a publish
+only adds objects; archive flips a DB row, never deletes files). Two
+practical rules:
+
+1. **Include `<storage-root>/<tenant-uuid>/plugins/` in the same
+   backup job that snapshots `bundles/`.** A daily `tar` of
+   `<storage-root>` covers both. Incremental backup tools (`restic`,
+   `borg`) deduplicate well — only newly published plugin objects
+   transfer on each run.
+2. **A restored repo serves correctly without re-materialisation
+   from Postgres.** Trees + blobs are self-contained; the only DB
+   row needed is `plugins` (for the `sourcing_mode` check in
+   `plugin_git::resolve_repo_path`).
+
+If the bare repo is missing after a publish (storage write failed
+silently — logged at warn level), the API returns 404 from
+`/git/plugins/<slug>.git`. **Recovery: republish.** The materialiser
+is idempotent — the second pass walks the same content tree and
+writes the same objects.
+
+### Marketplace cache
+
+Source of truth: `server/migrations/0032_plugin_marketplace_entries.sql`.
+
+The `plugin_marketplace_entries` table holds one row per
+`(tenant_id, plugin_slug)` — the latest published version pre-rendered
+into the exact JSON object that splices into
+`/.claude-plugin/marketplace.json`. The marketplace handler
+(`server/src/routes/marketplace.rs`) is a single SELECT plus a JSON
+wrapper, with a strong ETag and `Cache-Control: public, max-age=60`
+on the response. Conditional GETs return 304 on match.
+
+Storage cost: a few hundred bytes per plugin per tenant — negligible
+versus the bundle tarballs.
+
+### Mirror refresh (deferred)
+
+`mirror`-sourced plugins are listed in `marketplace.json` and have a
+local bare repo row, but the periodic-pull worker that refreshes
+those repos from upstream is tracked in a follow-up issue. Until it
+ships:
+
+- Mirror plugins serve whatever the upstream tree looked like at
+  publish time (or when the operator manually re-runs a publish).
+- A stale mirror does not break clones — the cached objects still
+  serve. It just doesn't pick up upstream commits automatically.
+
+If you need fresh mirror content before the worker lands, republish
+the plugin (which re-materialises the tree from upstream).
+
+### Growth notes
+
+- Plugin bare repos grow with `commits × tree-size`. A plugin
+  bundling a dozen skills with one publish per week settles at
+  single-digit MB after a year.
+- The 256 KiB cap on the publish-time `manifest` body
+  (`server/src/routes/plugins.rs:42`) caps the inline-blob blast
+  radius — operators don't need a separate per-plugin size monitor.
+- The total number of plugins per tenant has no hard cap, but the
+  marketplace JSON is fetched on every Claude Code refresh; tenants
+  with thousands of plugins will see noticeable cold-fetch latency.
+  Tier-by-tier sizing for plugins-heavy tenants is on the capacity
+  planning backlog (`docs/ops/capacity.md`).
+
+---
+
 ## Where to read next
 
 - [Tenant Onboarding](Tenant-Onboarding.md) — first-tenant playbook

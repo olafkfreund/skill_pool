@@ -325,3 +325,318 @@ Response: created skill row.
 ## `POST /v1/skills/validate` — lint without persist (stub)
 
 Same payload as publish; returns validation result without storing. Used by the web editor's "Validate" button.
+
+---
+
+## Plugins (Layer 3)
+
+A plugin bundles one or more published skills/agents/commands plus inline
+hook/MCP/LSP blobs into a single installable unit Claude Code consumes via
+`/plugin marketplace add` + `/plugin install`. Conceptual overview:
+[`docs/plugins.md`](plugins.md). Manifest reference:
+[`docs/plugin-manifest-schema.md`](plugin-manifest-schema.md). Source of
+truth for the routes below: `server/src/routes/plugins.rs`,
+`server/src/routes/marketplace.rs`, `server/src/routes/plugin_git.rs`.
+
+Authorization (mirrors `/v1/skills`):
+
+| Route | Scope |
+|---|---|
+| `POST /v1/plugins` | `skills:publish` (granted to `curator`, `admin`) |
+| `DELETE /v1/plugins/{slug}/versions/{version}` | `skills:publish` |
+| `GET /v1/plugins*` | any authenticated tenant member |
+| `GET /.claude-plugin/marketplace.json` | public (no auth) — rate-limited |
+| `GET|POST /git/plugins/{slug}.git/...` | public (no auth) — rate-limited |
+
+The public routes are reached by Claude Code's installer, which is
+unauthenticated by design. See `docs/plugins.md#authorization`.
+
+## `POST /v1/plugins` — publish
+
+Publish a new plugin version. The body carries the canonical
+`.claude-plugin/plugin.json` manifest plus the registry-side metadata
+skill-pool needs to slot the row into the per-tenant marketplace.
+
+Body:
+
+```json
+{
+  "slug": "rust-axum-toolkit",
+  "manifest": {
+    "name": "rust-axum-toolkit",
+    "version": "1.2.0",
+    "description": "Curated skills, agents, and hooks for Rust + Axum",
+    "tags": ["rust", "axum"]
+  },
+  "contents": [
+    { "kind": "skill",   "slug": "rust-axum-handler",        "version": "1.2.3" },
+    { "kind": "agent",   "slug": "sqlx-migration-reviewer",  "version": "0.4.0" },
+    { "kind": "command", "slug": "deploy",                   "version": "0.1.0" }
+  ],
+  "sourcing_mode": "internal",
+  "status": "published"
+}
+```
+
+Field rules:
+
+| Field | Required | Notes |
+|---|---|---|
+| `slug` | yes | Registry identifier. Distinct from `manifest.name` (which is the human-facing display name). |
+| `manifest` | yes | JSONB body of `.claude-plugin/plugin.json`. `manifest.name`, `manifest.version`, `manifest.description` are all required and non-empty at publish time. Stored verbatim. Capped at 256 KiB serialized. |
+| `contents[]` | no | Each entry's `(slug, kind, version)` must resolve to a `status='published'` row in the **same tenant**. Cross-tenant references rejected. `kind` ∈ `skill|agent|command`. |
+| `sourcing_mode` | yes | `internal` (skill-pool hosts the bytes) / `external` (curator's git URL) / `mirror` (skill-pool clones + serves). |
+| `external_git_url` | required when `sourcing_mode = external` | HTTPS git URL. |
+| `upstream_url` | required when `sourcing_mode = mirror` | Upstream HTTPS git URL skill-pool pulls from. |
+| `status` | no | `draft` or `published`. Defaults to `published`. `archived` is not a valid initial state — use the archive endpoint. |
+
+Status mapping for publish-time validation (in check order):
+
+| Failure | HTTP | Body |
+|---|---|---|
+| Manifest > 256 KiB serialized | 413 | `{"error": "payload_too_large", "message": "manifest is N bytes; limit is 262144"}` |
+| Missing/empty `manifest.name|version|description` | 422 | Field-keyed error map: `{"name": "required and non-empty", ...}` |
+| Invalid `sourcing_mode` enum | 400 | Lists allowed values. |
+| `external` without `external_git_url`, or `mirror` without `upstream_url` | 422 | `{"external_git_url": "required when sourcing_mode=external"}` |
+| `contents[i].kind` not in `{skill,agent,command}` | 422 | `{"contents[i].kind": "must be one of ..."}` |
+| Any `contents[]` slug+kind+version not published in this tenant | 422 | Per-index map flagging each missing row. |
+| `(tenant, slug, version)` already exists | 409 | `{"error": "conflict", "message": "plugin <slug>@<version> already exists"}` |
+
+Success: **201 Created** with the full plugin row:
+
+```json
+{
+  "slug": "rust-axum-toolkit",
+  "version": "1.2.0",
+  "name": "rust-axum-toolkit",
+  "description": "Curated skills, agents, and hooks for Rust + Axum",
+  "status": "published",
+  "sourcing_mode": "internal",
+  "manifest": { "...": "verbatim plugin.json" },
+  "contents": [
+    { "kind": "skill", "slug": "rust-axum-handler", "version": "1.2.3", "position": 0 }
+  ],
+  "created_at": "2026-05-24T12:00:00Z",
+  "updated_at": "2026-05-24T12:00:00Z"
+}
+```
+
+Side effects on a successful publish with `status="published"`:
+
+1. **Internal mode** — skill-pool materialises a bare git repo under the
+   tenant's storage (`<state-dir>/.../plugins/<slug>.git/`) containing
+   the manifest + bundled skill bodies, so `/git/plugins/<slug>.git`
+   becomes a valid clone target.
+2. **Marketplace entry** — a row is upserted into
+   `plugin_marketplace_entries` so the next fetch of
+   `/.claude-plugin/marketplace.json` surfaces the plugin. The entry's
+   `source.url` points at the tenant's git endpoint for `internal` and
+   `mirror`, and at `external_git_url` (with a `github` shortcut when
+   applicable) for `external`.
+
+Both side effects are best-effort: a transient failure logs a warning
+but does not roll back the publish.
+
+## `GET /v1/plugins` — list
+
+Paginated list of the latest published version per slug. Mirrors
+`/v1/skills` semantics — `DISTINCT ON (slug) ORDER BY created_at DESC`,
+keyset cursor on `(created_at, id)`.
+
+Query params:
+
+| Param | Type | Description |
+|---|---|---|
+| `tags` | csv | All tags must be present in `manifest.tags[]`. Plugins whose manifest has no `tags` array never match a tag filter. |
+| `status` | string | `draft`, `published` (default), or `archived`. |
+| `sourcing_mode` | string | `internal`, `external`, or `mirror`. |
+| `limit` | int | Default 50, clamped to 1..200. |
+| `cursor` | string | Opaque base64 cursor returned by the previous response. |
+
+Response:
+
+```json
+{
+  "items": [
+    {
+      "slug": "rust-axum-toolkit",
+      "version": "1.2.0",
+      "name": "rust-axum-toolkit",
+      "description": "Curated skills, agents, and hooks for Rust + Axum",
+      "status": "published",
+      "sourcing_mode": "internal",
+      "tags": ["rust", "axum"],
+      "created_at": "2026-05-24T12:00:00Z"
+    }
+  ],
+  "next_cursor": "MjAyNi0wNS0yNFQxMjowMDowMFp8MDE5MDdkMjItN2Y0..."
+}
+```
+
+`next_cursor` is only emitted when the response filled the page (`items.length == limit`). A short page is the EOF signal.
+
+## `GET /v1/plugins/{slug}` — latest published
+
+Returns the latest **published** version of `slug` with full
+`manifest` + `contents[]`. 404 when no published version exists.
+
+```json
+{
+  "slug": "rust-axum-toolkit",
+  "version": "1.2.0",
+  "name": "rust-axum-toolkit",
+  "description": "Curated skills, agents, and hooks for Rust + Axum",
+  "status": "published",
+  "sourcing_mode": "internal",
+  "manifest": { "...": "verbatim plugin.json" },
+  "contents": [
+    { "kind": "skill", "slug": "rust-axum-handler", "version": "1.2.3", "position": 0 }
+  ],
+  "created_at": "2026-05-24T12:00:00Z",
+  "updated_at": "2026-05-24T12:00:00Z"
+}
+```
+
+## `GET /v1/plugins/{slug}/versions` — version history
+
+Every version of `slug` newest-first, capped at 50 rows. Surfaces all
+statuses (`draft`, `published`, `archived`) so curators see archived
+rows too.
+
+```json
+[
+  {
+    "version": "1.2.0",
+    "status": "published",
+    "created_at": "2026-05-24T12:00:00Z",
+    "published_by": "platform@acme.example.com"
+  },
+  {
+    "version": "1.1.0",
+    "status": "archived",
+    "created_at": "2026-04-10T08:00:00Z",
+    "published_by": "platform@acme.example.com"
+  }
+]
+```
+
+`published_by` is omitted when `created_by` is NULL. 404 when no row
+exists for the slug.
+
+## `DELETE /v1/plugins/{slug}/versions/{version}` — archive
+
+Soft-archive a single version (flip `status` to `archived`).
+Idempotent: returns **204 No Content** on first call, **404** thereafter
+(already-archived rows are treated as not-found).
+
+```bash
+curl -X DELETE \
+  -H "Authorization: Bearer $TOKEN" \
+  https://acme.skill-pool.example.com/v1/plugins/rust-axum-toolkit/versions/1.1.0
+# HTTP/1.1 204 No Content
+```
+
+## `POST /v1/plugins/import` — not yet implemented
+
+The CLI's `skill-pool plugin import <git-url>` calls this endpoint and
+treats a 404 as a soft "not yet available" (see
+`cli/src/client.rs:824-841`, `cli/src/cmd/plugin.rs:261-281`). The
+import worker that backs it is tracked separately and will land in a
+follow-up issue. Until then, the route returns 404 and the CLI exits
+with status 2.
+
+## `GET /.claude-plugin/marketplace.json` — Claude Code marketplace
+
+The catalogue Claude Code consumes via `/plugin marketplace add <url>`.
+Public read; **no `Authorization` header** required. Tenant is resolved
+from the request's `Host` header (or `X-Skill-Pool-Tenant`), and the
+per-tenant rate limiter applies.
+
+Response schema follows the upstream
+[Claude Code marketplace spec](https://code.claude.com/docs/en/plugin-marketplaces#marketplace-schema):
+
+```json
+{
+  "name": "acme",
+  "owner": {
+    "name": "Acme Inc.",
+    "url": "https://acme.skill-pool.example.com/marketplace"
+  },
+  "plugins": [
+    {
+      "name": "rust-axum-toolkit",
+      "description": "Curated skills, agents, and hooks for Rust + Axum",
+      "version": "1.2.0",
+      "source": {
+        "source": "url",
+        "url": "https://acme.skill-pool.example.com/git/plugins/rust-axum-toolkit.git"
+      },
+      "keywords": ["rust", "axum"]
+    }
+  ]
+}
+```
+
+`source` shapes:
+
+| Sourcing mode | `source` shape |
+|---|---|
+| `internal`, `mirror` | `{"source": "url", "url": "<origin>/git/plugins/<slug>.git"}` (skill-pool hosts the bytes) |
+| `external` (github.com top-level repo) | `{"source": "github", "repo": "<owner>/<repo>"}` |
+| `external` (other host) | `{"source": "url", "url": "<external_git_url>"}` |
+
+Caching:
+
+- `ETag: "<32-hex>"` — strong, derived from sha256 of the response body.
+- `Cache-Control: public, max-age=60` — 60-second TTL matches the
+  in-process auth cache so admins see updates within a minute.
+- Conditional `GET` with `If-None-Match: "<etag>"` returns **304 Not Modified**.
+
+```bash
+curl -i https://acme.skill-pool.example.com/.claude-plugin/marketplace.json
+# HTTP/1.1 200 OK
+# Content-Type: application/json
+# ETag: "a3f1d4..."
+# Cache-Control: public, max-age=60
+# ...
+```
+
+## `/git/plugins/{slug}.git/...` — per-plugin git endpoint
+
+A read-only, hand-rolled smart-HTTP git server scoped to a single
+plugin slug. The pair of routes Claude Code's `/plugin install` calls
+during a `git clone`:
+
+| Method | Path | Content-Type response |
+|---|---|---|
+| GET | `/git/plugins/{slug}.git/info/refs?service=git-upload-pack` | `application/x-git-upload-pack-advertisement` |
+| POST | `/git/plugins/{slug}.git/git-upload-pack` | `application/x-git-upload-pack-result` |
+
+Scope:
+
+- **Read-only.** `git-receive-pack` is not served — pushes would bypass
+  `/v1/plugins` validation.
+- **Internal + mirror plugins only.** External-sourced plugins return
+  404 here; their bytes live on the curator's upstream host.
+- Public read; rate-limited.
+- Capability set advertised on the first ref:
+  `multi_ack_detailed no-done side-band-64k thin-pack ofs-delta agent=skill-pool/0.1`.
+
+Failure modes:
+
+| Symptom | Cause |
+|---|---|
+| 400 `unsupported service` | `?service=` is missing or not `git-upload-pack`. |
+| 404 | Plugin slug doesn't exist in this tenant, or it's `external`-mode (no local bytes). |
+| 404 after a successful publish | Internal git materialisation failed silently (logged warning at publish time). Republish to retry. |
+
+Clone:
+
+```bash
+git clone https://acme.skill-pool.example.com/git/plugins/rust-axum-toolkit.git
+# Cloning into 'rust-axum-toolkit'...
+# remote: ...
+```
+
+For the end-to-end install flow Claude Code drives on top of these two
+endpoints, see [`docs/wiki/Plugin-Authoring.md`](wiki/Plugin-Authoring.md).

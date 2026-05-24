@@ -553,6 +553,132 @@ running `init` then `project link`.
 
 ---
 
+## `plugin`
+
+**Source:** `cli/src/cmd/plugin.rs:1`
+
+Curator and developer entry points for the per-tenant Claude Code
+plugin marketplace. A plugin bundles published skills/agents/commands
+(plus inline hooks/MCP/LSP blobs) into one installable unit. See
+[`docs/plugins.md`](../plugins.md) for the conceptual overview and
+[`docs/plugin-manifest-schema.md`](../plugin-manifest-schema.md) for
+the manifest reference.
+
+All subcommands except `add` require an authenticated registry section
+in `~/.skill-pool/config.toml` (see [`login`](#login)). When a
+server-side route is not yet shipped the CLI exits **2** rather than 0
+so chained commands (`publish && deploy`) fail loudly — see
+`cli/src/cmd/plugin.rs:127-134`.
+
+### `plugin publish`
+
+Validate a local plugin directory and publish it to the registry.
+
+| Arg/Flag | Description |
+|----------|-------------|
+| `<DIR>` (positional) | Path to a directory containing `.claude-plugin/plugin.json`. |
+
+Local validation runs before the network call:
+
+- `name` and `version` non-empty.
+- Every `contents[i].slug` non-empty, `contents[i].kind` ∈
+  `{skill, agent, command}`.
+
+Server-side validation (`POST /v1/plugins`, see
+[`docs/api.md`](../api.md#post-v1plugins--publish)) is the canonical
+contract: `manifest.description` required, cross-tenant content refs
+rejected, 256 KiB manifest cap, `(slug, version)` uniqueness.
+
+```bash
+skill-pool plugin publish ./my-plugin/
+#   validated: my-plugin@1.2.0 (3 bundled items)
+#   published: my-plugin@1.2.0 [published]
+```
+
+Exit codes:
+
+- **0** — published successfully.
+- **2** — local validation passed but the registry's publish route is
+  not yet available (server returned 404). Nothing was published.
+- non-zero — local validation failure or any other server error.
+
+### `plugin list`
+
+List all plugins in the current tenant.
+
+| Flag | Description |
+|------|-------------|
+| `--tags <CSV>` | Filter to plugins tagged with **all** of the given tags. |
+| `--status <draft\|published\|archived>` | Filter by plugin status. |
+| `--json` | Emit one JSON object per line instead of a human table. |
+
+```bash
+skill-pool plugin list
+# SLUG                            VERSION     STATUS      NAME
+# --------------------------------------------------------------------------------
+# rust-axum-toolkit               1.2.0       published   Rust + Axum Toolkit
+
+skill-pool plugin list --tags rust,axum --json | jq -r '.slug'
+```
+
+When the plugin API isn't yet on the registry (404), `list` prints an
+empty `[]` (with `--json`) or a `(plugin API not yet available …)`
+note and exits 0 — listing nothing is a valid result.
+
+### `plugin add <spec>`
+
+Add a plugin reference to the workspace manifest. Pure local: no
+registry validation; transitive resolution happens at install time
+through `skill-pool ensure`. `<spec>` is `<slug>` or `<slug>@<version>`
+(version defaults to `*`).
+
+```bash
+skill-pool plugin add rust-axum-toolkit
+# added: rust-axum-toolkit@* (manifest updated)
+
+skill-pool plugin add rust-axum-toolkit@1.2.0
+# updated: rust-axum-toolkit * → 1.2.0 (manifest updated)
+```
+
+### `plugin import <GIT_URL>`
+
+Import an external plugin git URL into the tenant's marketplace.
+Requires the URL to start with `https://` or `git@`.
+
+```bash
+skill-pool plugin import https://github.com/acme-corp/formatter.git
+# queued: https://github.com/acme-corp/formatter.git (import job enqueued)
+```
+
+The server-side import worker is tracked in a follow-up issue. Until
+it ships the registry returns 404 and the CLI exits **2** with a
+"not yet available" note.
+
+### `plugin marketplace-url`
+
+Print the marketplace URL for `/plugin marketplace add <url>` in
+Claude Code. Derived from the configured registry URL by prefixing the
+tenant slug as a subdomain (or preserving an already-prefixed host).
+
+```bash
+skill-pool plugin marketplace-url
+# https://acme.skill-pool.example.com/.claude-plugin/marketplace.json
+```
+
+URL derivation rules (`cli/src/cmd/plugin.rs:303-322`):
+
+| Registry URL | Tenant | Output |
+|---|---|---|
+| `https://registry.example.com` (bare host) | `acme` | `https://acme.registry.example.com/.claude-plugin/marketplace.json` |
+| `https://acme.registry.example.com` (already-prefixed) | `acme` | Same — no double-prefix. |
+| `http://localhost:8080` (dev) | `acme` | `http://acme.localhost:8080/.claude-plugin/marketplace.json` (port preserved). |
+
+For the end-to-end install walkthrough (portal compose → publish →
+`/plugin marketplace add` + `/plugin install`), see
+[`Plugin-Authoring.md`](Plugin-Authoring.md).
+
+---
+
 ## Configuration file format
 
 `~/.skill-pool/config.toml`:
@@ -608,6 +734,7 @@ Full schema reference: `docs/manifest-schema.md` in the repo.
 
 - [Phase 4 — Capture](Phase-4-Capture.md) — `capture-*` subcommand deep dive
 - [Phase 5 — Lifecycle](Phase-5-Lifecycle.md) — what happens after publish
+- [Plugin Authoring](Plugin-Authoring.md) — portal compose → publish → install in Claude Code
 - [API Reference](API-Reference.md) — what each CLI command POSTs
 - [FAQ](FAQ.md) — `--config` flag gotcha, host-vs-container port, etc.
 
