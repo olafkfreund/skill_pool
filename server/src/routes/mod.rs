@@ -27,6 +27,7 @@ mod saml;
 mod scim;
 mod session_policy;
 mod plugins;
+mod plugin_import;
 pub(crate) mod marketplace;
 mod plugin_git;
 mod skills;
@@ -62,6 +63,11 @@ pub fn router(state: AppState) -> Router {
             "/v1/plugins/{slug}/versions/{version}",
             delete(plugins::archive),
         )
+        // Plugin mirror import (#32). Enqueues a plugin_mirror job that
+        // clones the upstream git URL and indexes it locally, enabling
+        // air-gapped tenants to install external plugins. Requires
+        // curator/admin scope; responds 202 with the job id.
+        .route("/v1/plugins/import", post(plugin_import::import))
         // Marketplace catalogue (#31) — what Claude Code consumes via
         // `/plugin marketplace add`. Public read, tenant-resolved by Host
         // or x-skill-pool-tenant header. Per-tenant rate limiter applies

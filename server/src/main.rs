@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use skill_pool_server::{admin, config, notify, routes, state, telemetry, tracing_setup, worker};
+use skill_pool_server::{admin, config, jobs, notify, routes, state, telemetry, tracing_setup, worker};
 
 #[derive(Parser)]
 #[command(
@@ -617,6 +617,18 @@ async fn serve(cfg: config::Config) -> Result<()> {
     let worker_handle = if let Some(q) = state.queue() {
         let mut w = worker::Worker::new(q.clone(), shutdown_rx.clone());
         w.register("email", notify::EmailHandler::new(state.clone()));
+        // Mirror job handler (#32) — clones/fetches external plugin git URLs
+        // and indexes them into the local storage + marketplace catalog.
+        // Use the KIND string literal directly — the trait const is accessible
+        // via `<PluginMirrorJob as queue::Job>::KIND` but a direct string
+        // literal is simpler and keeps the registration readable.
+        w.register(
+            "plugin_mirror",
+            jobs::plugin_mirror::PluginMirrorHandler::new(
+                state.db().clone(),
+                state.storage().clone(),
+            ),
+        );
         Some(tokio::spawn(w.run()))
     } else {
         None
@@ -636,6 +648,18 @@ async fn serve(cfg: config::Config) -> Result<()> {
     // the sweep logs at warn and continues.
     let plan_refresh_handle =
         spawn_plan_refresh_sweep(state.db().clone(), state.http_client().clone(), shutdown_rx.clone());
+
+    // Background mirror sweep (#32). Wakes every 60s, queries for mirror
+    // plugins whose pull_interval_secs has elapsed since last_pulled_at,
+    // and enqueues a PluginMirrorJob for each. The job handler does the
+    // actual clone/fetch; the sweep is only the scheduler. Bounded
+    // concurrency: at most 8 plugins per tick (idempotency key dedupes
+    // the queue if the previous job is still in-flight).
+    let mirror_sweep_handle = if let Some(q) = state.queue() {
+        Some(spawn_mirror_sweep(state.db().clone(), q.clone(), shutdown_rx.clone()))
+    } else {
+        None
+    };
 
     let app = routes::router(state);
 
@@ -673,6 +697,13 @@ async fn serve(cfg: config::Config) -> Result<()> {
             Ok(Ok(())) => tracing::info!("plan refresh sweep shut down cleanly"),
             Ok(Err(e)) => tracing::warn!(error = %e, "plan refresh sweep task panicked"),
             Err(_) => tracing::warn!("plan refresh sweep shutdown timed out"),
+        }
+    }
+    if let Some(handle) = mirror_sweep_handle {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => tracing::info!("mirror sweep shut down cleanly"),
+            Ok(Err(e)) => tracing::warn!(error = %e, "mirror sweep task panicked"),
+            Err(_) => tracing::warn!("mirror sweep shutdown timed out"),
         }
     }
 
@@ -841,6 +872,89 @@ fn spawn_plan_refresh_sweep(
             }
         }
     }))
+}
+
+/// Spawn the periodic mirror sweep (#32). Wakes every 60s, finds mirror
+/// plugins whose `pull_interval_secs` has elapsed since `last_pulled_at`,
+/// and enqueues a `PluginMirrorJob` for each. The idempotency key in the
+/// job ensures that a slow clone doesn't get a second concurrent job.
+fn spawn_mirror_sweep(
+    db: sqlx::PgPool,
+    queue: std::sync::Arc<skill_pool_server::queue::Queue>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    use skill_pool_server::jobs::plugin_mirror::{
+        PluginMirrorJob, DEFAULT_PULL_INTERVAL_SECS,
+    };
+
+    const SWEEP_INTERVAL_SECS: u64 = 60;
+    const MAX_PER_TICK: i64 = 8;
+
+    tokio::spawn(async move {
+        tracing::info!("mirror sweep task starting");
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(SWEEP_INTERVAL_SECS));
+        // Skip the first immediate tick — same pattern as plan refresh sweep.
+        tick.tick().await;
+        loop {
+            tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        tracing::info!("mirror sweep shutting down");
+                        return;
+                    }
+                }
+                _ = tick.tick() => {
+                    // Find mirror plugins whose refresh interval has elapsed.
+                    // COALESCE(pull_interval_secs, DEFAULT) uses the per-plugin
+                    // override when set, the server default otherwise.
+                    let due: Vec<(uuid::Uuid, uuid::Uuid, String)> = match sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String)>(
+                        "SELECT id, tenant_id, upstream_url \
+                         FROM plugins \
+                         WHERE sourcing_mode = 'mirror' \
+                           AND upstream_url IS NOT NULL \
+                           AND ( \
+                             last_pulled_at IS NULL \
+                             OR last_pulled_at + \
+                                (COALESCE(pull_interval_secs, $1) || ' seconds')::interval < now() \
+                           ) \
+                         LIMIT $2",
+                    )
+                    .bind(DEFAULT_PULL_INTERVAL_SECS)
+                    .bind(MAX_PER_TICK)
+                    .fetch_all(&db)
+                    .await
+                    {
+                        Ok(rows) => rows,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "mirror sweep query failed; will retry");
+                            continue;
+                        }
+                    };
+
+                    for (plugin_id, tenant_id, upstream_url) in due {
+                        let job = PluginMirrorJob { plugin_id, tenant_id, upstream_url };
+                        match queue.enqueue(&job).await {
+                            Ok(outcome) => {
+                                tracing::debug!(
+                                    %plugin_id,
+                                    %tenant_id,
+                                    outcome = ?outcome,
+                                    "mirror sweep: enqueued job"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    %plugin_id,
+                                    error = %e,
+                                    "mirror sweep: failed to enqueue job"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 async fn shutdown_signal() {
