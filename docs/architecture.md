@@ -4,37 +4,55 @@
 
 ## Components
 
+```mermaid
+flowchart LR
+    subgraph dev["Developer machine"]
+        CLI[skill-pool CLI]
+        CC["Claude Code<br/>/plugin marketplace add<br/>/plugin install"]
+    end
+
+    subgraph server["skill-pool server (Rust + Axum)"]
+        direction TB
+        API["REST API<br/>/v1/skills · /v1/plugins"]
+        MARKET["/.claude-plugin/<br/>marketplace.json<br/>(public read)"]
+        GIT["/git/plugins/&lt;slug&gt;.git<br/>(public read, smart HTTP)"]
+        L1["Layer 1<br/>skills · agents · commands"]
+        L2["Layer 2<br/>projects · plans"]
+        L3["Layer 3<br/>plugins (composition)"]
+        API --> L1
+        API --> L2
+        API --> L3
+        L3 -.composes.-> L1
+        MARKET -.reads.-> L3
+        GIT -.reads.-> L3
+    end
+
+    Web[skill-pool-web<br/>per-tenant brand]
+
+    subgraph data["Storage"]
+        PG[(Postgres 17<br/>+ pgvector)]
+        OBJ[(Object storage<br/>opendal: fs / S3 / GCS)]
+        REDIS[(Redis<br/>cache + queue, optional)]
+    end
+
+    CLI -->|HTTPS Bearer| API
+    Web -->|HTTPS session| API
+    CC -->|GET marketplace.json| MARKET
+    CC -->|git clone| GIT
+    API --> PG
+    API --> OBJ
+    API -.-> REDIS
+    L3 --> OBJ
 ```
-                              ┌─────────────────────┐
-   developer's machine        │   skill-pool-web    │  (Phase 2)
-   ┌────────────────────┐     │   per-tenant brand  │
-   │  skill-pool CLI    │     └──────────┬──────────┘
-   │  (Rust binary)     │                │ HTTPS (session cookies)
-   └─────────┬──────────┘                │
-             │ HTTPS, Bearer token       │
-             │ subdomain or              │
-             │ X-Skill-Pool-Tenant       │
-             ▼                            ▼
-   ┌────────────────────────────────────────────────┐
-   │            skill-pool-server (Rust)            │
-   │ ┌──────────────────────────────────────────┐   │
-   │ │ Axum routes  →  tenant + auth extractors │   │
-   │ └──────────────────────────────────────────┘   │
-   │ ┌────────────┐ ┌────────────┐ ┌────────────┐   │
-   │ │ Postgres   │ │ Object     │ │ Redis      │   │
-   │ │ (metadata, │ │ storage    │ │ (cache /   │   │
-   │ │  audit)    │ │ (bundles)  │ │  queue,    │   │
-   │ │            │ │            │ │  Phase 2+) │   │
-   │ └────────────┘ └────────────┘ └────────────┘   │
-   └────────────────────────────────────────────────┘
-                       │
-                       ▼
-              ┌────────────────────┐
-              │  Git mirror repo   │  (Phase 1: optional;
-              │  (skills source    │   Phase 5: bidirectional)
-              │   of truth)        │
-              └────────────────────┘
-```
+
+The three served surfaces — REST API, `/.claude-plugin/marketplace.json`, and
+`/git/plugins/<slug>.git` — sit on the same Axum router. Plugins are a
+**composition layer** above skills, agents, and commands: a published plugin
+row pins existing catalogue entries by `(slug, kind, version)`. The
+marketplace endpoint and the per-plugin git endpoint are the only public
+read surfaces Claude Code's installer consumes. See
+[`docs/plugins.md`](plugins.md) and
+[`docs/api.md`](api.md#plugins-layer-3) for the per-route detail.
 
 ## Process boundaries
 
