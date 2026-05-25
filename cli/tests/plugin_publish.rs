@@ -14,7 +14,7 @@ mod common;
 use std::path::Path;
 
 use predicates::str::contains;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::common::{skill_pool, write_config};
@@ -92,6 +92,73 @@ async fn plugin_publish_falls_back_cleanly_when_server_returns_404() {
         .code(2)
         .stdout(contains("validated: my-plugin@1.0.0"))
         .stdout(contains("tracking: issue #30"));
+}
+
+/// Wire-shape regression for #57: the CLI must POST a `PublishBody`
+/// envelope, not the bare `PluginManifest`. The server side rejects the
+/// bare manifest with 400/422; this test pins the contract from the CLI
+/// side so the two halves stay in lockstep.
+#[tokio::test]
+async fn plugin_publish_posts_publishbody_envelope() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plugin_dir = tmp.path().join("my-plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+
+    // Manifest with one bundled skill — exercises the contents passthrough.
+    let claude_dir = plugin_dir.join(".claude-plugin");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    let manifest = serde_json::json!({
+        "name": "my-plugin",
+        "version": "1.0.0",
+        "description": "Test plugin fixture",
+        "contents": [
+            { "kind": "skill", "slug": "a11y-audit", "version": "1.0.0" }
+        ]
+    });
+    std::fs::write(
+        claude_dir.join("plugin.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let expected_envelope = serde_json::json!({
+        "slug": "my-plugin",
+        "manifest": {
+            "name": "my-plugin",
+            "version": "1.0.0",
+            "description": "Test plugin fixture",
+            "contents": [
+                { "kind": "skill", "slug": "a11y-audit", "version": "1.0.0" }
+            ]
+        },
+        "contents": [
+            { "kind": "skill", "slug": "a11y-audit", "version": "1.0.0" }
+        ],
+        "sourcing_mode": "internal",
+        "status": "published",
+    });
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/plugins"))
+        .and(body_json(&expected_envelope))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "slug": "my-plugin",
+            "version": "1.0.0",
+            "status": "published",
+        })))
+        .mount(&server)
+        .await;
+
+    let cfg = tmp.path().join("config.toml");
+    write_config(&cfg, &server.uri(), "acme");
+
+    skill_pool(tmp.path(), &cfg)
+        .args(["plugin", "publish"])
+        .arg(&plugin_dir)
+        .assert()
+        .success()
+        .stdout(contains("published: my-plugin@1.0.0"));
 }
 
 #[test]
