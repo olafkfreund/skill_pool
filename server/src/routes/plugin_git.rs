@@ -226,7 +226,7 @@ fn advertise_refs(repo_path: &std::path::Path) -> AppResult<Vec<u8>> {
 ///   * `side-band-64k` — pack data multiplexed inside pkt-lines
 ///   * `agent=` — best-practice identification.
 fn server_capabilities() -> &'static str {
-    "multi_ack_detailed no-done side-band-64k thin-pack ofs-delta agent=skill-pool/0.1"
+    "multi_ack_detailed no-done side-band-64k thin-pack ofs-delta shallow agent=skill-pool/0.1"
 }
 
 /// Refs in advertisement order: HEAD first, then refs alphabetically. The
@@ -269,6 +269,13 @@ fn collect_refs(repo: &git2::Repository) -> AppResult<Vec<(String, String)>> {
 struct UploadRequest {
     wants: Vec<git2::Oid>,
     haves: Vec<git2::Oid>,
+    /// Commits the client already has as shallow boundaries. Currently
+    /// recorded for diagnostic completeness; depth-bounded packs don't
+    /// need them because we always rebuild from scratch on each clone.
+    #[allow(dead_code)]
+    shallows: Vec<git2::Oid>,
+    /// Requested depth from `deepen <n>`. None = full clone.
+    deepen: Option<u32>,
     done: bool,
 }
 
@@ -330,12 +337,26 @@ fn parse_upload_request(body: &[u8]) -> AppResult<UploadRequest> {
                 AppError::BadRequest(format!("invalid have SHA `{sha}`"))
             })?;
             req.haves.push(oid);
+        } else if let Some(sha) = line.strip_prefix("shallow ") {
+            let oid = git2::Oid::from_str(sha).map_err(|_| {
+                AppError::BadRequest(format!("invalid shallow SHA `{sha}`"))
+            })?;
+            req.shallows.push(oid);
+        } else if let Some(n) = line.strip_prefix("deepen ") {
+            let depth: u32 = n.trim().parse().map_err(|_| {
+                AppError::BadRequest(format!("invalid deepen value `{n}`"))
+            })?;
+            // Reject 0 — git's protocol treats `deepen 0` as "no depth",
+            // which is ambiguous. Clients send `deepen 1` for `--depth=1`.
+            if depth == 0 {
+                return Err(AppError::BadRequest("deepen 0 not supported".into()));
+            }
+            req.deepen = Some(depth);
         } else if line == "done" {
             req.done = true;
         }
-        // Other lines (shallow / deepen / etc) silently ignored — v1
-        // scope is clone-and-shallow-fetch; full shallow support is a
-        // followup if a tenant ever surfaces a complaint.
+        // Other lines (deepen-since / deepen-not / no-progress / etc) silently
+        // ignored — narrow capability set keeps the protocol surface small.
     }
     Ok(req)
 }
@@ -354,14 +375,29 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
 
     let mut out = Vec::new();
 
+    // For shallow requests, compute the new boundaries and emit
+    // `shallow <sha>` ACK lines + flush BEFORE the NAK. This is the
+    // section the client parses to update its `.git/shallow` file.
+    let boundaries = if let Some(depth) = req.deepen {
+        let bounds = compute_shallow_boundaries(&repo, &req.wants, depth)?;
+        for oid in &bounds {
+            pkt_line(&mut out, format!("shallow {oid}\n").as_bytes());
+        }
+        pkt_flush(&mut out);
+        bounds
+    } else {
+        Vec::new()
+    };
+
     // Acknowledgement / NAK section.
     //
     // With `multi_ack_detailed`, real servers would emit `ACK <sha> common`
     // and `ACK <sha> ready` lines tracking the negotiation. For a
     // clone-only endpoint where the client sends no `have`s and we always
-    // ship the full reachable set, the protocol-correct minimal response
-    // is a single `NAK` pkt-line — both `git` and libgit2 clients accept
-    // this and proceed to read the packfile.
+    // ship the full reachable set (or depth-bounded set), the
+    // protocol-correct minimal response is a single `NAK` pkt-line — both
+    // `git` and libgit2 clients accept this and proceed to read the
+    // packfile.
     pkt_line(&mut out, b"NAK\n");
 
     // Build the packfile via libgit2.
@@ -381,6 +417,18 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
         // already has. Missing objects (client claimed something we don't
         // have) are silently ignored — same behaviour as a real git server.
         let _ = revwalk.hide(*have);
+    }
+    // For shallow clones, hide PARENTS of each boundary commit. This
+    // keeps the boundary commits themselves in the pack but stops the
+    // walk from following them further back. libgit2's revwalk.hide()
+    // hides the commit AND all its ancestors, so hiding parents-of-
+    // boundaries is exactly what we want.
+    for boundary in &boundaries {
+        if let Ok(commit) = repo.find_commit(*boundary) {
+            for parent in commit.parents() {
+                let _ = revwalk.hide(parent.id());
+            }
+        }
     }
     // Mark every reachable commit, and let libgit2 follow each commit's
     // tree + blobs into the pack.
@@ -408,6 +456,54 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
     pkt_flush(&mut out);
 
     Ok(out)
+}
+
+/// BFS from each `want` up to `depth` commits deep. Commits at exactly
+/// level `depth` whose chain doesn't terminate naturally are the new
+/// shallow boundaries — the client will record them in `.git/shallow`
+/// and refuse to walk past them on subsequent ops.
+///
+/// `depth` semantics match `git clone --depth=N`:
+///   * `depth=1`: include the wanted commit only. Wanted commits are
+///     boundaries (if they have parents).
+///   * `depth=N`: include N commits per chain. The Nth commit is the
+///     boundary.
+fn compute_shallow_boundaries(
+    repo: &git2::Repository,
+    wants: &[git2::Oid],
+    depth: u32,
+) -> AppResult<Vec<git2::Oid>> {
+    use std::collections::{HashSet, VecDeque};
+    let mut seen: HashSet<git2::Oid> = HashSet::new();
+    let mut boundaries: Vec<git2::Oid> = Vec::new();
+    let mut queue: VecDeque<(git2::Oid, u32)> = VecDeque::new();
+    for w in wants {
+        if seen.insert(*w) {
+            queue.push_back((*w, 1));
+        }
+    }
+    while let Some((oid, d)) = queue.pop_front() {
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(_) => continue, // missing in repo — silently skip
+        };
+        let parent_ids: Vec<git2::Oid> = commit.parents().map(|p| p.id()).collect();
+        if d == depth {
+            // Boundary candidate — only emit a shallow line if the chain
+            // continues past this commit. Root commits don't need one.
+            if !parent_ids.is_empty() {
+                boundaries.push(oid);
+            }
+        } else {
+            // d < depth: enqueue parents one level deeper.
+            for p in parent_ids {
+                if seen.insert(p) {
+                    queue.push_back((p, d + 1));
+                }
+            }
+        }
+    }
+    Ok(boundaries)
 }
 
 #[cfg(test)]
@@ -457,5 +553,132 @@ mod tests {
         let mut body = Vec::new();
         pkt_line(&mut body, b"want notahex\n");
         assert!(parse_upload_request(&body).is_err());
+    }
+
+    // ---- #58: shallow / deepen protocol coverage -------------------------
+
+    #[test]
+    fn server_capabilities_advertises_shallow() {
+        // Without this advertisement, `git clone --depth=N` aborts before
+        // negotiation completes ("Server does not support shallow clients").
+        assert!(
+            server_capabilities().contains(" shallow "),
+            "capability string missing `shallow`: {}",
+            server_capabilities()
+        );
+    }
+
+    #[test]
+    fn parse_upload_request_captures_deepen() {
+        let mut body = Vec::new();
+        let want_line = format!(
+            "want {} side-band-64k\n",
+            "0123456789abcdef0123456789abcdef01234567"
+        );
+        pkt_line(&mut body, want_line.as_bytes());
+        pkt_line(&mut body, b"deepen 3\n");
+        pkt_flush(&mut body);
+        pkt_line(&mut body, b"done\n");
+
+        let req = parse_upload_request(&body).unwrap();
+        assert_eq!(req.deepen, Some(3));
+        assert_eq!(req.wants.len(), 1);
+        assert!(req.done);
+    }
+
+    #[test]
+    fn parse_upload_request_captures_shallow() {
+        let mut body = Vec::new();
+        let want_line = format!(
+            "want {} side-band-64k\n",
+            "0123456789abcdef0123456789abcdef01234567"
+        );
+        pkt_line(&mut body, want_line.as_bytes());
+        let shallow_line = format!(
+            "shallow {}\n",
+            "fedcba9876543210fedcba9876543210fedcba98"
+        );
+        pkt_line(&mut body, shallow_line.as_bytes());
+        pkt_flush(&mut body);
+
+        let req = parse_upload_request(&body).unwrap();
+        assert_eq!(req.shallows.len(), 1);
+    }
+
+    #[test]
+    fn parse_upload_request_rejects_deepen_zero() {
+        let mut body = Vec::new();
+        let want_line = format!(
+            "want {} side-band-64k\n",
+            "0123456789abcdef0123456789abcdef01234567"
+        );
+        pkt_line(&mut body, want_line.as_bytes());
+        pkt_line(&mut body, b"deepen 0\n");
+        assert!(parse_upload_request(&body).is_err());
+    }
+
+    /// Build a tiny bare repo with N linear commits and return the tip Oid.
+    fn make_linear_repo(dir: &std::path::Path, n: usize) -> (git2::Repository, git2::Oid) {
+        let repo = git2::Repository::init_bare(dir).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let mut tip: Option<git2::Oid> = None;
+        for i in 0..n {
+            let mut idx = repo.index().unwrap();
+            // Empty tree is fine for the structural test.
+            let tree_id = idx.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            let parents: Vec<git2::Commit> = tip
+                .iter()
+                .map(|p| repo.find_commit(*p).unwrap())
+                .collect();
+            let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+            let oid = repo
+                .commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    &format!("commit {i}"),
+                    &tree,
+                    &parent_refs,
+                )
+                .unwrap();
+            tip = Some(oid);
+        }
+        (repo, tip.unwrap())
+    }
+
+    #[test]
+    fn boundaries_depth_one_is_the_tip_when_history_continues() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, tip) = make_linear_repo(tmp.path(), 3);
+        let bounds = compute_shallow_boundaries(&repo, &[tip], 1).unwrap();
+        // depth=1 means "include just the tip". Tip has a parent → it's a
+        // shallow boundary.
+        assert_eq!(bounds, vec![tip]);
+    }
+
+    #[test]
+    fn boundaries_depth_two_is_first_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, tip) = make_linear_repo(tmp.path(), 3);
+        let parent = repo.find_commit(tip).unwrap().parent(0).unwrap().id();
+        let bounds = compute_shallow_boundaries(&repo, &[tip], 2).unwrap();
+        // depth=2 means "include tip + tip.parent". The parent is the
+        // boundary (it still has its own parent).
+        assert_eq!(bounds, vec![parent]);
+    }
+
+    #[test]
+    fn boundaries_skip_root_commits() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 3-commit linear history; depth=10 walks past the root.
+        let (repo, tip) = make_linear_repo(tmp.path(), 3);
+        let bounds = compute_shallow_boundaries(&repo, &[tip], 10).unwrap();
+        // The root commit has no parents → no `shallow` line needed.
+        assert!(
+            bounds.is_empty(),
+            "expected no boundaries past the root, got {:?}",
+            bounds
+        );
     }
 }
