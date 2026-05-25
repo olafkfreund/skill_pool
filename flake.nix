@@ -50,7 +50,7 @@
 
         skill-pool-server = pkgs.rustPlatform.buildRustPackage {
           pname = "skill-pool-server";
-          version = "0.3.1";
+          version = "0.3.2";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           cargoBuildFlags = [ "--bin" "skill-pool-server" ];
@@ -63,7 +63,7 @@
 
         skill-pool-cli = pkgs.rustPlatform.buildRustPackage {
           pname = "skill-pool-cli";
-          version = "0.3.1";
+          version = "0.3.2";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           cargoBuildFlags = [ "--bin" "skill-pool" ];
@@ -74,7 +74,7 @@
 
         skill-pool-web = pkgs.buildNpmPackage {
           pname = "skill-pool-web";
-          version = "0.3.1";
+          version = "0.3.2";
           src = ./web;
           npmDepsHash = "sha256-9PGuX5IrU/97FENZJDn1ILdJ4eA2OwS1tPBrUzUELm8=";
           npmBuildScript = "build";
