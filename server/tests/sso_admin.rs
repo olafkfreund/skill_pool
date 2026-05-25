@@ -58,10 +58,9 @@ async fn boot() -> Result<Harness> {
     .await?
     .raw_token;
 
-    let (tenant_id,): (uuid::Uuid,) =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = 'acme'")
-            .fetch_one(&pool)
-            .await?;
+    let (tenant_id,): (uuid::Uuid,) = sqlx::query_as("SELECT id FROM tenants WHERE slug = 'acme'")
+        .fetch_one(&pool)
+        .await?;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -166,7 +165,10 @@ async fn oidc_round_trip_masks_secret_and_keeps_plaintext_in_db() -> Result<()> 
     assert_eq!(r.status().as_u16(), 200, "{}", r.text().await?);
     let body: Value = r.json().await?;
     assert_eq!(body["kind"], "oidc");
-    assert_eq!(body["oidc"]["issuer_url"], "https://login.example.com/realms/acme");
+    assert_eq!(
+        body["oidc"]["issuer_url"],
+        "https://login.example.com/realms/acme"
+    );
     assert_eq!(body["oidc"]["client_id"], "skill-pool-spk");
     assert_eq!(body["oidc"]["default_role"], "publisher");
     assert_eq!(body["oidc"]["client_secret_hint"], "••••1234");
@@ -269,7 +271,10 @@ async fn saml_put_parses_metadata_and_persists() -> Result<()> {
     );
     assert_eq!(body["saml"]["default_role"], "viewer");
     let cert_bytes = body["saml"]["idp_x509_cert_bytes"].as_u64().unwrap();
-    assert!(cert_bytes > 80, "expected PEM-wrapped cert to be > 80 bytes");
+    assert!(
+        cert_bytes > 80,
+        "expected PEM-wrapped cert to be > 80 bytes"
+    );
 
     // Stored cert is PEM-wrapped, ready for the runtime SAML path.
     let (cert,): (String,) =

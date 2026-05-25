@@ -69,7 +69,8 @@
       rows="3"
       placeholder="Short description of what this project does…"
       class="mt-1 w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 text-sm focus:border-[var(--sp-primary)] focus:outline-none"
-    >{form?.description ?? ''}</textarea>
+      >{form?.description ?? ''}</textarea
+    >
   </label>
 
   <label class="block">
@@ -82,7 +83,8 @@
       class="mt-1 w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 font-mono text-sm focus:border-[var(--sp-primary)] focus:outline-none"
     />
     <span class="mt-1 block text-xs text-[var(--sp-muted-fg)]">
-      Optional. When set, <code class="rounded bg-[var(--sp-muted)] px-1">skill-pool bootstrap</code>
+      Optional. When set, <code class="rounded bg-[var(--sp-muted)] px-1">skill-pool bootstrap</code
+      >
       auto-discovers this project by matching the repo's origin URL.
     </span>
   </label>
@@ -95,10 +97,7 @@
     >
       Create project
     </button>
-    <a
-      href="/admin/projects"
-      class="text-sm text-[var(--sp-muted-fg)] hover:text-[var(--sp-fg)]"
-    >
+    <a href="/admin/projects" class="text-sm text-[var(--sp-muted-fg)] hover:text-[var(--sp-fg)]">
       Cancel
     </a>
   </div>

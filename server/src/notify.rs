@@ -106,7 +106,12 @@ impl WebhookConfig {
         )
         .fetch_optional(db)
         .await?;
-        Ok(row.and_then(|r| r.notifications_webhook_url.map(|u| Self { url: u, secret: r.notifications_webhook_secret })))
+        Ok(row.and_then(|r| {
+            r.notifications_webhook_url.map(|u| Self {
+                url: u,
+                secret: r.notifications_webhook_secret,
+            })
+        }))
     }
 }
 
@@ -224,7 +229,10 @@ pub fn draft_created(state: AppState, ev: DraftCreatedEvent) {
                 draft_slug, tenant_slug, target
             )
         } else {
-            format!("New draft `{}` ready for review in `{}`", draft_slug, tenant_slug)
+            format!(
+                "New draft `{}` ready for review in `{}`",
+                draft_slug, tenant_slug
+            )
         };
 
         // ---- Webhook fanout ----
@@ -268,7 +276,10 @@ pub fn draft_created(state: AppState, ev: DraftCreatedEvent) {
 
         // ---- Email fanout ----
         if let Some(em) = cfg.email {
-            let subject = format!("[skill-pool] New draft \"{}\" in {}", draft_slug, tenant_slug);
+            let subject = format!(
+                "[skill-pool] New draft \"{}\" in {}",
+                draft_slug, tenant_slug
+            );
             let body = build_email_body(
                 &tenant_slug,
                 &draft_slug,
@@ -492,8 +503,8 @@ impl EmailHandler {
 #[async_trait]
 impl JobHandler for EmailHandler {
     async fn handle(&self, payload: serde_json::Value) -> Result<(), String> {
-        let job: EmailJob = serde_json::from_value(payload)
-            .map_err(|e| format!("decode EmailJob: {e}"))?;
+        let job: EmailJob =
+            serde_json::from_value(payload).map_err(|e| format!("decode EmailJob: {e}"))?;
         let (metadata, _channel) = send_email_inner(
             self.state.db(),
             self.state.email_transport().as_ref(),
@@ -621,12 +632,18 @@ async fn deliver(cfg: &WebhookConfig, body: &[u8]) -> DeliveryOutcome {
     for attempt in 1..=2 {
         match deliver_once(cfg, body).await {
             Ok(status) if status < 400 => {
-                return DeliveryOutcome::Success { status, attempts: attempt };
+                return DeliveryOutcome::Success {
+                    status,
+                    attempts: attempt,
+                };
             }
             Ok(status) => {
                 // 4xx is permanent — don't retry.
                 if (400..500).contains(&status) {
-                    return DeliveryOutcome::HttpError { status, attempts: attempt };
+                    return DeliveryOutcome::HttpError {
+                        status,
+                        attempts: attempt,
+                    };
                 }
                 last_err = Some(format!("HTTP {status}"));
             }
@@ -677,7 +694,10 @@ impl DeliveryOutcome {
                 "url": url,
                 "event": event,
             }),
-            DeliveryOutcome::Failed { attempts, last_error } => serde_json::json!({
+            DeliveryOutcome::Failed {
+                attempts,
+                last_error,
+            } => serde_json::json!({
                 "result": "failed",
                 "attempts": attempts,
                 "last_error": last_error,
@@ -704,17 +724,11 @@ mod tests {
 
     #[test]
     fn signature_changes_with_body() {
-        assert_ne!(
-            sign_body("k", b"a"),
-            sign_body("k", b"b"),
-        );
+        assert_ne!(sign_body("k", b"a"), sign_body("k", b"b"),);
     }
 
     #[test]
     fn signature_changes_with_secret() {
-        assert_ne!(
-            sign_body("k1", b"body"),
-            sign_body("k2", b"body"),
-        );
+        assert_ne!(sign_body("k1", b"body"), sign_body("k2", b"body"),);
     }
 }

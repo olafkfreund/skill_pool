@@ -45,7 +45,10 @@ pub async fn list(
     .await?;
     Ok(Json(
         rows.into_iter()
-            .map(|r| StackMapping { stack: r.stack, skill: r.skill })
+            .map(|r| StackMapping {
+                stack: r.stack,
+                skill: r.skill,
+            })
             .collect::<Vec<_>>(),
     ))
 }
@@ -89,7 +92,10 @@ pub async fn upsert(
     )
     .fetch_one(state.db())
     .await?;
-    let row = StackMapping { stack: r.stack, skill: r.skill };
+    let row = StackMapping {
+        stack: r.stack,
+        skill: r.skill,
+    };
 
     audit::record_best_effort(
         state.db(),

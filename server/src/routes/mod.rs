@@ -17,23 +17,23 @@ mod drafts;
 mod email_branding;
 mod enterprise;
 mod health;
+pub(crate) mod marketplace;
 mod mcp;
 mod members;
 mod notifications;
 mod og;
 mod oidc;
+mod plugin_git;
+mod plugin_import;
+mod plugins;
 mod profile;
+mod project_plans;
+mod projects;
 mod saml;
 mod scim;
 mod session_policy;
-mod plugins;
-mod plugin_import;
-pub(crate) mod marketplace;
-mod plugin_git;
 mod skills;
 mod sso_admin;
-mod projects;
-mod project_plans;
 mod stack_mappings;
 mod theme;
 mod usage;
@@ -138,10 +138,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/bootstrap", get(bootstrap::bootstrap))
         // Drafts (Phase 4 — retrospective capture)
         .route("/v1/drafts", get(drafts::list).post(drafts::create))
-        .route(
-            "/v1/drafts/{id}",
-            get(drafts::get_one).patch(drafts::patch),
-        )
+        .route("/v1/drafts/{id}", get(drafts::get_one).patch(drafts::patch))
         .route("/v1/drafts/{id}/skill-md", get(drafts::get_skill_md))
         .route("/v1/drafts/{id}/publish", post(drafts::publish))
         .route("/v1/drafts/{id}/discard", post(drafts::discard))
@@ -187,8 +184,14 @@ pub fn router(state: AppState) -> Router {
             "/v1/tenant/sso",
             get(sso_admin::get_config).delete(sso_admin::delete_config),
         )
-        .route("/v1/tenant/sso/oidc", axum::routing::put(sso_admin::put_oidc))
-        .route("/v1/tenant/sso/saml", axum::routing::put(sso_admin::put_saml))
+        .route(
+            "/v1/tenant/sso/oidc",
+            axum::routing::put(sso_admin::put_oidc),
+        )
+        .route(
+            "/v1/tenant/sso/saml",
+            axum::routing::put(sso_admin::put_saml),
+        )
         // SIEM export (Phase 5) — fan out audit_events to Splunk HEC,
         // Datadog Logs, or any generic JSON POST receiver.
         .route(

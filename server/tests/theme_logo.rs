@@ -274,11 +274,7 @@ async fn upload_without_auth_is_rejected() -> Result<()> {
         .multipart(form)
         .send()
         .await?;
-    assert_eq!(
-        resp.status().as_u16(),
-        401,
-        "no-token upload should be 401"
-    );
+    assert_eq!(resp.status().as_u16(), 401, "no-token upload should be 401");
 
     Ok(())
 }

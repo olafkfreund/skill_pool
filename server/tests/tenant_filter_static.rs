@@ -76,14 +76,16 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // Slug→id resolvers used at the top of every CLI helper. The very
     // next query is tenant-scoped.
     ("src/admin.rs", "SELECT id FROM tenants WHERE slug"),
-    ("src/admin.rs", "SELECT id, plan_tier FROM tenants WHERE slug"),
+    (
+        "src/admin.rs",
+        "SELECT id, plan_tier FROM tenants WHERE slug",
+    ),
     // `UPDATE tenants SET … WHERE id = $1` — operates on the tenant row
     // itself; `id` IS the tenant_id.
     ("src/admin.rs", "UPDATE tenants"),
     // `SELECT rate_limit_rpm, rate_limit_burst FROM tenants WHERE id` —
     // read-back of the tenant row after an UPDATE in the same helper.
     ("src/admin.rs", "SELECT rate_limit_rpm"),
-
     // -----------------------------------------------------------------
     // auth.rs — token-by-hash and session-by-hash lookups derive the
     // tenant FROM the result row. Both lookups still filter by
@@ -97,7 +99,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // immediately prior (or pulled from the auth cache after a previous
     // tenant-scoped lookup).
     ("src/auth.rs", "UPDATE tenant_api_tokens SET last_used_at"),
-
     // -----------------------------------------------------------------
     // tenant.rs — the extractor that RESOLVES tenant_id from the
     // request. By definition these can't already be tenant-scoped.
@@ -108,7 +109,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ("src/tenant.rs", "SELECT slug FROM tenants WHERE id"),
     // Slug → (id, slug) lookup. This is THE tenant resolver.
     ("src/tenant.rs", "SELECT id, slug FROM tenants WHERE slug"),
-
     // -----------------------------------------------------------------
     // state.rs — startup / refresh queries that load global state.
     // -----------------------------------------------------------------
@@ -118,7 +118,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // Refresh tick: pulls every verified/active custom-domain row across
     // tenants. By design — the cache fans out to per-host lookup.
     ("src/state.rs", "refresh_custom_domains"),
-
     // -----------------------------------------------------------------
     // audit.rs — audit_events writes. The INSERT carries the tenant_id
     // in the values; the column is in the schema. The SELECT in
@@ -126,25 +125,24 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // -----------------------------------------------------------------
     ("src/audit.rs", "INSERT INTO audit_events"),
     ("src/audit.rs", "SELECT tenant_audit_siem_url"),
-
     // -----------------------------------------------------------------
     // health.rs — `SELECT 1` liveness probe. Touches no business data.
     // -----------------------------------------------------------------
     ("src/routes/health.rs", "SELECT 1"),
-
     // -----------------------------------------------------------------
     // notify.rs — loads per-tenant webhook/SMTP config from the
     // `tenants` table. `WHERE id = $1` where id IS the tenant_id.
     // -----------------------------------------------------------------
     ("src/notify.rs", "SELECT notifications_webhook_url"),
-    ("src/notify.rs", "SELECT notifications_webhook_url, notifications_webhook_secret, "),
-
+    (
+        "src/notify.rs",
+        "SELECT notifications_webhook_url, notifications_webhook_secret, ",
+    ),
     // -----------------------------------------------------------------
     // rate_limit.rs — slug → tenant resolver for the per-tenant
     // limiter. Returns the tenant_id; everything downstream is scoped.
     // -----------------------------------------------------------------
     ("src/rate_limit.rs", "SELECT id, plan_tier, rate_limit_rpm"),
-
     // -----------------------------------------------------------------
     // email_branding.rs — load_row reads the tenant's branding row.
     // -----------------------------------------------------------------
@@ -158,12 +156,17 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // The `id` IS the tenant_id we resolved upstream via TenantCtx.
     // -----------------------------------------------------------------
     ("src/routes/profile.rs", "SELECT banner_text"),
-    ("src/routes/session_policy.rs", "SELECT session_max_age_secs"),
+    (
+        "src/routes/session_policy.rs",
+        "SELECT session_max_age_secs",
+    ),
     ("src/routes/audit_siem.rs", "SELECT tenant_audit_siem_url"),
     ("src/routes/audit_siem.rs", "UPDATE tenants SET"),
-    ("src/routes/notifications.rs", "SELECT notifications_webhook_url"),
+    (
+        "src/routes/notifications.rs",
+        "SELECT notifications_webhook_url",
+    ),
     ("src/routes/notifications.rs", "UPDATE tenants SET"),
-
     // -----------------------------------------------------------------
     // routes/oidc.rs, routes/saml.rs — auth flow helpers. Three groups:
     //   * `tenant_sso` / `tenant_saml` reads keyed by `tenant_id` —
@@ -175,9 +178,11 @@ const ALLOWLIST: &[(&str, &str)] = &[
     //     looked up in a tenant-scoped query.
     // -----------------------------------------------------------------
     ("src/routes/oidc.rs", "INSERT INTO users"),
-    ("src/routes/oidc.rs", "UPDATE user_sessions SET revoked_at = now() WHERE id"),
+    (
+        "src/routes/oidc.rs",
+        "UPDATE user_sessions SET revoked_at = now() WHERE id",
+    ),
     ("src/routes/saml.rs", "INSERT INTO users"),
-
     // -----------------------------------------------------------------
     // routes/scim.rs — IdP-driven user lifecycle. The `users` table is
     // tenant-agnostic (per-user identity); membership rows in
@@ -189,7 +194,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ("src/routes/scim.rs", "INSERT INTO users"),
     ("src/routes/scim.rs", "UPDATE users SET active"),
     ("src/routes/scim.rs", "DELETE FROM tenant_users WHERE id"),
-
     // -----------------------------------------------------------------
     // skills.rs — INSERT INTO skills carries tenant_id as the first
     // column value; the column list mentions tenant_id. Substring scan
@@ -200,8 +204,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // The accompanying INSERT into skill_usage_events DOES carry
     // tenant_id; this UPDATE bumps a per-row counter only.
     // -----------------------------------------------------------------
-    ("src/routes/skills.rs", "UPDATE skills SET use_count = use_count + 1"),
-
+    (
+        "src/routes/skills.rs",
+        "UPDATE skills SET use_count = use_count + 1",
+    ),
     // -----------------------------------------------------------------
     // admin.rs `backfill_embeddings` — operator-run CLI tool to compute
     // embeddings for skills lacking them. Takes `--tenant <slug>` to
@@ -212,7 +218,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // pulled — these rows already passed the operator-supplied scope.
     // -----------------------------------------------------------------
     ("src/admin.rs", "backfill_embeddings"),
-
     // -----------------------------------------------------------------
     // `format!`-built SQL — the SQL literal lives in a `format!(...)`
     // expression on the line above the `sqlx::query(&sql)` call, so
@@ -607,8 +612,7 @@ fn read_raw_string(bytes: &[u8], start: usize) -> Option<(usize, String)> {
                 hh += 1;
             }
             if hh == hashes {
-                let body =
-                    String::from_utf8_lossy(&bytes[body_start..i]).to_string();
+                let body = String::from_utf8_lossy(&bytes[body_start..i]).to_string();
                 return Some((i + 1 + hashes, body));
             }
         }
@@ -804,7 +808,10 @@ fn extractor_finds_plain_query() {
     "#;
     let sites = extract_sqlx_queries(src);
     assert_eq!(sites.len(), 1);
-    assert!(sites[0].literals.iter().any(|s| s.contains("SELECT 1 FROM tenants")));
+    assert!(sites[0]
+        .literals
+        .iter()
+        .any(|s| s.contains("SELECT 1 FROM tenants")));
     assert_eq!(sites[0].fn_name, "handler");
 }
 
@@ -890,9 +897,15 @@ fn extractor_skips_comments() {
 
 #[test]
 fn predicate_recognises_tenant_id() {
-    assert!(mentions_tenant_scope("SELECT * FROM skills WHERE tenant_id = $1"));
-    assert!(mentions_tenant_scope("INSERT INTO audit_events (tenant_id, …)"));
-    assert!(mentions_tenant_scope("JOIN tenants ON tenants.id = s.tenant_id"));
+    assert!(mentions_tenant_scope(
+        "SELECT * FROM skills WHERE tenant_id = $1"
+    ));
+    assert!(mentions_tenant_scope(
+        "INSERT INTO audit_events (tenant_id, …)"
+    ));
+    assert!(mentions_tenant_scope(
+        "JOIN tenants ON tenants.id = s.tenant_id"
+    ));
 }
 
 #[test]
@@ -910,7 +923,5 @@ fn predicate_rejects_tenantless_query() {
     assert!(!mentions_tenant_scope(
         "SELECT slug FROM skills WHERE status = 'published'"
     ));
-    assert!(!mentions_tenant_scope(
-        "DELETE FROM widgets WHERE id = $1"
-    ));
+    assert!(!mentions_tenant_scope("DELETE FROM widgets WHERE id = $1"));
 }

@@ -1,11 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { buildSkillBundle } from '$lib/server/tar';
-import {
-  isCatalogKind,
-  publishSkill,
-  validateSkill,
-  type CatalogKind,
-} from '$lib/server/api';
+import { isCatalogKind, publishSkill, validateSkill, type CatalogKind } from '$lib/server/api';
 import type { Actions, PageServerLoad } from './$types';
 
 // One starter template per kind. Body is intentionally minimal —

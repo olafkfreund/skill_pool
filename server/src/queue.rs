@@ -233,9 +233,7 @@ impl Queue {
         // ZADD below never runs and the idem marker holds for 24h
         // (acceptable: caller can re-attempt with a different payload
         // or wait it out).
-        let _: () = conn
-            .set_ex(self.job_key(&id), &json, JOB_TTL_SECS)
-            .await?;
+        let _: () = conn.set_ex(self.job_key(&id), &json, JOB_TTL_SECS).await?;
         let _: i64 = conn.zadd(self.zset_key(), &id, due_ms as i64).await?;
 
         Ok(EnqueueOutcome::Enqueued)
@@ -307,8 +305,13 @@ impl Queue {
         let mut conn = (*self.redis).clone();
         let _: () = redis::pipe()
             .atomic()
-            .cmd("ZREM").arg(self.zset_key()).arg(job_id).ignore()
-            .cmd("DEL").arg(self.job_key(job_id)).ignore()
+            .cmd("ZREM")
+            .arg(self.zset_key())
+            .arg(job_id)
+            .ignore()
+            .cmd("DEL")
+            .arg(self.job_key(job_id))
+            .ignore()
             .query_async(&mut conn)
             .await?;
         Ok(())
@@ -349,9 +352,20 @@ impl Queue {
             let new_json = serde_json::to_string(&env)?;
             let _: () = redis::pipe()
                 .atomic()
-                .cmd("SET").arg(self.job_key(job_id)).arg(&new_json).arg("EX").arg(JOB_TTL_SECS).ignore()
-                .cmd("LPUSH").arg(self.dlq_key()).arg(job_id).ignore()
-                .cmd("ZREM").arg(self.zset_key()).arg(job_id).ignore()
+                .cmd("SET")
+                .arg(self.job_key(job_id))
+                .arg(&new_json)
+                .arg("EX")
+                .arg(JOB_TTL_SECS)
+                .ignore()
+                .cmd("LPUSH")
+                .arg(self.dlq_key())
+                .arg(job_id)
+                .ignore()
+                .cmd("ZREM")
+                .arg(self.zset_key())
+                .arg(job_id)
+                .ignore()
                 .query_async(&mut conn)
                 .await?;
             tracing::warn!(
@@ -370,8 +384,17 @@ impl Queue {
         let new_json = serde_json::to_string(&env)?;
         let _: () = redis::pipe()
             .atomic()
-            .cmd("SET").arg(self.job_key(job_id)).arg(&new_json).arg("EX").arg(JOB_TTL_SECS).ignore()
-            .cmd("ZADD").arg(self.zset_key()).arg(next_run_ms as i64).arg(job_id).ignore()
+            .cmd("SET")
+            .arg(self.job_key(job_id))
+            .arg(&new_json)
+            .arg("EX")
+            .arg(JOB_TTL_SECS)
+            .ignore()
+            .cmd("ZADD")
+            .arg(self.zset_key())
+            .arg(next_run_ms as i64)
+            .arg(job_id)
+            .ignore()
             .query_async(&mut conn)
             .await?;
 

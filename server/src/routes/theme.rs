@@ -598,10 +598,7 @@ pub async fn get_logo(State(state): State<AppState>, tenant: TenantCtx) -> AppRe
         None => return Err(AppError::NotFound),
     };
 
-    let storage = state
-        .storage_for(&tenant)
-        .await
-        .map_err(AppError::Anyhow)?;
+    let storage = state.storage_for(&tenant).await.map_err(AppError::Anyhow)?;
     let bytes = storage
         .read_object(&key)
         .await
@@ -821,17 +818,20 @@ pub async fn get_favicon(State(state): State<AppState>, tenant: TenantCtx) -> Ap
             r.favicon_storage_key.clone().unwrap(),
             r.favicon_content_type.clone().unwrap(),
         ),
-        Some(ref r) if r.favicon_storage_key.is_none() && r.logo_storage_key.is_some() && r.logo_content_type.is_some() => (
-            r.logo_storage_key.clone().unwrap(),
-            r.logo_content_type.clone().unwrap(),
-        ),
+        Some(ref r)
+            if r.favicon_storage_key.is_none()
+                && r.logo_storage_key.is_some()
+                && r.logo_content_type.is_some() =>
+        {
+            (
+                r.logo_storage_key.clone().unwrap(),
+                r.logo_content_type.clone().unwrap(),
+            )
+        }
         _ => return Err(AppError::NotFound),
     };
 
-    let storage = state
-        .storage_for(&tenant)
-        .await
-        .map_err(AppError::Anyhow)?;
+    let storage = state.storage_for(&tenant).await.map_err(AppError::Anyhow)?;
     let bytes = storage
         .read_object(&key)
         .await
@@ -946,8 +946,8 @@ pub async fn post_custom_css(
         )));
     }
 
-    let sanitized = css_sanitize::sanitize(raw.as_ref())
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let sanitized =
+        css_sanitize::sanitize(raw.as_ref()).map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     let key = Storage::custom_css_key(caller.tenant.tenant_id);
     let storage = state
@@ -1087,10 +1087,7 @@ pub async fn get_custom_css(
         None => return Err(AppError::NotFound),
     };
 
-    let storage = state
-        .storage_for(&tenant)
-        .await
-        .map_err(AppError::Anyhow)?;
+    let storage = state.storage_for(&tenant).await.map_err(AppError::Anyhow)?;
     let bytes = storage
         .read_object(&key)
         .await

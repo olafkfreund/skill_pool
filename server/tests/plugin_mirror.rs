@@ -102,11 +102,10 @@ async fn plugin_mirror_clone_indexes_manifest() -> Result<()> {
     let upstream_url = format!("file://{}", upstream_path.display());
 
     // 2. Insert the plugin stub row.
-    let tenant_id: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT id FROM tenants WHERE slug = 'acme'",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let tenant_id: uuid::Uuid =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM tenants WHERE slug = 'acme'")
+            .fetch_one(&pool)
+            .await?;
 
     let plugin_id: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
         "INSERT INTO plugins \

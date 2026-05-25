@@ -14,8 +14,8 @@
   </h1>
   <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
     Two delivery channels — wire either or both. Both fire on
-    <code class="rounded bg-[var(--sp-muted)] px-1">draft.created</code> in parallel; either can
-    fail without affecting the other (every attempt lands in the audit log).
+    <code class="rounded bg-[var(--sp-muted)] px-1">draft.created</code> in parallel; either can fail
+    without affecting the other (every attempt lands in the audit log).
   </p>
 </header>
 
@@ -42,13 +42,15 @@
 
 <!-- Webhook section -->
 <section class="mb-10">
-  <h2 class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wider text-[var(--sp-muted-fg)] uppercase">
+  <h2
+    class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wider text-[var(--sp-muted-fg)] uppercase"
+  >
     <Webhook size="13" /> Webhook
   </h2>
   <p class="mb-3 max-w-2xl text-sm text-[var(--sp-muted-fg)]">
-    Slack / Discord incoming-webhook URLs work out of the box — they accept the
-    top-level <code class="rounded bg-[var(--sp-muted)] px-1">text</code> field. Custom endpoints
-    get the same payload plus structured fields.
+    Slack / Discord incoming-webhook URLs work out of the box — they accept the top-level <code
+      class="rounded bg-[var(--sp-muted)] px-1">text</code
+    > field. Custom endpoints get the same payload plus structured fields.
   </p>
 
   <form method="POST" action="?/saveWebhook" class="max-w-2xl space-y-4">
@@ -61,9 +63,7 @@
         placeholder="https://hooks.slack.com/services/…"
         class="mt-1 w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 text-sm focus:border-[var(--sp-primary)] focus:outline-none"
       />
-      <span class="mt-1 block text-xs text-[var(--sp-muted-fg)]">
-        Leave empty to disable.
-      </span>
+      <span class="mt-1 block text-xs text-[var(--sp-muted-fg)]"> Leave empty to disable. </span>
     </label>
 
     <fieldset class="rounded-[var(--sp-radius)] border border-[var(--sp-border)] p-3">
@@ -72,19 +72,28 @@
       </legend>
       <p class="mb-2 text-xs text-[var(--sp-muted-fg)]">
         When set, every delivery carries an
-        <code>X-Skill-Pool-Signature: sha256=&lt;hex&gt;</code> header so the receiver can verify
-        the body wasn't tampered with. Same convention as GitHub and Stripe.
+        <code>X-Skill-Pool-Signature: sha256=&lt;hex&gt;</code> header so the receiver can verify the
+        body wasn't tampered with. Same convention as GitHub and Stripe.
       </p>
       <input
         type="password"
         name="webhook_secret"
-        placeholder={current?.signing_enabled ? '••••••••  (leave empty to keep current)' : 'set a secret…'}
+        placeholder={current?.signing_enabled
+          ? '••••••••  (leave empty to keep current)'
+          : 'set a secret…'}
         autocomplete="new-password"
         class="w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 font-mono text-sm focus:border-[var(--sp-primary)] focus:outline-none"
       />
       {#if current?.signing_enabled}
-        <label class="mt-2 inline-flex cursor-pointer items-center gap-2 text-xs text-[var(--sp-muted-fg)]">
-          <input type="checkbox" name="clear_secret" value="1" class="h-3.5 w-3.5 rounded border-[var(--sp-border)]" />
+        <label
+          class="mt-2 inline-flex cursor-pointer items-center gap-2 text-xs text-[var(--sp-muted-fg)]"
+        >
+          <input
+            type="checkbox"
+            name="clear_secret"
+            value="1"
+            class="h-3.5 w-3.5 rounded border-[var(--sp-border)]"
+          />
           Remove the existing secret (deliveries become unsigned).
         </label>
       {/if}
@@ -102,13 +111,15 @@
 
 <!-- Email section -->
 <section>
-  <h2 class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wider text-[var(--sp-muted-fg)] uppercase">
+  <h2
+    class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wider text-[var(--sp-muted-fg)] uppercase"
+  >
     <Mail size="13" /> Email (SMTP)
   </h2>
   <p class="mb-3 max-w-2xl text-sm text-[var(--sp-muted-fg)]">
-    Configure an SMTP relay you operate (Postfix, SES, Mailgun, SendGrid, …). All three fields
-    must be set for email delivery to fire. The To address is typically a distribution list at
-    your domain.
+    Configure an SMTP relay you operate (Postfix, SES, Mailgun, SendGrid, …). All three fields must
+    be set for email delivery to fire. The To address is typically a distribution list at your
+    domain.
   </p>
 
   <form method="POST" action="?/saveEmail" class="max-w-2xl space-y-4">
@@ -137,7 +148,8 @@
         class="mt-1 w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 text-sm focus:border-[var(--sp-primary)] focus:outline-none"
       />
       <span class="mt-1 block text-xs text-[var(--sp-muted-fg)]">
-        Standard RFC 5322 mailbox: <code>Name &lt;addr@host&gt;</code> or bare <code>addr@host</code>.
+        Standard RFC 5322 mailbox: <code>Name &lt;addr@host&gt;</code> or bare
+        <code>addr@host</code>.
       </span>
     </label>
 

@@ -7,12 +7,8 @@
   const plugin = $derived(data.plugin);
   const versions = $derived(data.versions);
 
-  const skillContents = $derived(
-    plugin.contents.filter((c: PluginContent) => c.kind === 'skill'),
-  );
-  const agentContents = $derived(
-    plugin.contents.filter((c: PluginContent) => c.kind === 'agent'),
-  );
+  const skillContents = $derived(plugin.contents.filter((c: PluginContent) => c.kind === 'skill'));
+  const agentContents = $derived(plugin.contents.filter((c: PluginContent) => c.kind === 'agent'));
   const commandContents = $derived(
     plugin.contents.filter((c: PluginContent) => c.kind === 'command'),
   );
@@ -48,7 +44,10 @@
 
 <svelte:head>
   <title>{plugin.name || plugin.slug} · Plugin Marketplace</title>
-  <meta name="description" content={plugin.description ?? `${plugin.name || plugin.slug} plugin for Claude Code`} />
+  <meta
+    name="description"
+    content={plugin.description ?? `${plugin.name || plugin.slug} plugin for Claude Code`}
+  />
   <!-- JSON-LD structured data for SEO (SoftwareApplication) -->
   {@html `<script type="application/ld+json">${data.jsonLd}<\/script>`}
 </svelte:head>
@@ -68,7 +67,9 @@
         <h1 class="text-2xl font-semibold text-[var(--sp-fg)]">
           {plugin.name || plugin.slug}
         </h1>
-        <p class="mt-1 flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--sp-muted-fg)]">
+        <p
+          class="mt-1 flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--sp-muted-fg)]"
+        >
           <span>{plugin.slug}</span>
           <span aria-hidden="true">·</span>
           <span>v{plugin.version}</span>
@@ -87,7 +88,6 @@
         {#if plugin.description}
           <p class="mt-2 text-sm text-[var(--sp-muted-fg)]">{plugin.description}</p>
         {/if}
-
       </div>
     </div>
   </div>
@@ -95,7 +95,6 @@
 
 <main class="px-6 py-8 md:px-12">
   <div class="mx-auto max-w-4xl space-y-8">
-
     <!-- Install CTA -->
     <section aria-labelledby="install-heading">
       <h2
@@ -144,11 +143,7 @@
       </h2>
 
       <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {#each [
-          { title: 'Skills', items: skillContents, kind: 'skill' as const },
-          { title: 'Agents', items: agentContents, kind: 'agent' as const },
-          { title: 'Commands', items: commandContents, kind: 'command' as const },
-        ] as group (group.kind)}
+        {#each [{ title: 'Skills', items: skillContents, kind: 'skill' as const }, { title: 'Agents', items: agentContents, kind: 'agent' as const }, { title: 'Commands', items: commandContents, kind: 'command' as const }] as group (group.kind)}
           <div
             class="rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)]"
           >
@@ -184,8 +179,7 @@
       </h2>
       <pre
         class="max-h-72 overflow-auto rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] px-3 py-3 font-mono text-xs text-[var(--sp-fg)]"
-        aria-label="Plugin manifest JSON"
-      >{manifestJson}</pre>
+        aria-label="Plugin manifest JSON">{manifestJson}</pre>
     </section>
 
     <!-- Version history -->
@@ -197,9 +191,7 @@
         >
           Version history
         </h2>
-        <div
-          class="overflow-hidden rounded-[var(--sp-radius)] border border-[var(--sp-border)]"
-        >
+        <div class="overflow-hidden rounded-[var(--sp-radius)] border border-[var(--sp-border)]">
           <table class="w-full text-xs">
             <thead
               class="bg-[var(--sp-muted)] text-left tracking-wide text-[var(--sp-muted-fg)] uppercase"
@@ -229,6 +221,5 @@
         </div>
       </section>
     {/if}
-
   </div>
 </main>

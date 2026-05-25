@@ -46,10 +46,9 @@ async fn boot() -> Result<Harness> {
     let storage_uri = format!("fs://{}", storage_dir.path().display());
 
     admin::create_tenant(&pool, "metrics-test", "Metrics Test", "team").await?;
-    let token =
-        admin::create_token(&pool, "metrics-test", "test", "skills:read skills:publish")
-            .await?
-            .raw_token;
+    let token = admin::create_token(&pool, "metrics-test", "test", "skills:read skills:publish")
+        .await?
+        .raw_token;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -102,14 +101,15 @@ async fn metrics_endpoint_returns_non_zero_counter() -> Result<()> {
             .bearer_auth(&h.token)
             .send()
             .await?;
-        assert!(resp.status().is_success(), "healthz failed: {}", resp.status());
+        assert!(
+            resp.status().is_success(),
+            "healthz failed: {}",
+            resp.status()
+        );
     }
 
     // Scrape /metrics.
-    let resp = client
-        .get(format!("{}/metrics", h.base))
-        .send()
-        .await?;
+    let resp = client.get(format!("{}/metrics", h.base)).send().await?;
 
     assert_eq!(resp.status(), 200, "unexpected status from /metrics");
 

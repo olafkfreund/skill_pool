@@ -125,7 +125,10 @@ pub struct ActivateBody {
 // ---------------------------------------------------------------------------
 
 fn require_admin(scope: &str) -> AppResult<()> {
-    if scope.split_whitespace().any(|s| s == "tenant:admin" || s == "*") {
+    if scope
+        .split_whitespace()
+        .any(|s| s == "tenant:admin" || s == "*")
+    {
         Ok(())
     } else {
         Err(AppError::Forbidden)
@@ -167,10 +170,9 @@ pub async fn import_plan(
                 Some(md) => (md, Some(url.to_owned()), None),
                 None => {
                     let http = state.http_client();
-                    let (md, etag) =
-                        admin::fetch_url_as_markdown(http, url)
-                            .await
-                            .map_err(|e| AppError::BadRequest(e.to_string()))?;
+                    let (md, etag) = admin::fetch_url_as_markdown(http, url)
+                        .await
+                        .map_err(|e| AppError::BadRequest(e.to_string()))?;
                     (md, Some(url.to_owned()), etag)
                 }
             }
@@ -248,17 +250,16 @@ pub async fn list_versions(
 ) -> AppResult<Json<Vec<PlanVersionSummary>>> {
     require_member(&caller.scope)?;
 
-    let plans =
-        admin::list_plan_versions(state.db_read(), &caller.tenant.tenant_slug, &slug, 50)
-            .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("not found") {
-                    AppError::NotFound
-                } else {
-                    AppError::Anyhow(e)
-                }
-            })?;
+    let plans = admin::list_plan_versions(state.db_read(), &caller.tenant.tenant_slug, &slug, 50)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                AppError::NotFound
+            } else {
+                AppError::Anyhow(e)
+            }
+        })?;
 
     Ok(Json(plans.into_iter().map(to_summary).collect()))
 }
@@ -273,17 +274,16 @@ pub async fn get_version(
 
     // Fetch all versions (up to 1000) and find the requested one.
     // Using a targeted query here for correctness and simplicity.
-    let plans =
-        admin::list_plan_versions(state.db_read(), &caller.tenant.tenant_slug, &slug, 1000)
-            .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("not found") {
-                    AppError::NotFound
-                } else {
-                    AppError::Anyhow(e)
-                }
-            })?;
+    let plans = admin::list_plan_versions(state.db_read(), &caller.tenant.tenant_slug, &slug, 1000)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                AppError::NotFound
+            } else {
+                AppError::Anyhow(e)
+            }
+        })?;
 
     let plan = plans
         .into_iter()
@@ -348,21 +348,17 @@ pub async fn activate_version(
 ) -> AppResult<Json<PlanResponse>> {
     require_admin(&caller.scope)?;
 
-    let plan = admin::activate_plan_version(
-        state.db(),
-        &caller.tenant.tenant_slug,
-        &slug,
-        body.version,
-    )
-    .await
-    .map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("not found") {
-            AppError::NotFound
-        } else {
-            AppError::Anyhow(e)
-        }
-    })?;
+    let plan =
+        admin::activate_plan_version(state.db(), &caller.tenant.tenant_slug, &slug, body.version)
+            .await
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("not found") {
+                    AppError::NotFound
+                } else {
+                    AppError::Anyhow(e)
+                }
+            })?;
 
     Ok(Json(to_response(plan)))
 }

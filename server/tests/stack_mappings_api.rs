@@ -38,7 +38,10 @@ async fn boot() -> Result<Harness> {
         .await?;
     let port = pg.get_host_port_ipv4(5432).await?;
     let db_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = PgPoolOptions::new().max_connections(4).connect(&db_url).await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&db_url)
+        .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     let storage_dir = tempfile::tempdir()?;
@@ -47,9 +50,15 @@ async fn boot() -> Result<Harness> {
     use skill_pool_server::admin;
     admin::create_tenant(&pool, "acme", "Acme", "team").await?;
     admin::create_tenant(&pool, "globex", "Globex", "team").await?;
-    let acme_admin = admin::create_token(&pool, "acme", "admin", "tenant:admin skills:read").await?.raw_token;
-    let acme_reader = admin::create_token(&pool, "acme", "reader", "skills:read").await?.raw_token;
-    let globex_admin = admin::create_token(&pool, "globex", "admin", "tenant:admin skills:read").await?.raw_token;
+    let acme_admin = admin::create_token(&pool, "acme", "admin", "tenant:admin skills:read")
+        .await?
+        .raw_token;
+    let acme_reader = admin::create_token(&pool, "acme", "reader", "skills:read")
+        .await?
+        .raw_token;
+    let globex_admin = admin::create_token(&pool, "globex", "admin", "tenant:admin skills:read")
+        .await?
+        .raw_token;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -85,10 +94,20 @@ async fn boot() -> Result<Harness> {
 }
 
 fn c() -> reqwest::Client {
-    reqwest::Client::builder().timeout(Duration::from_secs(15)).build().unwrap()
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap()
 }
-fn req(cl: &reqwest::Client, m: reqwest::Method, base: &str, p: &str, tenant: &str) -> reqwest::RequestBuilder {
-    cl.request(m, format!("{base}{p}")).header("x-skill-pool-tenant", tenant)
+fn req(
+    cl: &reqwest::Client,
+    m: reqwest::Method,
+    base: &str,
+    p: &str,
+    tenant: &str,
+) -> reqwest::RequestBuilder {
+    cl.request(m, format!("{base}{p}"))
+        .header("x-skill-pool-tenant", tenant)
 }
 fn authed(b: reqwest::RequestBuilder, t: &str) -> reqwest::RequestBuilder {
     b.bearer_auth(t)
@@ -101,7 +120,13 @@ async fn stack_mappings_api_round_trip() -> Result<()> {
 
     // 1. POST one mapping.
     let r = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({"stack": "rust", "skill": "axum-handler"}))
@@ -111,85 +136,178 @@ async fn stack_mappings_api_round_trip() -> Result<()> {
 
     // 2. GET surfaces it.
     let list: Vec<Value> = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["stack"], "rust");
     assert_eq!(list[0]["skill"], "axum-handler");
 
     // 3. POST same pair → idempotent (still one row).
     let r = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({"stack": "rust", "skill": "axum-handler"}))
-    .send().await?;
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 200);
     let list: Vec<Value> = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(list.len(), 1, "{list:?}");
 
     // 4. Add a second.
     let _ = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({"stack": "rust", "skill": "sqlx-migrations"}))
-    .send().await?;
+    .send()
+    .await?;
     let list: Vec<Value> = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(list.len(), 2);
 
     // 5. DELETE one.
     let r = authed(
-        req(&cl, reqwest::Method::DELETE, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::DELETE,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({"stack": "rust", "skill": "sqlx-migrations"}))
-    .send().await?;
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 204);
     let list: Vec<Value> = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["skill"], "axum-handler");
 
     // 6. DELETE non-existent → 404.
     let r = authed(
-        req(&cl, reqwest::Method::DELETE, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::DELETE,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({"stack": "ghost", "skill": "void"}))
-    .send().await?;
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 404);
 
     // 7. Cross-tenant isolation — globex can't see acme's row.
     let list: Vec<Value> = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/stack-mappings", "globex"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "globex",
+        ),
         &h.globex_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(list.len(), 0, "{list:?}");
 
     // 8. Non-admin caller (acme reader) → 403.
     let r = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_reader,
-    ).send().await?;
+    )
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 403);
 
     // 9. Empty stack / skill → 400.
     let r = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/stack-mappings", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/stack-mappings",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({"stack": "  ", "skill": "x"}))
-    .send().await?;
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 400);
 
     Ok(())

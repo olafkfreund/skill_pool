@@ -225,13 +225,8 @@ async fn write_auth_cache(redis: &cache::Redis, hashed: &str, entry: &CachedAuth
         }
     };
     let mut conn = (**redis).clone();
-    let r: redis::RedisResult<()> = redis::AsyncCommands::set_ex(
-        &mut conn,
-        &key,
-        payload,
-        AUTH_CACHE_TTL_SECS as u64,
-    )
-    .await;
+    let r: redis::RedisResult<()> =
+        redis::AsyncCommands::set_ex(&mut conn, &key, payload, AUTH_CACHE_TTL_SECS as u64).await;
     if let Err(e) = r {
         tracing::warn!(error = %e, "auth cache SETEX failed");
     }

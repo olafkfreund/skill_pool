@@ -76,7 +76,12 @@ impl LogoKind {
 
     fn from_content_type(ct: &str) -> Option<Self> {
         // The browser may include parameters like `; charset=utf-8`.
-        let head = ct.split(';').next().unwrap_or(ct).trim().to_ascii_lowercase();
+        let head = ct
+            .split(';')
+            .next()
+            .unwrap_or(ct)
+            .trim()
+            .to_ascii_lowercase();
         match head.as_str() {
             "image/svg+xml" | "image/svg" => Some(LogoKind::Svg),
             "image/png" => Some(LogoKind::Png),
@@ -471,7 +476,8 @@ mod tests {
 
     #[test]
     fn rejects_svg_with_foreignobject() {
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><foreignObject></foreignObject></svg>"#;
+        let svg =
+            br#"<svg xmlns="http://www.w3.org/2000/svg"><foreignObject></foreignObject></svg>"#;
         let err = sanitize("image/svg+xml", svg).unwrap_err();
         assert!(matches!(err, SanitizeError::DangerousSvg(_)));
     }
@@ -506,7 +512,8 @@ mod tests {
 
     #[test]
     fn rejects_svg_with_import() {
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><style>@import "evil.css";</style></svg>"#;
+        let svg =
+            br#"<svg xmlns="http://www.w3.org/2000/svg"><style>@import "evil.css";</style></svg>"#;
         let err = sanitize("image/svg+xml", svg).unwrap_err();
         assert!(matches!(err, SanitizeError::DangerousSvg(_)));
     }
@@ -546,7 +553,10 @@ mod tests {
     fn rejects_png_with_wrong_magic() {
         let not_png = b"not really png at all blah blah";
         let err = sanitize("image/png", not_png).unwrap_err();
-        assert!(matches!(err, SanitizeError::MagicMismatch(_)), "got {err:?}");
+        assert!(
+            matches!(err, SanitizeError::MagicMismatch(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]

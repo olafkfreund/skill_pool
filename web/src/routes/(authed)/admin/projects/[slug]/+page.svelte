@@ -18,9 +18,7 @@
   const project = $derived(data.project);
   const plan = $derived(data.plan as ProjectPlan | null);
   const planVersions = $derived((data.planVersions ?? []) as ProjectPlanVersion[]);
-  const isCurator = $derived(
-    data.userRole === 'curator' || data.userRole === 'admin',
-  );
+  const isCurator = $derived(data.userRole === 'curator' || data.userRole === 'admin');
 
   // Separate items by kind for the three sub-tables.
   const skills = $derived(project.items.filter((it: ProjectItem) => it.kind === 'skill'));
@@ -156,7 +154,9 @@
     class="mb-6 flex items-center gap-2 rounded-[var(--sp-radius)] border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800"
   >
     <CheckCircle2 size="16" />
-    {form?.interval_secs ? `Auto-refresh set to every ${form.interval_secs} seconds.` : 'Auto-refresh disabled.'}
+    {form?.interval_secs
+      ? `Auto-refresh set to every ${form.interval_secs} seconds.`
+      : 'Auto-refresh disabled.'}
   </div>
 {/if}
 
@@ -186,7 +186,8 @@
         rows="3"
         placeholder="Short description of what this project does…"
         class="mt-1 w-full rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 text-sm focus:border-[var(--sp-primary)] focus:outline-none"
-      >{project.description ?? ''}</textarea>
+        >{project.description ?? ''}</textarea
+      >
     </label>
 
     <label class="block">
@@ -221,8 +222,8 @@
   </h2>
   <p class="mb-3 text-sm text-[var(--sp-muted-fg)]">
     Comma-separated tags that echo the detected stack (e.g.
-    <code class="rounded bg-[var(--sp-muted)] px-1">rust, axum, postgres</code>). Used to
-    back-fill stack-mapping slots when the project doesn't fully cover them.
+    <code class="rounded bg-[var(--sp-muted)] px-1">rust, axum, postgres</code>). Used to back-fill
+    stack-mapping slots when the project doesn't fully cover them.
   </p>
   <form method="POST" action="?/setTags" class="space-y-3">
     <label class="block">
@@ -266,11 +267,10 @@
     <FileText size="13" /> Plan
   </h2>
   <p class="mb-4 text-xs text-[var(--sp-muted-fg)]">
-    Project plans are authored externally (Confluence, Notion, GitHub, local file) and imported
-    via the CLI. See the
-    <a href="/docs/wiki/Projects.md" class="underline hover:text-[var(--sp-fg)]"
-      >Projects docs</a
-    > for the import flow.
+    Project plans are authored externally (Confluence, Notion, GitHub, local file) and imported via
+    the CLI. See the
+    <a href="/docs/wiki/Projects.md" class="underline hover:text-[var(--sp-fg)]">Projects docs</a> for
+    the import flow.
   </p>
 
   {#if plan}
@@ -314,7 +314,9 @@
       </div>
 
       <!-- Source row -->
-      <div class="flex items-center gap-1 border-b border-[var(--sp-border)] px-4 py-2 text-xs text-[var(--sp-muted-fg)]">
+      <div
+        class="flex items-center gap-1 border-b border-[var(--sp-border)] px-4 py-2 text-xs text-[var(--sp-muted-fg)]"
+      >
         <span>from: <span class="font-mono">{plan.source_type}</span></span>
         {#if plan.source_url}
           <span>·</span>
@@ -332,7 +334,7 @@
 
       <!-- Body: raw markdown in <pre> — no heavyweight renderer for v1 -->
       <div class="max-h-96 overflow-y-auto px-4 py-3">
-        <pre class="whitespace-pre-wrap text-sm text-[var(--sp-fg)]">{plan.body_md}</pre>
+        <pre class="text-sm whitespace-pre-wrap text-[var(--sp-fg)]">{plan.body_md}</pre>
       </div>
     </div>
 
@@ -340,11 +342,13 @@
     {#if planVersions.length > 0}
       <details class="mt-4">
         <summary
-          class="cursor-pointer select-none rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] px-3 py-2 text-xs font-medium text-[var(--sp-fg)] hover:border-[var(--sp-primary)]"
+          class="cursor-pointer rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] px-3 py-2 text-xs font-medium text-[var(--sp-fg)] select-none hover:border-[var(--sp-primary)]"
         >
           Version history ({planVersions.length} version{planVersions.length === 1 ? '' : 's'})
         </summary>
-        <div class="mt-2 overflow-hidden rounded-[var(--sp-radius)] border border-[var(--sp-border)]">
+        <div
+          class="mt-2 overflow-hidden rounded-[var(--sp-radius)] border border-[var(--sp-border)]"
+        >
           <table class="w-full text-xs">
             <thead
               class="bg-[var(--sp-muted)] text-left tracking-wide text-[var(--sp-muted-fg)] uppercase"
@@ -355,7 +359,7 @@
                 <th class="px-3 py-2 font-medium">Imported</th>
                 <th class="px-3 py-2 font-medium">By</th>
                 <th class="px-3 py-2 font-medium">Source</th>
-                <th class="px-3 py-2 font-medium text-right">Action</th>
+                <th class="px-3 py-2 text-right font-medium">Action</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-[var(--sp-border)] bg-[var(--sp-bg)]">
@@ -415,10 +419,14 @@
 
     <!-- ── Auto-refresh toggle (curator / admin only) ── -->
     {#if isCurator}
-      <div class="mt-4 rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] px-4 py-3">
+      <div
+        class="mt-4 rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] px-4 py-3"
+      >
         <form method="POST" action="?/setAutoRefresh" class="space-y-3">
           <div class="flex items-center gap-3">
-            <label class="flex cursor-pointer items-center gap-2 text-sm font-medium text-[var(--sp-fg)]">
+            <label
+              class="flex cursor-pointer items-center gap-2 text-sm font-medium text-[var(--sp-fg)]"
+            >
               <input
                 type="checkbox"
                 name="auto_refresh_enabled"
@@ -478,7 +486,9 @@
           skill-pool plan import {project.slug} --file ./plan.md
         </code>
         or
-        <code class="rounded bg-[var(--sp-bg)] px-1 py-0.5 font-mono text-xs">--url https://...</code>
+        <code class="rounded bg-[var(--sp-bg)] px-1 py-0.5 font-mono text-xs"
+          >--url https://...</code
+        >
         to import a plan.
       </p>
     </div>
@@ -492,8 +502,8 @@
   </h2>
   <p class="mb-5 text-sm text-[var(--sp-muted-fg)]">
     Skills, agents, and commands in this project are installed by
-    <code class="rounded bg-[var(--sp-muted)] px-1">skill-pool bootstrap</code> before any
-    stack-mapping backfill. Forward references (slugs that don't exist yet) are allowed.
+    <code class="rounded bg-[var(--sp-muted)] px-1">skill-pool bootstrap</code> before any stack-mapping
+    backfill. Forward references (slugs that don't exist yet) are allowed.
   </p>
 
   <div class="space-y-6">
@@ -716,9 +726,7 @@
     }}
     class="flex items-center justify-between rounded-[var(--sp-radius)] border border-red-200 bg-red-50 p-3 text-sm"
   >
-    <span class="text-red-800">
-      Permanently delete this project and all its curated items.
-    </span>
+    <span class="text-red-800"> Permanently delete this project and all its curated items. </span>
     <button
       type="submit"
       class="ml-3 inline-flex items-center gap-1 rounded-[var(--sp-radius)] border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"

@@ -54,13 +54,15 @@ pub async fn get_config(
     .fetch_optional(state.db())
     .await?;
     let (wh_url, wh_secret, smtp_url, smtp_from, smtp_to) = row
-        .map(|r| (
-            r.notifications_webhook_url,
-            r.notifications_webhook_secret,
-            r.notification_smtp_url,
-            r.notification_smtp_from,
-            r.notification_smtp_to,
-        ))
+        .map(|r| {
+            (
+                r.notifications_webhook_url,
+                r.notifications_webhook_secret,
+                r.notification_smtp_url,
+                r.notification_smtp_from,
+                r.notification_smtp_to,
+            )
+        })
         .unwrap_or((None, None, None, None, None));
     Ok(Json(NotificationsConfig {
         webhook_url: wh_url,
@@ -102,7 +104,11 @@ pub async fn put_config(
     let normalize = |o: Option<String>| -> Option<Option<String>> {
         o.map(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         })
     };
     let wh_url = normalize(body.webhook_url);

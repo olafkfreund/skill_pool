@@ -1,22 +1,20 @@
 import { error } from '@sveltejs/kit';
-import {
-  ApiError,
-  getPlugin,
-  listPluginVersions,
-  type PluginVersionRow,
-} from '$lib/server/api';
+import { ApiError, getPlugin, listPluginVersions, type PluginVersionRow } from '$lib/server/api';
 import type { PageServerLoad } from './$types';
 
 /**
  * Build the JSON-LD SoftwareApplication structured-data object for this
  * plugin. Injected via <svelte:head> as application/ld+json for SEO.
  */
-function buildJsonLd(plugin: {
-  name: string;
-  description: string | null;
-  version: string;
-  slug: string;
-}, pageUrl: string): string {
+function buildJsonLd(
+  plugin: {
+    name: string;
+    description: string | null;
+    version: string;
+    slug: string;
+  },
+  pageUrl: string,
+): string {
   return JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',

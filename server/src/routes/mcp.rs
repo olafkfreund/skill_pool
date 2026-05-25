@@ -415,8 +415,11 @@ async fn call_search(
     let tag_list: Vec<String> = args.tags.unwrap_or_default();
     let kind = resolve_kind(args.kind.as_deref()).map_err(ToolError::Invalid)?;
 
-    let rows: Vec<SearchRow> = if let Some(query_text) =
-        args.semantic.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    let rows: Vec<SearchRow> = if let Some(query_text) = args
+        .semantic
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
     {
         // Semantic branch: mirror the REST endpoint's CTE + similarity ORDER.
         let embedding = state
@@ -672,23 +675,20 @@ async fn call_get_project_plan(
     let args: GetProjectPlanArgs = serde_json::from_value(args)
         .map_err(|e| ToolError::Invalid(format!("invalid arguments: {e}")))?;
 
-    let result = crate::admin::get_active_plan(
-        state.db(),
-        &caller.tenant.tenant_slug,
-        &args.project_slug,
-    )
-    .await
-    .map_err(|e| {
-        // get_active_plan returns Err when the project slug doesn't exist.
-        // Surface that as NotFound so the model gets isError: true rather
-        // than a JSON-RPC internal error.
-        let msg = e.to_string();
-        if msg.contains("not found") {
-            ToolError::NotFound(msg)
-        } else {
-            ToolError::Internal(msg)
-        }
-    })?;
+    let result =
+        crate::admin::get_active_plan(state.db(), &caller.tenant.tenant_slug, &args.project_slug)
+            .await
+            .map_err(|e| {
+                // get_active_plan returns Err when the project slug doesn't exist.
+                // Surface that as NotFound so the model gets isError: true rather
+                // than a JSON-RPC internal error.
+                let msg = e.to_string();
+                if msg.contains("not found") {
+                    ToolError::NotFound(msg)
+                } else {
+                    ToolError::Internal(msg)
+                }
+            })?;
 
     let Some(plan) = result else {
         return Err(ToolError::NotFound(format!(
@@ -853,7 +853,12 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
-            vec!["search_skills", "get_skill", "install_skill", "get_project_plan"]
+            vec![
+                "search_skills",
+                "get_skill",
+                "install_skill",
+                "get_project_plan"
+            ]
         );
     }
 

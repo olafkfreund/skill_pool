@@ -146,9 +146,15 @@ async fn rejects_manifest_missing_required_fields() -> Result<()> {
     let payload: Value = resp.json().await?;
     assert_eq!(payload["error"], "unprocessable_entity");
     let fields = payload["fields"].as_object().expect("fields object");
-    assert!(fields.contains_key("name"),        "expected `name`: {payload}");
-    assert!(fields.contains_key("version"),     "expected `version`: {payload}");
-    assert!(fields.contains_key("description"), "expected `description`: {payload}");
+    assert!(fields.contains_key("name"), "expected `name`: {payload}");
+    assert!(
+        fields.contains_key("version"),
+        "expected `version`: {payload}"
+    );
+    assert!(
+        fields.contains_key("description"),
+        "expected `description`: {payload}"
+    );
 
     drop(pool);
     Ok(())

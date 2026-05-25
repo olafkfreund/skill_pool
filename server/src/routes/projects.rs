@@ -127,7 +127,10 @@ pub struct ResolveQuery {
 // ---------------------------------------------------------------------------
 
 fn require_admin(scope: &str) -> AppResult<()> {
-    if scope.split_whitespace().any(|s| s == "tenant:admin" || s == "*") {
+    if scope
+        .split_whitespace()
+        .any(|s| s == "tenant:admin" || s == "*")
+    {
         Ok(())
     } else {
         Err(AppError::Forbidden)
@@ -369,10 +372,7 @@ pub async fn put_items(
         validate_kind(&item.kind)?;
     }
 
-    let items: Vec<(String, String)> = body
-        .into_iter()
-        .map(|i| (i.slug, i.kind))
-        .collect();
+    let items: Vec<(String, String)> = body.into_iter().map(|i| (i.slug, i.kind)).collect();
 
     admin::set_project_items(state.db(), &caller.tenant.tenant_slug, &slug, items)
         .await
@@ -416,13 +416,16 @@ pub async fn resolve(
 
     let remote = q.remote.trim().to_string();
     if remote.is_empty() {
-        return Err(AppError::BadRequest("remote query parameter is required".into()));
+        return Err(AppError::BadRequest(
+            "remote query parameter is required".into(),
+        ));
     }
 
-    let project = admin::resolve_project_by_remote(state.db_read(), &caller.tenant.tenant_slug, &remote)
-        .await
-        .map_err(AppError::Anyhow)?
-        .ok_or(AppError::NotFound)?;
+    let project =
+        admin::resolve_project_by_remote(state.db_read(), &caller.tenant.tenant_slug, &remote)
+            .await
+            .map_err(AppError::Anyhow)?
+            .ok_or(AppError::NotFound)?;
 
     Ok(Json(ProjectRef {
         slug: project.slug,

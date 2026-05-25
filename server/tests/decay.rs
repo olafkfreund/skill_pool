@@ -193,11 +193,10 @@ async fn decay_lifecycle_end_to_end() -> Result<()> {
         .await?;
         assert_eq!(resp.status().as_u16(), 200);
     }
-    let (active_count,): (i32,) = sqlx::query_as(
-        "SELECT use_count FROM skills WHERE slug = 'active-skill'",
-    )
-    .fetch_one(&h.db)
-    .await?;
+    let (active_count,): (i32,) =
+        sqlx::query_as("SELECT use_count FROM skills WHERE slug = 'active-skill'")
+            .fetch_one(&h.db)
+            .await?;
     assert_eq!(active_count, 3, "use_count should bump on bundle download");
 
     // 3. Backdate old-skill's last_used_at to 200 days ago. Simulates a
@@ -249,7 +248,11 @@ async fn decay_lifecycle_end_to_end() -> Result<()> {
     .await?
     .json()
     .await?;
-    assert_eq!(candidates.len(), 1, "active-skill must not decay: {candidates:?}");
+    assert_eq!(
+        candidates.len(),
+        1,
+        "active-skill must not decay: {candidates:?}"
+    );
 
     // 4. Archive old-skill → it disappears from both the catalog list
     //    AND the decay candidates.
@@ -351,7 +354,10 @@ async fn decay_sweep_flips_archive_candidate() -> anyhow::Result<()> {
     .await?;
 
     let flipped = sweep(&h.db, DEFAULT_SWEEP_STALE_DAYS, DEFAULT_SWEEP_MIN_USES).await?;
-    assert!(flipped >= 1, "expected at least one row flipped, got {flipped}");
+    assert!(
+        flipped >= 1,
+        "expected at least one row flipped, got {flipped}"
+    );
 
     // Verify the stale skill's status.
     let (status,): (String,) =

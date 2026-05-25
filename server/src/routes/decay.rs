@@ -48,7 +48,10 @@ pub async fn list_candidates(
 ) -> AppResult<Json<Vec<DecayCandidate>>> {
     require_scope(&caller.scope, "tenant:admin")?;
     let days = q.days.unwrap_or(DEFAULT_DAYS).clamp(1, MAX_DAYS);
-    let max_uses = q.max_uses.unwrap_or(DEFAULT_MAX_USES).clamp(0, MAX_MAX_USES);
+    let max_uses = q
+        .max_uses
+        .unwrap_or(DEFAULT_MAX_USES)
+        .clamp(0, MAX_MAX_USES);
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
 
     // CTE picks the latest published version per slug, then filters by

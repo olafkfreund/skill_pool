@@ -1,15 +1,10 @@
 import { fail } from '@sveltejs/kit';
-import {
-  getNotifications,
-  putNotifications,
-  type PutNotificationsBody,
-} from '$lib/server/api';
+import { getNotifications, putNotifications, type PutNotificationsBody } from '$lib/server/api';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, cookies }) => {
   const auth = { tenant: locals.tenant.slug, token: cookies.get('sp_token') };
-  const config =
-    (await getNotifications(auth)) ?? { webhook_url: null, signing_enabled: false };
+  const config = (await getNotifications(auth)) ?? { webhook_url: null, signing_enabled: false };
   return { config };
 };
 

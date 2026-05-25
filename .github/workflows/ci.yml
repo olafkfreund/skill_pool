@@ -150,25 +150,24 @@ jobs:
         with:
           version: v3.15.0
 
-      - name: Set up kubectl (client-only, for --dry-run=client)
-        if: steps.chart.outputs.present == 'true'
-        uses: azure/setup-kubectl@v5
-        with:
-          version: v1.30.0
-
       - name: helm lint
         if: steps.chart.outputs.present == 'true'
         run: helm lint deploy/helm/skill-pool/
 
-      - name: helm template | kubectl apply --dry-run=client
+      - name: helm template (yaml syntax + value coverage)
         if: steps.chart.outputs.present == 'true'
+        # `helm template` alone catches every syntax error and missing
+        # value. We previously piped to `kubectl apply --dry-run=client`,
+        # but that requires reachable cluster API (kubectl pulls openapi
+        # for resource recognition) and fails in CI without a target.
+        # Helm-side validation is enough for chart-hygiene gating.
         run: |
           helm template skill-pool deploy/helm/skill-pool/ \
             --set image.server.tag=test \
             --set image.web.tag=test \
             --set server.env.SKILL_POOL_STORAGE_URI='s3://x' \
             --set web.env.ORIGIN='https://x.example.com' \
-            | kubectl apply --dry-run=client -f -
+            > /dev/null
 
   # ---------------------------------------------------------------------------
   # Security: cargo audit — RustSec advisory database scan.
@@ -213,12 +212,10 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          ignore: |
-            RUSTSEC-2026-0119
-            RUSTSEC-2023-0071
-            RUSTSEC-2025-0119
-            RUSTSEC-2024-0436
-            RUSTSEC-2025-0134
+          # Comma-separated, single line — multi-line YAML strings get
+          # passed verbatim to `cargo audit --ignore X\nY\n...`, which
+          # cargo-audit then rejects as a malformed advisory ID.
+          ignore: RUSTSEC-2026-0119,RUSTSEC-2023-0071,RUSTSEC-2025-0119,RUSTSEC-2024-0436,RUSTSEC-2025-0134
 
   # ---------------------------------------------------------------------------
   # Security: cargo deny — license, bans, and source policy checks.

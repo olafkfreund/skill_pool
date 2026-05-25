@@ -39,7 +39,7 @@
   // round-trips. The textarea is untracked initially and re-synced on
   // successful save/remove via the effect below.
   let customCss = $state<string>(
-    untrack(() => (typeof form?.customCss === 'string' ? form.customCss : data.customCss ?? '')),
+    untrack(() => (typeof form?.customCss === 'string' ? form.customCss : (data.customCss ?? ''))),
   );
   $effect(() => {
     if (typeof form?.customCss === 'string') {
@@ -75,9 +75,9 @@
   });
 
   // --- Contrast badges (live, derived from current palette) ---
-  const bodyBadge    = $derived(wcagBadge(contrastRatio(theme.fg, theme.bg)));
+  const bodyBadge = $derived(wcagBadge(contrastRatio(theme.fg, theme.bg)));
   const primaryBadge = $derived(wcagBadge(contrastRatio(theme.primaryFg, theme.primary)));
-  const mutedBadge   = $derived(wcagBadge(contrastRatio(theme.mutedFg, theme.muted)));
+  const mutedBadge = $derived(wcagBadge(contrastRatio(theme.mutedFg, theme.muted)));
   const mutedBgBadge = $derived(wcagBadge(contrastRatio(theme.mutedFg, theme.bg)));
 
   // Live failures (client-side mirror of server validation)
@@ -91,7 +91,17 @@
   }
 
   // Only the required-string colour fields; optional/boolean fields handled separately.
-  type RequiredStringKey = 'primary' | 'primaryFg' | 'accent' | 'bg' | 'fg' | 'muted' | 'mutedFg' | 'border' | 'radius' | 'brandName';
+  type RequiredStringKey =
+    | 'primary'
+    | 'primaryFg'
+    | 'accent'
+    | 'bg'
+    | 'fg'
+    | 'muted'
+    | 'mutedFg'
+    | 'border'
+    | 'radius'
+    | 'brandName';
   const colorFields: Array<[string, RequiredStringKey]> = [
     ['Primary', 'primary'],
     ['Primary fg', 'primaryFg'],
@@ -120,15 +130,8 @@
      this `<svelte:head>` makes the picker live-update before save. -->
 <svelte:head>
   {#if fontStylesheetUrl}
-    <link
-      rel="preconnect"
-      href="https://fonts.googleapis.com"
-    />
-    <link
-      rel="preconnect"
-      href="https://fonts.gstatic.com"
-      crossorigin="anonymous"
-    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
     <link rel="stylesheet" href={fontStylesheetUrl} />
   {/if}
 </svelte:head>
@@ -184,8 +187,9 @@
     <h2 class="text-sm font-semibold">Brand logo</h2>
   </header>
   <p class="mb-3 text-xs text-[var(--sp-muted-fg)]">
-    SVG, PNG, JPEG, or WEBP. Max 256&nbsp;KiB. SVGs are sanitized server-side
-    — <code>&lt;script&gt;</code>, event handlers, off-origin
+    SVG, PNG, JPEG, or WEBP. Max 256&nbsp;KiB. SVGs are sanitized server-side — <code
+      >&lt;script&gt;</code
+    >, event handlers, off-origin
     <code>xlink:href</code>, and CSS escapes are rejected.
   </p>
 
@@ -214,7 +218,12 @@
     <p class="mb-2 text-xs text-emerald-700">Logo removed.</p>
   {/if}
 
-  <form method="POST" action="?/logo" enctype="multipart/form-data" class="flex flex-wrap items-center gap-3">
+  <form
+    method="POST"
+    action="?/logo"
+    enctype="multipart/form-data"
+    class="flex flex-wrap items-center gap-3"
+  >
     <input
       type="file"
       name="logo"
@@ -243,8 +252,8 @@
     <h2 class="text-sm font-semibold">Favicon</h2>
   </header>
   <p class="mb-3 text-xs text-[var(--sp-muted-fg)]">
-    SVG, PNG, JPEG, WEBP, or ICO. Max 64&nbsp;KiB. If you don't upload one,
-    the brand logo is served at the favicon URL as a fallback.
+    SVG, PNG, JPEG, WEBP, or ICO. Max 64&nbsp;KiB. If you don't upload one, the brand logo is served
+    at the favicon URL as a fallback.
   </p>
 
   {#if hasFavicon}
@@ -276,7 +285,12 @@
     <p class="mb-2 text-xs text-emerald-700">Favicon removed.</p>
   {/if}
 
-  <form method="POST" action="?/favicon" enctype="multipart/form-data" class="flex flex-wrap items-center gap-3">
+  <form
+    method="POST"
+    action="?/favicon"
+    enctype="multipart/form-data"
+    class="flex flex-wrap items-center gap-3"
+  >
     <input
       type="file"
       name="favicon"
@@ -305,11 +319,10 @@
     <h2 class="text-sm font-semibold">Custom CSS overlay</h2>
   </header>
   <p class="mb-3 text-xs text-[var(--sp-muted-fg)]">
-    Layer a CSS overlay on top of the curated <code>--sp-*</code> variables.
-    Max 32&nbsp;KiB. The server rejects <code>@import</code>, off-site
+    Layer a CSS overlay on top of the curated <code>--sp-*</code> variables. Max 32&nbsp;KiB. The
+    server rejects <code>@import</code>, off-site
     <code>url()</code>, <code>expression()</code>, <code>behavior:</code>,
-    <code>javascript:</code> URIs, and HTML-tag-like content — see the
-    enterprise docs for the full list.
+    <code>javascript:</code> URIs, and HTML-tag-like content — see the enterprise docs for the full list.
   </p>
 
   {#if form?.savedCustomCss}
@@ -425,8 +438,8 @@
 
     {#if fontChoice && fontChoice !== 'system'}
       <p class="-mt-1 text-xs text-[var(--sp-muted-fg)]">
-        The portal loads <strong>{fontChoice}</strong> from Google Fonts on every
-        page. Want to self-host? Pick <code>system</code> here and add your own
+        The portal loads <strong>{fontChoice}</strong> from Google Fonts on every page. Want to
+        self-host? Pick <code>system</code> here and add your own
         <code>@font-face</code> declarations in a custom-CSS layer.
       </p>
     {/if}
@@ -434,7 +447,9 @@
     <label class="flex items-center justify-between gap-3">
       <span class="text-sm text-[var(--sp-fg)]">
         Show "Powered by skill-pool" footer
-        <span class="block text-xs text-[var(--sp-muted-fg)]">Default on (Free tier). Uncheck to hide the footer credit.</span>
+        <span class="block text-xs text-[var(--sp-muted-fg)]"
+          >Default on (Free tier). Uncheck to hide the footer credit.</span
+        >
       </span>
       <input
         type="checkbox"
@@ -511,7 +526,7 @@
 
   <!-- Live catalog card preview — updates reactively with every colour change -->
   <section aria-label="Live catalog card preview">
-    <p class="mb-3 text-xs font-medium tracking-widest uppercase text-[var(--sp-muted-fg)]">
+    <p class="mb-3 text-xs font-medium tracking-widest text-[var(--sp-muted-fg)] uppercase">
       Live preview
     </p>
 
@@ -531,7 +546,7 @@
         style="border-bottom: 1px solid {theme.border};"
       >
         <div class="min-w-0">
-          <h2 class="truncate text-sm font-semibold leading-snug" style="color: {theme.fg};">
+          <h2 class="truncate text-sm leading-snug font-semibold" style="color: {theme.fg};">
             react-query-state-sync
           </h2>
           <p class="mt-0.5 text-xs" style="color: {theme.mutedFg};">v2.4.1 · skill</p>
@@ -570,9 +585,7 @@
         class="flex items-center justify-between gap-3 px-4 py-3"
         style="background: {theme.muted}; border-top: 1px solid {theme.border};"
       >
-        <span class="text-xs" style="color: {theme.mutedFg};">
-          Used 142 times
-        </span>
+        <span class="text-xs" style="color: {theme.mutedFg};"> Used 142 times </span>
         <button
           type="button"
           class="inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium"

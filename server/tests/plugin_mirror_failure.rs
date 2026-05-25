@@ -50,11 +50,10 @@ async fn plugin_mirror_failure_records_fetch_error() -> Result<()> {
     let storage_uri = format!("fs://{}", storage_dir.path().display());
     let storage = Storage::from_uri(&storage_uri)?;
 
-    let tenant_id: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT id FROM tenants WHERE slug = 'acme'",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let tenant_id: uuid::Uuid =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM tenants WHERE slug = 'acme'")
+            .fetch_one(&pool)
+            .await?;
 
     // A URL that is guaranteed to fail.
     let bad_url = "file:///nonexistent/skill_pool_test/plugin.git";
@@ -80,13 +79,19 @@ async fn plugin_mirror_failure_records_fetch_error() -> Result<()> {
 
     // 1. run_mirror should return Err.
     let result = run_mirror(&pool, &storage, &job).await;
-    assert!(result.is_err(), "run_mirror should fail for an unreachable URL");
+    assert!(
+        result.is_err(),
+        "run_mirror should fail for an unreachable URL"
+    );
 
     // 2. Exercise the full handler path — which writes fetch_error to DB.
     let handler = PluginMirrorHandler::new(pool.clone(), storage.clone());
     let payload = serde_json::to_value(&job)?;
     let handle_result = handler.handle(payload).await;
-    assert!(handle_result.is_err(), "handler should return Err for bad URL");
+    assert!(
+        handle_result.is_err(),
+        "handler should return Err for bad URL"
+    );
 
     // 3. Assert: fetch_error is populated, last_pulled_at is still NULL.
     let (name, version, last_pulled_at, fetch_error, fetch_error_at) = sqlx::query_as::<

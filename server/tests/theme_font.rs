@@ -178,10 +178,7 @@ async fn get_fonts_returns_allowlist() -> Result<()> {
     let h = boot().await?;
     let c = client();
 
-    let resp = c
-        .get(format!("{}/v1/theme/fonts", h.base))
-        .send()
-        .await?;
+    let resp = c.get(format!("{}/v1/theme/fonts", h.base)).send().await?;
     assert_eq!(resp.status().as_u16(), 200);
     let body: Value = resp.json().await?;
     let allowed = body["allowed"]

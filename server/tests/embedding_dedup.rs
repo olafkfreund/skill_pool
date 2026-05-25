@@ -193,14 +193,12 @@ async fn publish_skill(
         "---\nname: {slug}\ndescription: {description}\ntags: [seeded]\n---\n\n# {slug}\n"
     ));
     let meta = json!({ "slug": slug, "version": "1.0.0" });
-    let form = Form::new()
-        .text("metadata", meta.to_string())
-        .part(
-            "bundle",
-            Part::bytes(bundle.to_vec())
-                .file_name(format!("{slug}.tar.gz"))
-                .mime_str("application/gzip")?,
-        );
+    let form = Form::new().text("metadata", meta.to_string()).part(
+        "bundle",
+        Part::bytes(bundle.to_vec())
+            .file_name(format!("{slug}.tar.gz"))
+            .mime_str("application/gzip")?,
+    );
     let resp = authed(
         req(c, reqwest::Method::POST, &h.base, "/v1/skills", tenant),
         token,
@@ -226,14 +224,12 @@ async fn create_draft(
         "---\nname: {slug}\ndescription: {description}\ntags: [seeded]\n---\n\n# {slug}\n"
     ));
     let meta = json!({ "slug": slug, "origin": "cli" });
-    let form = Form::new()
-        .text("metadata", meta.to_string())
-        .part(
-            "bundle",
-            Part::bytes(bundle.to_vec())
-                .file_name(format!("{slug}.tar.gz"))
-                .mime_str("application/gzip")?,
-        );
+    let form = Form::new().text("metadata", meta.to_string()).part(
+        "bundle",
+        Part::bytes(bundle.to_vec())
+            .file_name(format!("{slug}.tar.gz"))
+            .mime_str("application/gzip")?,
+    );
     let resp = authed(
         req(c, reqwest::Method::POST, &h.base, "/v1/drafts", tenant),
         token,

@@ -108,10 +108,10 @@
 
 <!-- Usage stats + install row -->
 <div class="mb-8 grid gap-4 sm:grid-cols-3">
-  <div
-    class="rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] p-4"
-  >
-    <div class="flex items-center gap-1.5 text-xs tracking-wider text-[var(--sp-muted-fg)] uppercase">
+  <div class="rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] p-4">
+    <div
+      class="flex items-center gap-1.5 text-xs tracking-wider text-[var(--sp-muted-fg)] uppercase"
+    >
       <Activity size="11" /> Use count
     </div>
     <div class="mt-1 font-mono text-2xl font-semibold text-[var(--sp-fg)]">{d.use_count}</div>
@@ -119,18 +119,13 @@
       Last: {fmtDate(d.last_used_at)}
     </div>
   </div>
-  <div
-    class="rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] p-4"
-  >
+  <div class="rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] p-4">
     <div class="text-xs tracking-wider text-[var(--sp-muted-fg)] uppercase">Created</div>
     <div class="mt-1 text-sm text-[var(--sp-fg)]">{fmtDate(d.created_at)}</div>
   </div>
-  <div
-    class="rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] p-4"
-  >
+  <div class="rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] p-4">
     <div class="text-xs tracking-wider text-[var(--sp-muted-fg)] uppercase">Install</div>
-    <pre
-      class="mt-1 overflow-x-auto text-xs"><code>skill-pool add {d.slug}</code></pre>
+    <pre class="mt-1 overflow-x-auto text-xs"><code>skill-pool add {d.slug}</code></pre>
   </div>
 </div>
 
@@ -150,8 +145,7 @@
             class="flex items-center justify-between gap-3 rounded-[var(--sp-radius)] border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 hover:border-amber-400"
           >
             <span>
-              <code class="font-mono">{p.draft_slug}</code> looks similar
-              ({pct(p.similarity)} match)
+              <code class="font-mono">{p.draft_slug}</code> looks similar ({pct(p.similarity)} match)
             </span>
             <ArrowUpRight size="14" />
           </a>
@@ -269,15 +263,13 @@
     <History size="13" /> Version history{versions.length > 1 ? ` · ${versions.length}` : ''}
   </h2>
   {#if versions.length <= 1}
-    <p class="text-sm text-[var(--sp-muted-fg)]">
-      This is the only version published yet.
-    </p>
+    <p class="text-sm text-[var(--sp-muted-fg)]">This is the only version published yet.</p>
   {:else}
-    <div
-      class="overflow-hidden rounded-[var(--sp-radius)] border border-[var(--sp-border)]"
-    >
+    <div class="overflow-hidden rounded-[var(--sp-radius)] border border-[var(--sp-border)]">
       <table class="w-full text-sm">
-        <thead class="bg-[var(--sp-muted)] text-xs tracking-wider text-[var(--sp-muted-fg)] uppercase">
+        <thead
+          class="bg-[var(--sp-muted)] text-xs tracking-wider text-[var(--sp-muted-fg)] uppercase"
+        >
           <tr>
             <th class="px-3 py-2 text-left font-medium">Version</th>
             <th class="px-3 py-2 text-left font-medium">Published</th>

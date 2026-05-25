@@ -48,9 +48,14 @@ async fn custom_domain_admin_flow() -> Result<()> {
     let storage_dir = tempfile::tempdir()?;
     let storage_uri = format!("fs://{}", storage_dir.path().display());
     admin::create_tenant(&pool, "acme", "Acme Corp", "enterprise").await?;
-    let token = admin::create_token(&pool, "acme", "test", "tenant:admin skills:read skills:publish")
-        .await?
-        .raw_token;
+    let token = admin::create_token(
+        &pool,
+        "acme",
+        "test",
+        "tenant:admin skills:read skills:publish",
+    )
+    .await?
+    .raw_token;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -89,7 +94,11 @@ async fn custom_domain_admin_flow() -> Result<()> {
         .json(&serde_json::json!({ "hostname": "skills.acme.example" }))
         .send()
         .await?;
-    assert_eq!(resp.status().as_u16(), 201, "POST should return 201 Created");
+    assert_eq!(
+        resp.status().as_u16(),
+        201,
+        "POST should return 201 Created"
+    );
     let created: Value = resp.json().await?;
     let id = created["id"].as_str().expect("id present").to_string();
     let token_dns = {
@@ -241,7 +250,11 @@ async fn custom_domain_admin_flow() -> Result<()> {
         .send()
         .await?;
     let listed: Value = resp.json().await?;
-    assert_eq!(listed.as_array().unwrap().len(), 0, "list should be empty after delete");
+    assert_eq!(
+        listed.as_array().unwrap().len(),
+        0,
+        "list should be empty after delete"
+    );
 
     // After delete + refresh, cert-ok must drop to 404.
     let resp = c
@@ -293,23 +306,21 @@ async fn verify_failed_path_records_error() -> Result<()> {
     // Operator override (skip DNS) — flips to active, sets activated_at.
     admin::activate_custom_domain(&pool, "acme", rows[0].0).await?;
 
-    let (status, activated): (String, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
-        "SELECT status, activated_at FROM tenant_custom_domains WHERE id = $1",
-    )
-    .bind(rows[0].0)
-    .fetch_one(&pool)
-    .await?;
+    let (status, activated): (String, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("SELECT status, activated_at FROM tenant_custom_domains WHERE id = $1")
+            .bind(rows[0].0)
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(status, "active");
     assert!(activated.is_some(), "activated_at should be set");
 
     // Remove.
     admin::remove_custom_domain(&pool, "acme", rows[0].0).await?;
-    let (n,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM tenant_custom_domains WHERE hostname = $1",
-    )
-    .bind("skills.acme.test")
-    .fetch_one(&pool)
-    .await?;
+    let (n,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM tenant_custom_domains WHERE hostname = $1")
+            .bind("skills.acme.test")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(n, 0);
 
     Ok(())

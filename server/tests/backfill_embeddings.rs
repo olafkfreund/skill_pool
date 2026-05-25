@@ -55,13 +55,16 @@ async fn backfill_populates_null_description_embeddings() -> Result<()> {
     admin::create_tenant(&pool, "acme", "Acme", "team").await?;
     // Insert two skills directly with NULL embedding — simulating
     // rows published before Phase 5.
-    let (tenant_id,): (uuid::Uuid,) =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = 'acme'")
-            .fetch_one(&pool)
-            .await?;
+    let (tenant_id,): (uuid::Uuid,) = sqlx::query_as("SELECT id FROM tenants WHERE slug = 'acme'")
+        .fetch_one(&pool)
+        .await?;
     for (slug, version, desc) in [
         ("axum-handler", "1.0.0", "Pattern for axum extractors"),
-        ("kafka-consumer", "1.0.0", "Kafka consumer with backpressure"),
+        (
+            "kafka-consumer",
+            "1.0.0",
+            "Kafka consumer with backpressure",
+        ),
     ] {
         sqlx::query(
             "INSERT INTO skills (tenant_id, slug, version, description, when_to_use, tags, \
@@ -77,30 +80,27 @@ async fn backfill_populates_null_description_embeddings() -> Result<()> {
     }
 
     // Confirm baseline: both rows have NULL embedding.
-    let (n_null_before,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM skills WHERE description_embedding IS NULL",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let (n_null_before,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM skills WHERE description_embedding IS NULL")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(n_null_before, 2);
 
     // 1. dry-run reports rows but doesn't write.
     let stub: Arc<dyn Embedder> = Arc::new(StubEmbedder);
     admin::backfill_embeddings(&pool, stub.as_ref(), Some("acme"), 10, true).await?;
-    let (n_null_after_dry,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM skills WHERE description_embedding IS NULL",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let (n_null_after_dry,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM skills WHERE description_embedding IS NULL")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(n_null_after_dry, 2, "dry-run must not write");
 
     // 2. real run populates both rows.
     admin::backfill_embeddings(&pool, stub.as_ref(), Some("acme"), 10, false).await?;
-    let (n_null_after,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM skills WHERE description_embedding IS NULL",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let (n_null_after,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM skills WHERE description_embedding IS NULL")
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(n_null_after, 0, "all rows should now have an embedding");
 
     // 3. NullEmbedder is rejected up front so operators don't waste

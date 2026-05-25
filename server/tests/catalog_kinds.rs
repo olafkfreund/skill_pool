@@ -29,10 +29,17 @@ struct Harness {
 }
 
 async fn boot() -> Result<Harness> {
-    let pg = Postgres::default().with_name("pgvector/pgvector").with_tag("pg16").start().await?;
+    let pg = Postgres::default()
+        .with_name("pgvector/pgvector")
+        .with_tag("pg16")
+        .start()
+        .await?;
     let port = pg.get_host_port_ipv4(5432).await?;
     let db_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = PgPoolOptions::new().max_connections(4).connect(&db_url).await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&db_url)
+        .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     let storage_dir = tempfile::tempdir()?;
@@ -40,7 +47,14 @@ async fn boot() -> Result<Harness> {
 
     use skill_pool_server::admin;
     admin::create_tenant(&pool, "acme", "Acme", "team").await?;
-    let token = admin::create_token(&pool, "acme", "test", "tenant:admin skills:read skills:publish").await?.raw_token;
+    let token = admin::create_token(
+        &pool,
+        "acme",
+        "test",
+        "tenant:admin skills:read skills:publish",
+    )
+    .await?
+    .raw_token;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -65,7 +79,12 @@ async fn boot() -> Result<Harness> {
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    Ok(Harness { base: format!("http://{addr}"), token, _pg: pg, _storage_dir: storage_dir })
+    Ok(Harness {
+        base: format!("http://{addr}"),
+        token,
+        _pg: pg,
+        _storage_dir: storage_dir,
+    })
 }
 
 fn build_bundle(skill_md: &str) -> Bytes {
@@ -84,10 +103,14 @@ fn build_bundle(skill_md: &str) -> Bytes {
 }
 
 fn cl() -> reqwest::Client {
-    reqwest::Client::builder().timeout(Duration::from_secs(15)).build().unwrap()
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap()
 }
 fn req(c: &reqwest::Client, m: reqwest::Method, b: &str, p: &str) -> reqwest::RequestBuilder {
-    c.request(m, format!("{b}{p}")).header("x-skill-pool-tenant", "acme")
+    c.request(m, format!("{b}{p}"))
+        .header("x-skill-pool-tenant", "acme")
 }
 fn authed(b: reqwest::RequestBuilder, t: &str) -> reqwest::RequestBuilder {
     b.bearer_auth(t)
@@ -105,9 +128,17 @@ async fn publish(c: &reqwest::Client, h: &Harness, slug: &str, kind: Option<&str
     }
     let form = Form::new().text("metadata", meta.to_string()).part(
         "bundle",
-        Part::bytes(bundle.to_vec()).file_name(format!("{slug}.tar.gz")).mime_str("application/gzip")?,
+        Part::bytes(bundle.to_vec())
+            .file_name(format!("{slug}.tar.gz"))
+            .mime_str("application/gzip")?,
     );
-    let r = authed(req(c, reqwest::Method::POST, &h.base, "/v1/skills"), &h.token).multipart(form).send().await?;
+    let r = authed(
+        req(c, reqwest::Method::POST, &h.base, "/v1/skills"),
+        &h.token,
+    )
+    .multipart(form)
+    .send()
+    .await?;
     Ok(r.status().as_u16())
 }
 
@@ -123,66 +154,183 @@ async fn catalog_kinds_round_trip() -> Result<()> {
     assert_eq!(publish(&c, &h, "deploy", Some("command")).await?, 201);
 
     // 2. Default list returns only skills.
-    let list: Vec<Value> = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills"), &h.token)
-        .send().await?.json().await?;
+    let list: Vec<Value> = authed(
+        req(&c, reqwest::Method::GET, &h.base, "/v1/skills"),
+        &h.token,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     let slugs: Vec<&str> = list.iter().map(|s| s["slug"].as_str().unwrap()).collect();
     assert!(slugs.contains(&"my-skill"), "{slugs:?}");
     assert!(slugs.contains(&"my-skill-2"));
-    assert!(!slugs.contains(&"code-reviewer"), "agents must not show up in default list: {slugs:?}");
-    assert!(!slugs.contains(&"deploy"), "commands must not show up in default list: {slugs:?}");
+    assert!(
+        !slugs.contains(&"code-reviewer"),
+        "agents must not show up in default list: {slugs:?}"
+    );
+    assert!(
+        !slugs.contains(&"deploy"),
+        "commands must not show up in default list: {slugs:?}"
+    );
 
     // 3. ?kind=agent returns only agents.
-    let list: Vec<Value> = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills?kind=agent"), &h.token)
-        .send().await?.json().await?;
+    let list: Vec<Value> = authed(
+        req(&c, reqwest::Method::GET, &h.base, "/v1/skills?kind=agent"),
+        &h.token,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     let slugs: Vec<&str> = list.iter().map(|s| s["slug"].as_str().unwrap()).collect();
     assert_eq!(slugs, vec!["code-reviewer"], "{slugs:?}");
 
     // 4. ?kind=command returns only commands.
-    let list: Vec<Value> = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills?kind=command"), &h.token)
-        .send().await?.json().await?;
+    let list: Vec<Value> = authed(
+        req(&c, reqwest::Method::GET, &h.base, "/v1/skills?kind=command"),
+        &h.token,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     let slugs: Vec<&str> = list.iter().map(|s| s["slug"].as_str().unwrap()).collect();
     assert_eq!(slugs, vec!["deploy"], "{slugs:?}");
 
     // 5. ?kind=garbage → 400.
-    let r = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills?kind=garbage"), &h.token).send().await?;
+    let r = authed(
+        req(&c, reqwest::Method::GET, &h.base, "/v1/skills?kind=garbage"),
+        &h.token,
+    )
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 400);
 
     // 6. get_one with ?kind= follows the same rules. Default = skill.
-    let r = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills/code-reviewer"), &h.token).send().await?;
+    let r = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/code-reviewer",
+        ),
+        &h.token,
+    )
+    .send()
+    .await?;
     // code-reviewer is an agent — looking it up as a skill must 404.
     assert_eq!(r.status().as_u16(), 404);
-    let body: Value = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills/code-reviewer?kind=agent"), &h.token)
-        .send().await?.json().await?;
+    let body: Value = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/code-reviewer?kind=agent",
+        ),
+        &h.token,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(body["slug"], "code-reviewer");
 
     // 7. Bundle download obeys the same kind filter.
-    let r = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills/deploy/bundle.tar.gz"), &h.token).send().await?;
+    let r = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/deploy/bundle.tar.gz",
+        ),
+        &h.token,
+    )
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 404, "deploying as skill must 404");
-    let r = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills/deploy/bundle.tar.gz?kind=command"), &h.token)
-        .send().await?;
+    let r = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/deploy/bundle.tar.gz?kind=command",
+        ),
+        &h.token,
+    )
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 200);
 
     // 8. Detail endpoint also filters.
-    let r = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills/code-reviewer/detail"), &h.token).send().await?;
+    let r = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/code-reviewer/detail",
+        ),
+        &h.token,
+    )
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 404);
-    let body: Value = authed(req(&c, reqwest::Method::GET, &h.base, "/v1/skills/code-reviewer/detail?kind=agent"), &h.token)
-        .send().await?.json().await?;
+    let body: Value = authed(
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/code-reviewer/detail?kind=agent",
+        ),
+        &h.token,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(body["slug"], "code-reviewer");
 
     // 9. Decay query is skills-only (an agent never shows even if stale).
     let candidates: Vec<Value> = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/skills/decay?days=1&max_uses=99"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/skills/decay?days=1&max_uses=99",
+        ),
         &h.token,
-    ).send().await?.json().await?;
-    let slugs: Vec<&str> = candidates.iter().map(|s| s["slug"].as_str().unwrap()).collect();
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
+    let slugs: Vec<&str> = candidates
+        .iter()
+        .map(|s| s["slug"].as_str().unwrap())
+        .collect();
     assert!(!slugs.contains(&"code-reviewer"));
     assert!(!slugs.contains(&"deploy"));
 
     // 10. Bogus kind on publish → 400.
     let bundle = build_bundle("---\nname: x\ndescription: x\n---\n\nbody\n");
-    let form = Form::new().text("metadata", json!({"slug":"x","version":"1.0.0","kind":"plugin"}).to_string())
-        .part("bundle", Part::bytes(bundle.to_vec()).file_name("x.tar.gz").mime_str("application/gzip")?);
-    let r = authed(req(&c, reqwest::Method::POST, &h.base, "/v1/skills"), &h.token).multipart(form).send().await?;
+    let form = Form::new()
+        .text(
+            "metadata",
+            json!({"slug":"x","version":"1.0.0","kind":"plugin"}).to_string(),
+        )
+        .part(
+            "bundle",
+            Part::bytes(bundle.to_vec())
+                .file_name("x.tar.gz")
+                .mime_str("application/gzip")?,
+        );
+    let r = authed(
+        req(&c, reqwest::Method::POST, &h.base, "/v1/skills"),
+        &h.token,
+    )
+    .multipart(form)
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 400);
 
     Ok(())

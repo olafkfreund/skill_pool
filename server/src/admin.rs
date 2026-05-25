@@ -100,7 +100,9 @@ pub async fn set_tenant_residency(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?
+        .id;
 
     if let Some(uri) = storage_uri {
         crate::storage::Storage::from_uri(uri)
@@ -122,7 +124,10 @@ pub async fn set_tenant_residency(
     .execute(db)
     .await?;
     if result.rows_affected() != 1 {
-        return Err(anyhow!("expected 1 row updated, got {}", result.rows_affected()));
+        return Err(anyhow!(
+            "expected 1 row updated, got {}",
+            result.rows_affected()
+        ));
     }
 
     println!("residency updated for `{slug}`");
@@ -153,7 +158,9 @@ pub async fn set_session_max_age(db: &PgPool, slug: &str, max_age_secs: Option<i
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?
+        .id;
 
     let result = sqlx::query!(
         "UPDATE tenants SET session_max_age_secs = $2 WHERE id = $1",
@@ -213,8 +220,9 @@ pub async fn set_tenant_banner(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id =
-        tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{slug}` not found or suspended"))?
+        .id;
 
     // Three update modes mapped to a single SQL statement via $4 (clear flag):
     //   * clear=true  → set both to NULL unconditionally.
@@ -278,9 +286,7 @@ pub async fn set_tenant_banner(
             }
         }
     }
-    println!(
-        "\n→ CLI fetches this on next shell session (or in 24h, whichever first)."
-    );
+    println!("\n→ CLI fetches this on next shell session (or in 24h, whichever first).");
     Ok(())
 }
 
@@ -305,13 +311,19 @@ pub async fn set_tenant_rate_limits(
     clear: bool,
 ) -> Result<()> {
     if let Some(0) = rpm {
-        return Err(anyhow!("--rpm must be > 0 (use --clear to revert to plan default)"));
+        return Err(anyhow!(
+            "--rpm must be > 0 (use --clear to revert to plan default)"
+        ));
     }
     if let Some(0) = burst {
-        return Err(anyhow!("--burst must be > 0 (use --clear to revert to plan default)"));
+        return Err(anyhow!(
+            "--burst must be > 0 (use --clear to revert to plan default)"
+        ));
     }
     if !clear && rpm.is_none() && burst.is_none() {
-        return Err(anyhow!("pass --rpm, --burst, or --clear (at least one required)"));
+        return Err(anyhow!(
+            "pass --rpm, --burst, or --clear (at least one required)"
+        ));
     }
 
     let tenant = sqlx::query!(
@@ -354,9 +366,7 @@ pub async fn set_tenant_rate_limits(
     .execute(db)
     .await
     .with_context(|| {
-        format!(
-            "set rate limits for `{slug}` (rpm in 1..=100000, burst in 1..=10000)"
-        )
+        format!("set rate limits for `{slug}` (rpm in 1..=100000, burst in 1..=10000)")
     })?;
     if result.rows_affected() != 1 {
         return Err(anyhow!(
@@ -375,21 +385,32 @@ pub async fn set_tenant_rate_limits(
     .await?;
     let rpm_override = readback.rate_limit_rpm;
     let burst_override = readback.rate_limit_burst;
-    let effective =
-        crate::rate_limit::resolve_for_tenant(&plan, rpm_override, burst_override);
+    let effective = crate::rate_limit::resolve_for_tenant(&plan, rpm_override, burst_override);
 
     if clear {
         println!("rate limits cleared for `{slug}` (reverted to `{plan}` plan defaults)");
     } else {
         println!("rate limits updated for `{slug}` (plan: {plan})");
     }
-    println!("  rpm:   {}  ({})", effective.rpm,
-        if rpm_override.is_some() { "override" } else { "plan default" });
-    println!("  burst: {}  ({})", effective.burst,
-        if burst_override.is_some() { "override" } else { "plan default" });
     println!(
-        "\n→ applies immediately to new requests (no per-process cache TTL in v1)."
+        "  rpm:   {}  ({})",
+        effective.rpm,
+        if rpm_override.is_some() {
+            "override"
+        } else {
+            "plan default"
+        }
     );
+    println!(
+        "  burst: {}  ({})",
+        effective.burst,
+        if burst_override.is_some() {
+            "override"
+        } else {
+            "plan default"
+        }
+    );
+    println!("\n→ applies immediately to new requests (no per-process cache TTL in v1).");
     Ok(())
 }
 
@@ -415,7 +436,9 @@ pub async fn delete_tenant(db: &PgPool, slug: &str) -> Result<DeletedTenant> {
         .fetch_optional(db)
         .await
         .context("look up tenant by slug")?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{slug}` not found"))?
+        .id;
 
     let result = sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
         .execute(db)
@@ -469,7 +492,9 @@ async fn create_token_inner(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     let raw = generate_token();
     let hashed = hash_token(&raw);
@@ -515,7 +540,9 @@ pub async fn list_user_tokens(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     let rows = sqlx::query!(
         "SELECT id, name, token_prefix, scope, created_at, last_used_at, revoked_at \
@@ -560,7 +587,9 @@ pub async fn revoke_user_token(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     // Two-step: first check the row exists at all (so we can distinguish
     // 404 from "already revoked is fine"), then update. The UPDATE is a
@@ -604,7 +633,9 @@ pub async fn set_stack_mapping(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     sqlx::query!(
         "INSERT INTO tenant_stack_mappings (tenant_id, stack_tag, skill_slug) \
@@ -631,7 +662,9 @@ pub async fn list_stack_mappings(db: &PgPool, tenant_slug: &str) -> Result<()> {
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     let rows = sqlx::query!(
         "SELECT stack_tag, skill_slug FROM tenant_stack_mappings \
@@ -664,7 +697,9 @@ pub async fn remove_stack_mapping(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     let result = sqlx::query!(
         "DELETE FROM tenant_stack_mappings \
@@ -700,7 +735,9 @@ pub async fn set_role_mapping(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     sqlx::query!(
         "INSERT INTO tenant_role_mappings (tenant_id, idp_group, role) \
@@ -727,7 +764,9 @@ pub async fn list_role_mappings(db: &PgPool, tenant_slug: &str) -> Result<()> {
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     let rows = sqlx::query!(
         "SELECT idp_group, role FROM tenant_role_mappings \
@@ -755,7 +794,9 @@ pub async fn remove_role_mapping(db: &PgPool, tenant_slug: &str, idp_group: &str
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     let result = sqlx::query!(
         "DELETE FROM tenant_role_mappings WHERE tenant_id = $1 AND idp_group = $2",
@@ -805,7 +846,9 @@ pub async fn set_saml(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     sqlx::query!(
         "INSERT INTO tenant_saml \
@@ -857,7 +900,9 @@ pub async fn set_sso(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     sqlx::query!(
         "INSERT INTO tenant_sso (tenant_id, issuer_url, client_id, client_secret, default_role) \
@@ -917,7 +962,10 @@ pub async fn add_custom_domain(db: &PgPool, tenant_slug: &str, hostname: &str) -
     println!("  _skill-pool-verify.{host} TXT {token}");
     println!();
     println!("Then run:");
-    println!("  skill-pool-server admin custom-domain --tenant {tenant_slug} verify --id {}", row.id);
+    println!(
+        "  skill-pool-server admin custom-domain --tenant {tenant_slug} verify --id {}",
+        row.id
+    );
     Ok(())
 }
 
@@ -1026,7 +1074,9 @@ async fn lookup_tenant_id(db: &PgPool, tenant_slug: &str) -> Result<Uuid> {
     )
     .fetch_optional(db)
     .await?;
-    Ok(row.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id)
+    Ok(row
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id)
 }
 
 fn normalize_admin_hostname(raw: &str) -> Result<String> {
@@ -1088,27 +1138,31 @@ pub async fn backfill_embeddings(
         // requires a single string literal; conditional WHERE cannot be expressed
         // as a compile-time literal without duplicating the query body.
         let rows: Vec<(Uuid, String, String)> = match tenant_id {
-            Some(t) => sqlx::query_as(
-                "SELECT id, slug, description \
+            Some(t) => {
+                sqlx::query_as(
+                    "SELECT id, slug, description \
                  FROM skills \
                  WHERE tenant_id = $1 AND description_embedding IS NULL \
                  ORDER BY created_at ASC \
                  LIMIT $2",
-            )
-            .bind(t)
-            .bind(remaining)
-            .fetch_all(db)
-            .await?,
-            None => sqlx::query_as(
-                "SELECT id, slug, description \
+                )
+                .bind(t)
+                .bind(remaining)
+                .fetch_all(db)
+                .await?
+            }
+            None => {
+                sqlx::query_as(
+                    "SELECT id, slug, description \
                  FROM skills \
                  WHERE description_embedding IS NULL \
                  ORDER BY created_at ASC \
                  LIMIT $1",
-            )
-            .bind(remaining)
-            .fetch_all(db)
-            .await?,
+                )
+                .bind(remaining)
+                .fetch_all(db)
+                .await?
+            }
         };
 
         if rows.is_empty() {
@@ -1198,8 +1252,9 @@ pub async fn set_email_branding(
     )
     .fetch_optional(db)
     .await?;
-    let tenant_id =
-        tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found or suspended"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found or suspended"))?
+        .id;
 
     let enc = crate::email_branding::encrypt_password(args.smtp_password);
     let from_name = args.from_name.map(str::trim).filter(|s| !s.is_empty());
@@ -1260,7 +1315,9 @@ pub async fn email_branding_test(db: &PgPool, tenant_slug: &str, recipient: &str
     let tenant = sqlx::query!("SELECT id FROM tenants WHERE slug = $1", tenant_slug)
         .fetch_optional(db)
         .await?;
-    let tenant_id = tenant.ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?.id;
+    let tenant_id = tenant
+        .ok_or_else(|| anyhow!("tenant `{tenant_slug}` not found"))?
+        .id;
 
     let row = crate::email_branding::load_row(db, tenant_id)
         .await?
@@ -1277,9 +1334,7 @@ pub async fn email_branding_test(db: &PgPool, tenant_slug: &str, recipient: &str
             println!("test email queued to {recipient} via {}", row.smtp_url);
             Ok(())
         }
-        crate::email_branding::SendOutcome::Failed(e) => {
-            Err(anyhow!("send failed: {e}"))
-        }
+        crate::email_branding::SendOutcome::Failed(e) => Err(anyhow!("send failed: {e}")),
     }
 }
 
@@ -1468,7 +1523,11 @@ pub async fn get_project(
 
     let items = item_rows
         .into_iter()
-        .map(|r| ProjectItem { skill_slug: r.skill_slug, kind: r.kind, position: r.position })
+        .map(|r| ProjectItem {
+            skill_slug: r.skill_slug,
+            kind: r.kind,
+            position: r.position,
+        })
         .collect();
 
     Ok(Some(ProjectWithItems { project, items }))
@@ -1631,11 +1690,7 @@ pub async fn resolve_project_items_expanded(
         for nested_slug in nested {
             if q.path.contains(&nested_slug) {
                 // Cycle. Build the loop slice, normalise, and bail.
-                let start = q
-                    .path
-                    .iter()
-                    .position(|s| s == &nested_slug)
-                    .unwrap_or(0);
+                let start = q.path.iter().position(|s| s == &nested_slug).unwrap_or(0);
                 let mut loop_slugs: Vec<String> = q.path[start..].to_vec();
                 loop_slugs.push(nested_slug.clone());
                 return Err(crate::error::AppError::PluginCycle(normalise_cycle(
@@ -1820,7 +1875,8 @@ pub async fn update_project(
     .fetch_optional(db)
     .await?;
 
-    let cur = current.ok_or_else(|| anyhow!("project `{slug}` not found for tenant `{tenant_slug}`"))?;
+    let cur =
+        current.ok_or_else(|| anyhow!("project `{slug}` not found for tenant `{tenant_slug}`"))?;
 
     let new_name = patch.name.as_deref().unwrap_or(&cur.name).to_string();
     let new_desc: Option<String> = match patch.description {
@@ -1911,8 +1967,9 @@ pub async fn set_project_items(
     )
     .fetch_optional(db)
     .await?;
-    let project_id =
-        proj.ok_or_else(|| anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`"))?.id;
+    let project_id = proj
+        .ok_or_else(|| anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`"))?
+        .id;
 
     let mut tx = db.begin().await?;
 
@@ -2067,9 +2124,9 @@ pub async fn import_plan(db: &PgPool, args: ImportPlanArgs<'_>) -> Result<Plan> 
     )
     .fetch_optional(db)
     .await?;
-    let project_id = proj.ok_or_else(|| {
-        anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`")
-    })?.id;
+    let project_id = proj
+        .ok_or_else(|| anyhow!("project `{project_slug}` not found for tenant `{tenant_slug}`"))?
+        .id;
 
     let new_hash = sha256_hex(body_md);
 
@@ -2147,9 +2204,7 @@ pub async fn import_plan(db: &PgPool, args: ImportPlanArgs<'_>) -> Result<Plan> 
     )
     .fetch_one(&mut *tx)
     .await
-    .with_context(|| {
-        format!("insert plan v{next_version} for project `{project_slug}`")
-    })?;
+    .with_context(|| format!("insert plan v{next_version} for project `{project_slug}`"))?;
 
     tx.commit().await?;
     Ok(Plan {
@@ -2341,9 +2396,7 @@ pub async fn activate_plan_version(
     )
     .fetch_one(&mut *tx)
     .await
-    .with_context(|| {
-        format!("activate plan version {version} for project `{project_slug}`")
-    })?;
+    .with_context(|| format!("activate plan version {version} for project `{project_slug}`"))?;
 
     tx.commit().await?;
     Ok(Plan {
@@ -2568,7 +2621,10 @@ pub async fn fetch_url_as_markdown(
         .to_lowercase();
 
     // Stream body with a cap.
-    let bytes = response.bytes().await.with_context(|| format!("read body of {url}"))?;
+    let bytes = response
+        .bytes()
+        .await
+        .with_context(|| format!("read body of {url}"))?;
     if bytes.len() > FETCH_MAX_BYTES {
         return Err(anyhow!(
             "response body too large: {} bytes (max {FETCH_MAX_BYTES})",
@@ -2576,15 +2632,13 @@ pub async fn fetch_url_as_markdown(
         ));
     }
 
-    let body_str = String::from_utf8(bytes.to_vec())
-        .with_context(|| format!("UTF-8 decode body of {url}"))?;
+    let body_str =
+        String::from_utf8(bytes.to_vec()).with_context(|| format!("UTF-8 decode body of {url}"))?;
 
     let body_md = match content_type.as_str() {
         "text/markdown" | "text/x-markdown" | "text/plain" => body_str,
-        "text/html" => {
-            htmd::convert(&body_str)
-                .with_context(|| format!("HTML→Markdown conversion for {url}"))?
-        }
+        "text/html" => htmd::convert(&body_str)
+            .with_context(|| format!("HTML→Markdown conversion for {url}"))?,
         other => {
             return Err(anyhow!(
                 "unsupported Content-Type `{other}` for {url}; \

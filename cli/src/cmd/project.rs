@@ -45,9 +45,7 @@ pub async fn run(cfg: &Config, cmd: ProjectCmd) -> Result<()> {
         ProjectCmd::Show { slug } => show(cfg, &slug).await,
         ProjectCmd::Link { slug } => link(cfg, &slug).await,
         ProjectCmd::Unlink => unlink(cfg).await,
-        ProjectCmd::AddPlugin { slug, project } => {
-            add_plugin(cfg, &slug, project.as_deref()).await
-        }
+        ProjectCmd::AddPlugin { slug, project } => add_plugin(cfg, &slug, project.as_deref()).await,
     }
 }
 
@@ -266,9 +264,7 @@ async fn add_plugin(cfg: &Config, plugin_slug: &str, project_override: Option<&s
     client
         .set_project_items(&project_slug, &items)
         .await
-        .with_context(|| {
-            format!("update items for project `{project_slug}` on registry")
-        })?;
+        .with_context(|| format!("update items for project `{project_slug}` on registry"))?;
 
     println!(
         "added plugin `{plugin_slug}` to project `{project_slug}` ({} items total)",

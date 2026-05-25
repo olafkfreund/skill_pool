@@ -358,8 +358,7 @@ pub async fn publish(
         .fetch_all(state.db_read())
         .await?;
 
-        let found: std::collections::HashSet<(String, String, String)> =
-            rows.into_iter().collect();
+        let found: std::collections::HashSet<(String, String, String)> = rows.into_iter().collect();
         let mut missing = serde_json::Map::<String, serde_json::Value>::new();
         for (i, c) in body.contents.iter().enumerate() {
             let key = (c.slug.clone(), c.kind.clone(), c.version.clone());
@@ -880,16 +879,15 @@ fn decode_cursor(cursor: &str) -> AppResult<(DateTime<Utc>, uuid::Uuid)> {
     let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(cursor.as_bytes())
         .map_err(|_| AppError::BadRequest("invalid cursor".into()))?;
-    let s = std::str::from_utf8(&raw)
-        .map_err(|_| AppError::BadRequest("invalid cursor".into()))?;
+    let s = std::str::from_utf8(&raw).map_err(|_| AppError::BadRequest("invalid cursor".into()))?;
     let (ts_str, id_str) = s
         .split_once('|')
         .ok_or_else(|| AppError::BadRequest("invalid cursor".into()))?;
     let ts = DateTime::parse_from_rfc3339(ts_str)
         .map_err(|_| AppError::BadRequest("invalid cursor".into()))?
         .with_timezone(&Utc);
-    let id = uuid::Uuid::parse_str(id_str)
-        .map_err(|_| AppError::BadRequest("invalid cursor".into()))?;
+    let id =
+        uuid::Uuid::parse_str(id_str).map_err(|_| AppError::BadRequest("invalid cursor".into()))?;
     Ok((ts, id))
 }
 

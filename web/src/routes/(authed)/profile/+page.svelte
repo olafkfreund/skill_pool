@@ -209,9 +209,7 @@
                 class="flex items-start gap-2 {disabled
                   ? 'cursor-not-allowed opacity-50'
                   : 'cursor-pointer'}"
-                title={disabled
-                  ? 'Only tenant admins may mint this scope.'
-                  : opt.help}
+                title={disabled ? 'Only tenant admins may mint this scope.' : opt.help}
               >
                 <input
                   type="checkbox"
@@ -249,8 +247,8 @@
     <div
       class="rounded-[var(--sp-radius)] border border-dashed border-[var(--sp-border)] p-12 text-center text-sm text-[var(--sp-muted-fg)]"
     >
-      No tokens yet. Create one above to use with <code class="font-mono">skill-pool</code> from the
-      CLI or CI.
+      No tokens yet. Create one above to use with <code class="font-mono">skill-pool</code> from the CLI
+      or CI.
     </div>
   {:else if data.tokens.length > 0}
     <div
@@ -299,12 +297,7 @@
               </td>
               <td class="px-4 py-3 text-right">
                 {#if !revoked}
-                  <form
-                    method="POST"
-                    action="?/revoke"
-                    use:enhance
-                    class="inline-block"
-                  >
+                  <form method="POST" action="?/revoke" use:enhance class="inline-block">
                     <input type="hidden" name="id" value={t.id} />
                     <button
                       type="submit"

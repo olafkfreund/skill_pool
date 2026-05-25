@@ -3,7 +3,9 @@ use std::net::SocketAddr;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use skill_pool_server::{admin, config, jobs, notify, routes, state, telemetry, tracing_setup, worker};
+use skill_pool_server::{
+    admin, config, jobs, notify, routes, state, telemetry, tracing_setup, worker,
+};
 
 #[derive(Parser)]
 #[command(
@@ -311,275 +313,269 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Cmd::Serve) {
         Cmd::Serve => serve(cfg).await,
-        Cmd::Admin { action } => {
-            match action {
-                AdminAction::TenantCreate { slug, name, plan } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::create_tenant(&db, &slug, &name, &plan).await?;
-                    println!("\nnext: skill-pool-server admin token-create --tenant {slug} --name bootstrap");
-                    Ok(())
-                }
-                AdminAction::TenantSessionPolicy {
-                    slug,
-                    max_age_days,
-                    clear,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    let secs = if clear {
-                        None
-                    } else {
-                        Some(
-                            max_age_days
-                                .ok_or_else(|| {
-                                    anyhow::anyhow!("pass --max-age-days N or --clear")
-                                })? as i32
-                                * 24
-                                * 60
-                                * 60,
-                        )
-                    };
-                    admin::set_session_max_age(&db, &slug, secs).await
-                }
-                AdminAction::TenantRateLimits {
-                    slug,
-                    rpm,
-                    burst,
-                    clear,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::set_tenant_rate_limits(
-                        &db,
-                        &slug,
-                        rpm.map(|v| v as i32),
-                        burst.map(|v| v as i32),
-                        clear,
+        Cmd::Admin { action } => match action {
+            AdminAction::TenantCreate { slug, name, plan } => {
+                let db = admin::connect(&cfg).await?;
+                admin::create_tenant(&db, &slug, &name, &plan).await?;
+                println!(
+                    "\nnext: skill-pool-server admin token-create --tenant {slug} --name bootstrap"
+                );
+                Ok(())
+            }
+            AdminAction::TenantSessionPolicy {
+                slug,
+                max_age_days,
+                clear,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                let secs = if clear {
+                    None
+                } else {
+                    Some(
+                        max_age_days
+                            .ok_or_else(|| anyhow::anyhow!("pass --max-age-days N or --clear"))?
+                            as i32
+                            * 24
+                            * 60
+                            * 60,
                     )
-                    .await
-                }
-                AdminAction::TenantBannerSet {
-                    slug,
-                    text,
-                    url,
+                };
+                admin::set_session_max_age(&db, &slug, secs).await
+            }
+            AdminAction::TenantRateLimits {
+                slug,
+                rpm,
+                burst,
+                clear,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                admin::set_tenant_rate_limits(
+                    &db,
+                    &slug,
+                    rpm.map(|v| v as i32),
+                    burst.map(|v| v as i32),
                     clear,
-                } => {
-                    if !clear && text.is_none() && url.is_none() {
-                        return Err(anyhow::anyhow!(
-                            "pass --text, --url, or --clear (at least one required)"
-                        ));
-                    }
-                    let db = admin::connect(&cfg).await?;
-                    admin::set_tenant_banner(
-                        &db,
-                        &slug,
-                        text.as_deref(),
-                        url.as_deref(),
-                        clear,
-                    )
-                    .await
+                )
+                .await
+            }
+            AdminAction::TenantBannerSet {
+                slug,
+                text,
+                url,
+                clear,
+            } => {
+                if !clear && text.is_none() && url.is_none() {
+                    return Err(anyhow::anyhow!(
+                        "pass --text, --url, or --clear (at least one required)"
+                    ));
                 }
-                AdminAction::TenantResidency {
-                    slug,
-                    region,
-                    storage_uri,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::set_tenant_residency(
-                        &db,
-                        &slug,
-                        region.as_deref(),
-                        storage_uri.as_deref(),
-                    )
+                let db = admin::connect(&cfg).await?;
+                admin::set_tenant_banner(&db, &slug, text.as_deref(), url.as_deref(), clear).await
+            }
+            AdminAction::TenantResidency {
+                slug,
+                region,
+                storage_uri,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                admin::set_tenant_residency(&db, &slug, region.as_deref(), storage_uri.as_deref())
                     .await
-                }
-                AdminAction::TenantDelete { slug, confirm } => {
-                    if !confirm {
-                        use std::io::{BufRead, Write};
-                        print!(
-                            "This will DELETE tenant `{slug}` and ALL associated rows\n\
+            }
+            AdminAction::TenantDelete { slug, confirm } => {
+                if !confirm {
+                    use std::io::{BufRead, Write};
+                    print!(
+                        "This will DELETE tenant `{slug}` and ALL associated rows\n\
                              (skills, drafts, tokens, audit_events, theme, sso config, …)\n\
                              via ON DELETE CASCADE. Bundle storage is NOT touched.\n\
                              Type the slug to confirm: "
-                        );
-                        std::io::stdout().flush().ok();
-                        let stdin = std::io::stdin();
-                        let mut line = String::new();
-                        stdin.lock().read_line(&mut line)?;
-                        if line.trim() != slug {
-                            return Err(anyhow::anyhow!("confirmation mismatch; nothing deleted"));
-                        }
-                    }
-                    let db = admin::connect(&cfg).await?;
-                    let deleted = admin::delete_tenant(&db, &slug).await?;
-                    println!("tenant deleted");
-                    println!("  id:   {}", deleted.id);
-                    println!("  slug: {}", deleted.slug);
-                    println!();
-                    println!("Bundle storage was NOT swept. To reclaim space, run:");
-                    println!("  # fs://    rm -rf <storage_root>/{}", deleted.id);
-                    println!("  # s3://    aws s3 rm s3://<bucket>/{}/ --recursive", deleted.id);
-                    Ok(())
-                }
-                AdminAction::TokenCreate {
-                    tenant,
-                    name,
-                    scope,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    let created = admin::create_token(&db, &tenant, &name, &scope).await?;
-                    println!("token created");
-                    println!("  id:     {}", created.id);
-                    println!("  tenant: {tenant}");
-                    println!("  scope:  {scope}");
-                    println!();
-                    println!("RAW TOKEN (shown once — copy now):");
-                    println!("  {}", created.raw_token);
-                    Ok(())
-                }
-                AdminAction::SsoSet {
-                    tenant,
-                    issuer,
-                    client_id,
-                    client_secret,
-                    default_role,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::set_sso(
-                        &db,
-                        &tenant,
-                        &issuer,
-                        &client_id,
-                        &client_secret,
-                        &default_role,
-                    )
-                    .await
-                }
-                AdminAction::SamlSet {
-                    tenant,
-                    idp_entity_id,
-                    idp_sso_url,
-                    idp_cert_path,
-                    sp_entity_id,
-                    default_role,
-                } => {
-                    let cert = std::fs::read_to_string(&idp_cert_path)
-                        .map_err(|e| anyhow::anyhow!("read {}: {e}", idp_cert_path.display()))?;
-                    let db = admin::connect(&cfg).await?;
-                    admin::set_saml(
-                        &db,
-                        &tenant,
-                        &idp_entity_id,
-                        &idp_sso_url,
-                        &cert,
-                        sp_entity_id.as_deref(),
-                        &default_role,
-                    )
-                    .await
-                }
-                AdminAction::GroupMapSet {
-                    tenant,
-                    group,
-                    role,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::set_role_mapping(&db, &tenant, &group, &role).await
-                }
-                AdminAction::GroupMapList { tenant } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::list_role_mappings(&db, &tenant).await
-                }
-                AdminAction::GroupMapRemove { tenant, group } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::remove_role_mapping(&db, &tenant, &group).await
-                }
-                AdminAction::StackMapSet {
-                    tenant,
-                    stack,
-                    skill,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::set_stack_mapping(&db, &tenant, &stack, &skill).await
-                }
-                AdminAction::StackMapList { tenant } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::list_stack_mappings(&db, &tenant).await
-                }
-                AdminAction::StackMapRemove {
-                    tenant,
-                    stack,
-                    skill,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::remove_stack_mapping(&db, &tenant, &stack, &skill).await
-                }
-                AdminAction::EmailBrandingSet {
-                    tenant,
-                    from_addr,
-                    from_name,
-                    reply_to,
-                    smtp_url,
-                    footer_html,
-                } => {
-                    use std::io::{BufRead, Write};
-                    eprint!("SMTP password (will be encrypted at rest): ");
-                    std::io::stderr().flush().ok();
+                    );
+                    std::io::stdout().flush().ok();
                     let stdin = std::io::stdin();
                     let mut line = String::new();
                     stdin.lock().read_line(&mut line)?;
-                    let smtp_password = line.trim_end_matches(['\r', '\n']).to_string();
-                    if smtp_password.is_empty() {
-                        return Err(anyhow::anyhow!("SMTP password must not be empty"));
-                    }
-                    let db = admin::connect(&cfg).await?;
-                    admin::set_email_branding(
-                        &db,
-                        &tenant,
-                        admin::EmailBrandingArgs {
-                            from_addr: &from_addr,
-                            from_name: from_name.as_deref(),
-                            reply_to: reply_to.as_deref(),
-                            smtp_url: &smtp_url,
-                            smtp_password: &smtp_password,
-                            footer_html: footer_html.as_deref(),
-                        },
-                    )
-                    .await
-                }
-                AdminAction::EmailBrandingTest { tenant, to } => {
-                    let db = admin::connect(&cfg).await?;
-                    admin::email_branding_test(&db, &tenant, &to).await
-                }
-                AdminAction::CustomDomain { tenant, action } => {
-                    let db = admin::connect(&cfg).await?;
-                    match action {
-                        CustomDomainAction::Add { hostname } => {
-                            admin::add_custom_domain(&db, &tenant, &hostname).await
-                        }
-                        CustomDomainAction::List => {
-                            admin::list_custom_domains(&db, &tenant).await
-                        }
-                        CustomDomainAction::Verify { id } => {
-                            admin::verify_custom_domain(&db, &tenant, id).await
-                        }
-                        CustomDomainAction::Activate { id } => {
-                            admin::activate_custom_domain(&db, &tenant, id).await
-                        }
-                        CustomDomainAction::Remove { id } => {
-                            admin::remove_custom_domain(&db, &tenant, id).await
-                        }
+                    if line.trim() != slug {
+                        return Err(anyhow::anyhow!("confirmation mismatch; nothing deleted"));
                     }
                 }
-                AdminAction::BackfillEmbeddings {
-                    tenant,
-                    limit,
-                    dry_run,
-                } => {
-                    let db = admin::connect(&cfg).await?;
-                    let embedder = skill_pool_server::embedding::from_config(&cfg.embedding)?;
-                    admin::backfill_embeddings(&db, embedder.as_ref(), tenant.as_deref(), limit, dry_run)
-                        .await
+                let db = admin::connect(&cfg).await?;
+                let deleted = admin::delete_tenant(&db, &slug).await?;
+                println!("tenant deleted");
+                println!("  id:   {}", deleted.id);
+                println!("  slug: {}", deleted.slug);
+                println!();
+                println!("Bundle storage was NOT swept. To reclaim space, run:");
+                println!("  # fs://    rm -rf <storage_root>/{}", deleted.id);
+                println!(
+                    "  # s3://    aws s3 rm s3://<bucket>/{}/ --recursive",
+                    deleted.id
+                );
+                Ok(())
+            }
+            AdminAction::TokenCreate {
+                tenant,
+                name,
+                scope,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                let created = admin::create_token(&db, &tenant, &name, &scope).await?;
+                println!("token created");
+                println!("  id:     {}", created.id);
+                println!("  tenant: {tenant}");
+                println!("  scope:  {scope}");
+                println!();
+                println!("RAW TOKEN (shown once — copy now):");
+                println!("  {}", created.raw_token);
+                Ok(())
+            }
+            AdminAction::SsoSet {
+                tenant,
+                issuer,
+                client_id,
+                client_secret,
+                default_role,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                admin::set_sso(
+                    &db,
+                    &tenant,
+                    &issuer,
+                    &client_id,
+                    &client_secret,
+                    &default_role,
+                )
+                .await
+            }
+            AdminAction::SamlSet {
+                tenant,
+                idp_entity_id,
+                idp_sso_url,
+                idp_cert_path,
+                sp_entity_id,
+                default_role,
+            } => {
+                let cert = std::fs::read_to_string(&idp_cert_path)
+                    .map_err(|e| anyhow::anyhow!("read {}: {e}", idp_cert_path.display()))?;
+                let db = admin::connect(&cfg).await?;
+                admin::set_saml(
+                    &db,
+                    &tenant,
+                    &idp_entity_id,
+                    &idp_sso_url,
+                    &cert,
+                    sp_entity_id.as_deref(),
+                    &default_role,
+                )
+                .await
+            }
+            AdminAction::GroupMapSet {
+                tenant,
+                group,
+                role,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                admin::set_role_mapping(&db, &tenant, &group, &role).await
+            }
+            AdminAction::GroupMapList { tenant } => {
+                let db = admin::connect(&cfg).await?;
+                admin::list_role_mappings(&db, &tenant).await
+            }
+            AdminAction::GroupMapRemove { tenant, group } => {
+                let db = admin::connect(&cfg).await?;
+                admin::remove_role_mapping(&db, &tenant, &group).await
+            }
+            AdminAction::StackMapSet {
+                tenant,
+                stack,
+                skill,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                admin::set_stack_mapping(&db, &tenant, &stack, &skill).await
+            }
+            AdminAction::StackMapList { tenant } => {
+                let db = admin::connect(&cfg).await?;
+                admin::list_stack_mappings(&db, &tenant).await
+            }
+            AdminAction::StackMapRemove {
+                tenant,
+                stack,
+                skill,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                admin::remove_stack_mapping(&db, &tenant, &stack, &skill).await
+            }
+            AdminAction::EmailBrandingSet {
+                tenant,
+                from_addr,
+                from_name,
+                reply_to,
+                smtp_url,
+                footer_html,
+            } => {
+                use std::io::{BufRead, Write};
+                eprint!("SMTP password (will be encrypted at rest): ");
+                std::io::stderr().flush().ok();
+                let stdin = std::io::stdin();
+                let mut line = String::new();
+                stdin.lock().read_line(&mut line)?;
+                let smtp_password = line.trim_end_matches(['\r', '\n']).to_string();
+                if smtp_password.is_empty() {
+                    return Err(anyhow::anyhow!("SMTP password must not be empty"));
+                }
+                let db = admin::connect(&cfg).await?;
+                admin::set_email_branding(
+                    &db,
+                    &tenant,
+                    admin::EmailBrandingArgs {
+                        from_addr: &from_addr,
+                        from_name: from_name.as_deref(),
+                        reply_to: reply_to.as_deref(),
+                        smtp_url: &smtp_url,
+                        smtp_password: &smtp_password,
+                        footer_html: footer_html.as_deref(),
+                    },
+                )
+                .await
+            }
+            AdminAction::EmailBrandingTest { tenant, to } => {
+                let db = admin::connect(&cfg).await?;
+                admin::email_branding_test(&db, &tenant, &to).await
+            }
+            AdminAction::CustomDomain { tenant, action } => {
+                let db = admin::connect(&cfg).await?;
+                match action {
+                    CustomDomainAction::Add { hostname } => {
+                        admin::add_custom_domain(&db, &tenant, &hostname).await
+                    }
+                    CustomDomainAction::List => admin::list_custom_domains(&db, &tenant).await,
+                    CustomDomainAction::Verify { id } => {
+                        admin::verify_custom_domain(&db, &tenant, id).await
+                    }
+                    CustomDomainAction::Activate { id } => {
+                        admin::activate_custom_domain(&db, &tenant, id).await
+                    }
+                    CustomDomainAction::Remove { id } => {
+                        admin::remove_custom_domain(&db, &tenant, id).await
+                    }
                 }
             }
-        }
+            AdminAction::BackfillEmbeddings {
+                tenant,
+                limit,
+                dry_run,
+            } => {
+                let db = admin::connect(&cfg).await?;
+                let embedder = skill_pool_server::embedding::from_config(&cfg.embedding)?;
+                admin::backfill_embeddings(
+                    &db,
+                    embedder.as_ref(),
+                    tenant.as_deref(),
+                    limit,
+                    dry_run,
+                )
+                .await
+            }
+        },
     }
 }
 
@@ -639,15 +635,22 @@ async fn serve(cfg: config::Config) -> Result<()> {
     // proactively. Configurable via SKILL_POOL_DECAY_CHECK_INTERVAL_SECS;
     // set to 0 to disable (the on-demand /v1/tenant/skills/decay endpoint
     // continues to work). Shares the same shutdown channel as the worker.
-    let decay_handle = spawn_decay_sweep(state.db().clone(), cfg.decay_check_interval_secs, shutdown_rx.clone());
+    let decay_handle = spawn_decay_sweep(
+        state.db().clone(),
+        cfg.decay_check_interval_secs,
+        shutdown_rx.clone(),
+    );
 
     // Background plan-refresh sweep (PL). Wakes every 60s, queries for
     // projects whose auto-refresh interval has elapsed, and calls
     // refresh_plan_from_source for each. Bounded concurrency: at most 4
     // projects per tick. Failures are persisted by the admin fn itself;
     // the sweep logs at warn and continues.
-    let plan_refresh_handle =
-        spawn_plan_refresh_sweep(state.db().clone(), state.http_client().clone(), shutdown_rx.clone());
+    let plan_refresh_handle = spawn_plan_refresh_sweep(
+        state.db().clone(),
+        state.http_client().clone(),
+        shutdown_rx.clone(),
+    );
 
     // Background mirror sweep (#32). Wakes every 60s, queries for mirror
     // plugins whose pull_interval_secs has elapsed since last_pulled_at,
@@ -656,7 +659,11 @@ async fn serve(cfg: config::Config) -> Result<()> {
     // concurrency: at most 8 plugins per tick (idempotency key dedupes
     // the queue if the previous job is still in-flight).
     let mirror_sweep_handle = if let Some(q) = state.queue() {
-        Some(spawn_mirror_sweep(state.db().clone(), q.clone(), shutdown_rx.clone()))
+        Some(spawn_mirror_sweep(
+            state.db().clone(),
+            q.clone(),
+            shutdown_rx.clone(),
+        ))
     } else {
         None
     };
@@ -883,9 +890,7 @@ fn spawn_mirror_sweep(
     queue: std::sync::Arc<skill_pool_server::queue::Queue>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
-    use skill_pool_server::jobs::plugin_mirror::{
-        PluginMirrorJob, DEFAULT_PULL_INTERVAL_SECS,
-    };
+    use skill_pool_server::jobs::plugin_mirror::{PluginMirrorJob, DEFAULT_PULL_INTERVAL_SECS};
 
     const SWEEP_INTERVAL_SECS: u64 = 60;
     const MAX_PER_TICK: i64 = 8;

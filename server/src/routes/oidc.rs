@@ -285,9 +285,7 @@ async fn build_client(
         ClientId::new(sso.client_id.clone()),
         Some(ClientSecret::new(sso.client_secret.clone())),
     )
-    .set_redirect_uri(
-        RedirectUrl::new(redirect).map_err(|e| AppError::BadRequest(e.to_string()))?,
-    );
+    .set_redirect_uri(RedirectUrl::new(redirect).map_err(|e| AppError::BadRequest(e.to_string()))?);
 
     Ok((client, http))
 }

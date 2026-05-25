@@ -56,10 +56,14 @@ async fn boot() -> Result<Harness> {
     let acme_token = admin::create_token(&pool, "acme", "publisher", "skills:read skills:publish")
         .await?
         .raw_token;
-    let acme_admin_token =
-        admin::create_token(&pool, "acme", "admin", "tenant:admin skills:read skills:publish")
-            .await?
-            .raw_token;
+    let acme_admin_token = admin::create_token(
+        &pool,
+        "acme",
+        "admin",
+        "tenant:admin skills:read skills:publish",
+    )
+    .await?
+    .raw_token;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),

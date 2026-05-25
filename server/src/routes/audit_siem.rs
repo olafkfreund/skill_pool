@@ -77,15 +77,17 @@ pub async fn put_config(
     let normalize = |o: Option<String>| -> Option<Option<String>> {
         o.map(|s| {
             let t = s.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         })
     };
     let url = normalize(body.url);
     if let Some(Some(u)) = &url {
         if !is_acceptable_url(u) {
-            return Err(AppError::BadRequest(
-                "url must be an http(s) URL".into(),
-            ));
+            return Err(AppError::BadRequest("url must be an http(s) URL".into()));
         }
     }
     let token = normalize(body.token);

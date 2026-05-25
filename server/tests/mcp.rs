@@ -272,7 +272,10 @@ async fn mcp_protocol_round_trip() -> Result<()> {
         }),
     )
     .await?;
-    assert!(missing.get("error").is_none(), "should be tool error, got JSON-RPC error: {missing}");
+    assert!(
+        missing.get("error").is_none(),
+        "should be tool error, got JSON-RPC error: {missing}"
+    );
     assert_eq!(missing["result"]["isError"], true);
     let msg = missing["result"]["content"][0]["text"].as_str().unwrap();
     assert!(msg.contains("never-existed"), "{msg}");

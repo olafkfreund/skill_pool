@@ -241,7 +241,11 @@ async fn per_tenant_storage_uri_overrides_global_default() -> Result<()> {
             "GET bundle for {tenant} failed"
         );
         let bytes = resp.bytes().await?;
-        assert_eq!(&bytes[..2], &[0x1f, 0x8b], "expected gzip magic for {tenant}");
+        assert_eq!(
+            &bytes[..2],
+            &[0x1f, 0x8b],
+            "expected gzip magic for {tenant}"
+        );
     }
 
     Ok(())

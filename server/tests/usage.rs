@@ -133,14 +133,27 @@ fn client() -> reqwest::Client {
         .unwrap()
 }
 
-fn req(c: &reqwest::Client, m: reqwest::Method, base: &str, p: &str, t: &str) -> reqwest::RequestBuilder {
-    c.request(m, format!("{base}{p}")).header("x-skill-pool-tenant", t)
+fn req(
+    c: &reqwest::Client,
+    m: reqwest::Method,
+    base: &str,
+    p: &str,
+    t: &str,
+) -> reqwest::RequestBuilder {
+    c.request(m, format!("{base}{p}"))
+        .header("x-skill-pool-tenant", t)
 }
 fn authed(b: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
     b.bearer_auth(token)
 }
 
-async fn publish(c: &reqwest::Client, h: &Harness, tenant: &str, token: &str, slug: &str) -> Result<()> {
+async fn publish(
+    c: &reqwest::Client,
+    h: &Harness,
+    tenant: &str,
+    token: &str,
+    slug: &str,
+) -> Result<()> {
     let bundle = build_bundle(&format!(
         "---\nname: {slug}\ndescription: Pattern about {slug}.\n---\n\n# {slug}\n"
     ));
@@ -151,10 +164,13 @@ async fn publish(c: &reqwest::Client, h: &Harness, tenant: &str, token: &str, sl
             .file_name(format!("{slug}.tar.gz"))
             .mime_str("application/gzip")?,
     );
-    let resp = authed(req(c, reqwest::Method::POST, &h.base, "/v1/skills", tenant), token)
-        .multipart(form)
-        .send()
-        .await?;
+    let resp = authed(
+        req(c, reqwest::Method::POST, &h.base, "/v1/skills", tenant),
+        token,
+    )
+    .multipart(form)
+    .send()
+    .await?;
     assert_eq!(resp.status().as_u16(), 201, "{}", resp.text().await?);
     Ok(())
 }
@@ -171,44 +187,88 @@ async fn usage_telemetry_end_to_end() -> Result<()> {
     // 1. Download alpha twice + view it once.
     for _ in 0..2 {
         let r = authed(
-            req(&c, reqwest::Method::GET, &h.base, "/v1/skills/alpha/bundle.tar.gz", "acme"),
+            req(
+                &c,
+                reqwest::Method::GET,
+                &h.base,
+                "/v1/skills/alpha/bundle.tar.gz",
+                "acme",
+            ),
             &h.acme_admin,
-        ).send().await?;
+        )
+        .send()
+        .await?;
         assert_eq!(r.status().as_u16(), 200);
     }
     let r = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/skills/alpha/skill-md", "acme"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/alpha/skill-md",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?;
+    )
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 200);
     // Beta downloaded once.
     let r = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/skills/beta/bundle.tar.gz", "acme"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/beta/bundle.tar.gz",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?;
+    )
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 200);
     // Globex downloads gamma — must NOT leak into acme telemetry.
     for _ in 0..5 {
         let r = authed(
-            req(&c, reqwest::Method::GET, &h.base, "/v1/skills/gamma/bundle.tar.gz", "globex"),
+            req(
+                &c,
+                reqwest::Method::GET,
+                &h.base,
+                "/v1/skills/gamma/bundle.tar.gz",
+                "globex",
+            ),
             &h.globex_admin,
-        ).send().await?;
+        )
+        .send()
+        .await?;
         assert_eq!(r.status().as_u16(), 200);
     }
 
     // 2. The events table reflects what happened.
     let (acme_count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM skill_usage_events e \
-         JOIN tenants t ON t.id = e.tenant_id WHERE t.slug = 'acme'"
-    ).fetch_one(&h.db).await?;
+         JOIN tenants t ON t.id = e.tenant_id WHERE t.slug = 'acme'",
+    )
+    .fetch_one(&h.db)
+    .await?;
     // 2 alpha downloads + 1 alpha view + 1 beta download = 4 events.
     assert_eq!(acme_count, 4, "expected 4 acme events, got {acme_count}");
 
     // 3. Top endpoint surfaces alpha first (3 events), then beta (1).
     let top: Vec<Value> = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/usage/top?days=7&limit=10", "acme"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/usage/top?days=7&limit=10",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(top[0]["slug"], "alpha", "{top:?}");
     assert_eq!(top[0]["downloads"], 2);
     assert_eq!(top[0]["views"], 1);
@@ -216,13 +276,26 @@ async fn usage_telemetry_end_to_end() -> Result<()> {
     assert_eq!(top[1]["slug"], "beta");
     assert_eq!(top[1]["total"], 1);
     // Gamma (globex) must NOT appear.
-    assert!(top.iter().all(|r| r["slug"] != "gamma"), "tenant leak: {top:?}");
+    assert!(
+        top.iter().all(|r| r["slug"] != "gamma"),
+        "tenant leak: {top:?}"
+    );
 
     // 4. Timeline reflects today's totals + zero-fills past days.
     let timeline: Vec<Value> = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/usage/timeline?days=7", "acme"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/usage/timeline?days=7",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(timeline.len(), 7, "expected 7 daily buckets: {timeline:?}");
     let today = timeline.last().unwrap();
     assert_eq!(today["downloads"], 3);
@@ -240,12 +313,24 @@ async fn usage_telemetry_end_to_end() -> Result<()> {
          WHERE id = (SELECT id FROM skill_usage_events \
                      WHERE tenant_id = (SELECT id FROM tenants WHERE slug = 'acme') \
                      AND event_kind = 'view' \
-                     LIMIT 1)"
-    ).execute(&h.db).await?;
+                     LIMIT 1)",
+    )
+    .execute(&h.db)
+    .await?;
     let timeline: Vec<Value> = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/usage/timeline?days=7", "acme"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/usage/timeline?days=7",
+            "acme",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     // The 4th-from-end bucket (3 days ago) should now have views=1.
     let three_days_ago = &timeline[timeline.len() - 4];
     assert_eq!(three_days_ago["views"], 1, "{timeline:?}");
@@ -255,9 +340,17 @@ async fn usage_telemetry_end_to_end() -> Result<()> {
 
     // 6. Non-admin caller → 403.
     let resp = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/usage/timeline", "acme"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/usage/timeline",
+            "acme",
+        ),
         &h.acme_reader,
-    ).send().await?;
+    )
+    .send()
+    .await?;
     assert_eq!(resp.status().as_u16(), 403);
 
     // 7. CLI-driven `POST /v1/usage` lands a `view` event in the same
@@ -267,7 +360,9 @@ async fn usage_telemetry_end_to_end() -> Result<()> {
         "SELECT COUNT(*) FROM skill_usage_events e \
          JOIN tenants t ON t.id = e.tenant_id \
          WHERE t.slug = 'acme' AND e.event_kind = 'view'",
-    ).fetch_one(&h.db).await?;
+    )
+    .fetch_one(&h.db)
+    .await?;
     let resp = authed(
         req(&c, reqwest::Method::POST, &h.base, "/v1/usage", "acme"),
         &h.acme_reader,
@@ -285,8 +380,14 @@ async fn usage_telemetry_end_to_end() -> Result<()> {
         "SELECT COUNT(*) FROM skill_usage_events e \
          JOIN tenants t ON t.id = e.tenant_id \
          WHERE t.slug = 'acme' AND e.event_kind = 'view'",
-    ).fetch_one(&h.db).await?;
-    assert_eq!(after.0, before.0 + 1, "CLI usage POST must add one view row");
+    )
+    .fetch_one(&h.db)
+    .await?;
+    assert_eq!(
+        after.0,
+        before.0 + 1,
+        "CLI usage POST must add one view row"
+    );
 
     // 8. Unknown slug → 404 so a stale manifest entry surfaces.
     let resp = authed(

@@ -20,7 +20,8 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
     const candidates = await listDecayCandidates(auth, { days, maxUses, limit: 200 });
     return { candidates, days, maxUses };
   } catch (e) {
-    const error = e instanceof ApiError ? `Could not load: ${e.message}` : 'Could not load candidates.';
+    const error =
+      e instanceof ApiError ? `Could not load: ${e.message}` : 'Could not load candidates.';
     return { candidates: [], days, maxUses, error };
   }
 };

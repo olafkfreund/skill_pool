@@ -64,10 +64,9 @@ async fn boot() -> Result<Harness> {
     .await?
     .raw_token;
 
-    let (tenant_id,): (uuid::Uuid,) =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = 'acme'")
-            .fetch_one(&pool)
-            .await?;
+    let (tenant_id,): (uuid::Uuid,) = sqlx::query_as("SELECT id FROM tenants WHERE slug = 'acme'")
+        .fetch_one(&pool)
+        .await?;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -132,7 +131,12 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
 
     // 1. Initial GET → 404 (no row yet).
     let r = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/email-branding"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/email-branding",
+        ),
         &h.acme_admin,
     )
     .send()
@@ -142,7 +146,12 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
     // 2. PUT branding — full payload.
     let password = "super-secret-smtp-password";
     let r = authed(
-        req(&c, reqwest::Method::PUT, &h.base, "/v1/tenant/email-branding"),
+        req(
+            &c,
+            reqwest::Method::PUT,
+            &h.base,
+            "/v1/tenant/email-branding",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -169,7 +178,12 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
 
     // 3. GET → 200, same shape, still no password.
     let r = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/email-branding"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/email-branding",
+        ),
         &h.acme_admin,
     )
     .send()
@@ -183,12 +197,11 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
     assert!(!body_str.contains(password), "GET leaked password");
 
     // 4. Verify the stored ciphertext is not the plaintext.
-    let (enc,): (Vec<u8>,) = sqlx::query_as(
-        "SELECT smtp_password_enc FROM tenant_email_branding WHERE tenant_id = $1",
-    )
-    .bind(h.tenant_id)
-    .fetch_one(&h.db)
-    .await?;
+    let (enc,): (Vec<u8>,) =
+        sqlx::query_as("SELECT smtp_password_enc FROM tenant_email_branding WHERE tenant_id = $1")
+            .bind(h.tenant_id)
+            .fetch_one(&h.db)
+            .await?;
     assert!(!enc.is_empty());
     // The plaintext bytes must not appear anywhere in the stored blob.
     let pt_bytes = password.as_bytes();
@@ -199,7 +212,12 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
 
     // 5. Validation — bad from_addr → 400.
     let r = authed(
-        req(&c, reqwest::Method::PUT, &h.base, "/v1/tenant/email-branding"),
+        req(
+            &c,
+            reqwest::Method::PUT,
+            &h.base,
+            "/v1/tenant/email-branding",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -213,7 +231,12 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
 
     // 6. Validation — bad scheme → 400.
     let r = authed(
-        req(&c, reqwest::Method::PUT, &h.base, "/v1/tenant/email-branding"),
+        req(
+            &c,
+            reqwest::Method::PUT,
+            &h.base,
+            "/v1/tenant/email-branding",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -227,7 +250,12 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
 
     // 7. /test with no recipient validity → 400.
     let r = authed(
-        req(&c, reqwest::Method::POST, &h.base, "/v1/tenant/email-branding/test"),
+        req(
+            &c,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/email-branding/test",
+        ),
         &h.acme_admin,
     )
     .json(&json!({ "recipient": "not-an-email" }))
@@ -239,7 +267,12 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
     //    actual SMTP send will fail because no relay is running — we
     //    just need the 200 + structured failure result).
     let r = authed(
-        req(&c, reqwest::Method::POST, &h.base, "/v1/tenant/email-branding/test"),
+        req(
+            &c,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/email-branding/test",
+        ),
         &h.acme_admin,
     )
     .json(&json!({ "recipient": "ops@acme.example.com" }))
@@ -265,7 +298,12 @@ async fn email_branding_round_trip_encrypts_and_masks_password() -> Result<()> {
     .await?;
     assert_eq!(r.status().as_u16(), 204);
     let r = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/email-branding"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/email-branding",
+        ),
         &h.acme_admin,
     )
     .send()
@@ -286,9 +324,7 @@ async fn non_admin_caller_is_forbidden() -> Result<()> {
         .await?
         .raw_token;
 
-    for path in [
-        "/v1/tenant/email-branding",
-    ] {
+    for path in ["/v1/tenant/email-branding"] {
         let r = authed(req(&c, reqwest::Method::GET, &h.base, path), &viewer)
             .send()
             .await?;

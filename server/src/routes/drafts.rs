@@ -623,9 +623,7 @@ pub async fn patch(
         None => None,
     };
     let description = match body.description.as_deref().map(str::trim) {
-        Some("") => {
-            return Err(AppError::BadRequest("description cannot be empty".into()))
-        }
+        Some("") => return Err(AppError::BadRequest("description cannot be empty".into())),
         Some(s) => Some(s.to_string()),
         None => None,
     };
@@ -636,12 +634,20 @@ pub async fn patch(
     let tags_changed = body.tags.is_some();
     let notes_changed = body.notes.is_some();
 
-    let when_to_use: Option<Option<String>> = body
-        .when_to_use
-        .map(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
-    let notes: Option<Option<String>> = body
-        .notes
-        .map(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
+    let when_to_use: Option<Option<String>> = body.when_to_use.map(|s| {
+        if s.trim().is_empty() {
+            None
+        } else {
+            Some(s.trim().to_string())
+        }
+    });
+    let notes: Option<Option<String>> = body.notes.map(|s| {
+        if s.trim().is_empty() {
+            None
+        } else {
+            Some(s.trim().to_string())
+        }
+    });
 
     // JUSTIFIED runtime-checked: `$5::int = 0` and `$8::int = 0` flag
     // parameters require explicit PostgreSQL casts that `query!` cannot
@@ -776,4 +782,3 @@ fn require_scope(scope: &str, needed: &str) -> AppResult<()> {
 fn bundle_to_app_err(e: BundleError) -> AppError {
     AppError::BadRequest(e.to_string())
 }
-

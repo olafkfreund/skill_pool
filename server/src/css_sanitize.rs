@@ -113,7 +113,9 @@ pub fn sanitize(raw: &[u8]) -> Result<SanitizedCss, SanitizeError> {
 
     scan_for_denied(&stripped_lower)?;
 
-    Ok(SanitizedCss { bytes: raw.to_vec() })
+    Ok(SanitizedCss {
+        bytes: raw.to_vec(),
+    })
 }
 
 /// Strip `/* ... */` comments and lowercase the remainder. Unterminated
@@ -481,7 +483,10 @@ mod tests {
     #[test]
     fn rejects_too_large() {
         let big = vec![b'a'; MAX_CSS_BYTES + 1];
-        assert_eq!(sanitize(&big).unwrap_err(), SanitizeError::TooLarge(MAX_CSS_BYTES + 1));
+        assert_eq!(
+            sanitize(&big).unwrap_err(),
+            SanitizeError::TooLarge(MAX_CSS_BYTES + 1)
+        );
     }
 
     #[test]

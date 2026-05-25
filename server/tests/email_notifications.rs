@@ -114,10 +114,14 @@ fn build_bundle(skill_md: &str) -> Bytes {
 }
 
 fn cl() -> reqwest::Client {
-    reqwest::Client::builder().timeout(Duration::from_secs(15)).build().unwrap()
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap()
 }
 fn req(c: &reqwest::Client, m: reqwest::Method, b: &str, p: &str) -> reqwest::RequestBuilder {
-    c.request(m, format!("{b}{p}")).header("x-skill-pool-tenant", "acme")
+    c.request(m, format!("{b}{p}"))
+        .header("x-skill-pool-tenant", "acme")
 }
 fn authed(b: reqwest::RequestBuilder, t: &str) -> reqwest::RequestBuilder {
     b.bearer_auth(t)
@@ -130,7 +134,12 @@ async fn email_config_round_trip_and_failed_delivery_is_audit_logged() -> Result
 
     // 1. PUT SMTP-only config.
     let r = authed(
-        req(&c, reqwest::Method::PUT, &h.base, "/v1/tenant/notifications"),
+        req(
+            &c,
+            reqwest::Method::PUT,
+            &h.base,
+            "/v1/tenant/notifications",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -138,12 +147,22 @@ async fn email_config_round_trip_and_failed_delivery_is_audit_logged() -> Result
         "smtp_from": "skill-pool <noreply@example.com>",
         "smtp_to": "curators@example.com",
     }))
-    .send().await?;
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 200, "{}", r.text().await?);
     let body: Value = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/notifications"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/notifications",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(body["smtp_url"], "smtp://user:pass@127.0.0.1:2525");
     assert_eq!(body["smtp_from"], "skill-pool <noreply@example.com>");
     assert_eq!(body["smtp_to"], "curators@example.com");
@@ -152,15 +171,30 @@ async fn email_config_round_trip_and_failed_delivery_is_audit_logged() -> Result
 
     // 2. Partial — change only smtp_to.
     let _ = authed(
-        req(&c, reqwest::Method::PUT, &h.base, "/v1/tenant/notifications"),
+        req(
+            &c,
+            reqwest::Method::PUT,
+            &h.base,
+            "/v1/tenant/notifications",
+        ),
         &h.acme_admin,
     )
     .json(&json!({ "smtp_to": "different@example.com" }))
-    .send().await?;
+    .send()
+    .await?;
     let body: Value = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/notifications"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/notifications",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert_eq!(body["smtp_to"], "different@example.com");
     // Untouched fields preserved.
     assert_eq!(body["smtp_url"], "smtp://user:pass@127.0.0.1:2525");
@@ -168,32 +202,59 @@ async fn email_config_round_trip_and_failed_delivery_is_audit_logged() -> Result
 
     // 3. Empty string clears.
     let _ = authed(
-        req(&c, reqwest::Method::PUT, &h.base, "/v1/tenant/notifications"),
+        req(
+            &c,
+            reqwest::Method::PUT,
+            &h.base,
+            "/v1/tenant/notifications",
+        ),
         &h.acme_admin,
     )
     .json(&json!({ "smtp_to": "" }))
-    .send().await?;
+    .send()
+    .await?;
     let body: Value = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/tenant/notifications"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/notifications",
+        ),
         &h.acme_admin,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
     assert!(body.get("smtp_to").is_none_or(|v| v.is_null()));
 
     // Restore for the rest of the test.
     let _ = authed(
-        req(&c, reqwest::Method::PUT, &h.base, "/v1/tenant/notifications"),
+        req(
+            &c,
+            reqwest::Method::PUT,
+            &h.base,
+            "/v1/tenant/notifications",
+        ),
         &h.acme_admin,
     )
     .json(&json!({ "smtp_to": "curators@example.com" }))
-    .send().await?;
+    .send()
+    .await?;
 
     // 4. Malformed smtp_url → 400.
     let r = authed(
-        req(&c, reqwest::Method::PUT, &h.base, "/v1/tenant/notifications"),
+        req(
+            &c,
+            reqwest::Method::PUT,
+            &h.base,
+            "/v1/tenant/notifications",
+        ),
         &h.acme_admin,
     )
     .json(&json!({ "smtp_url": "ftp://nope" }))
-    .send().await?;
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 400);
 
     // 5. Create a draft — the spawned task tries to deliver, fails (no
@@ -203,14 +264,23 @@ async fn email_config_round_trip_and_failed_delivery_is_audit_logged() -> Result
     let meta = json!({ "slug": "foo", "origin": "cli" });
     let form = Form::new().text("metadata", meta.to_string()).part(
         "bundle",
-        Part::bytes(bundle.to_vec()).file_name("foo.tar.gz").mime_str("application/gzip")?,
+        Part::bytes(bundle.to_vec())
+            .file_name("foo.tar.gz")
+            .mime_str("application/gzip")?,
     );
     let r = authed(
         req(&c, reqwest::Method::POST, &h.base, "/v1/drafts"),
         &h.acme_admin,
     )
-    .multipart(form).send().await?;
-    assert_eq!(r.status().as_u16(), 201, "draft create blocked on email: {}", r.text().await?);
+    .multipart(form)
+    .send()
+    .await?;
+    assert_eq!(
+        r.status().as_u16(),
+        201,
+        "draft create blocked on email: {}",
+        r.text().await?
+    );
 
     // Poll the audit log for the email delivery row (best-effort, up to 5s).
     let mut attempts = 0;

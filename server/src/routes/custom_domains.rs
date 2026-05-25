@@ -66,14 +66,14 @@ const COLS: &str =
     "id, hostname, status, verification_token, last_checked_at, last_error, activated_at, created_at";
 
 type CustomDomainRow = (
-    Uuid,                     // id
-    String,                   // hostname
-    String,                   // status
-    String,                   // verification_token
-    Option<DateTime<Utc>>,    // last_checked_at
-    Option<String>,           // last_error
-    Option<DateTime<Utc>>,    // activated_at
-    DateTime<Utc>,            // created_at
+    Uuid,                  // id
+    String,                // hostname
+    String,                // status
+    String,                // verification_token
+    Option<DateTime<Utc>>, // last_checked_at
+    Option<String>,        // last_error
+    Option<DateTime<Utc>>, // activated_at
+    DateTime<Utc>,         // created_at
 );
 
 fn row_to_wire(row: CustomDomainRow) -> CustomDomain {
@@ -203,32 +203,36 @@ pub async fn verify(
     let outcome = lookup_verification_txt(&hostname, &token).await;
 
     let updated: CustomDomainRow = match outcome {
-        Ok(()) => sqlx::query_as(&format!(
-            "UPDATE tenant_custom_domains \
+        Ok(()) => {
+            sqlx::query_as(&format!(
+                "UPDATE tenant_custom_domains \
                 SET status = 'verified', \
                     last_checked_at = now(), \
                     last_error = NULL, \
                     activated_at = COALESCE(activated_at, now()) \
               WHERE id = $1 AND tenant_id = $2 \
               RETURNING {COLS}"
-        ))
-        .bind(id)
-        .bind(caller.tenant.tenant_id)
-        .fetch_one(&mut *tx)
-        .await?,
-        Err(err) => sqlx::query_as(&format!(
-            "UPDATE tenant_custom_domains \
+            ))
+            .bind(id)
+            .bind(caller.tenant.tenant_id)
+            .fetch_one(&mut *tx)
+            .await?
+        }
+        Err(err) => {
+            sqlx::query_as(&format!(
+                "UPDATE tenant_custom_domains \
                 SET status = 'failed', \
                     last_checked_at = now(), \
                     last_error = $3 \
               WHERE id = $1 AND tenant_id = $2 \
               RETURNING {COLS}"
-        ))
-        .bind(id)
-        .bind(caller.tenant.tenant_id)
-        .bind(err.clone())
-        .fetch_one(&mut *tx)
-        .await?,
+            ))
+            .bind(id)
+            .bind(caller.tenant.tenant_id)
+            .bind(err.clone())
+            .fetch_one(&mut *tx)
+            .await?
+        }
     };
 
     tx.commit().await?;
@@ -321,10 +325,7 @@ pub async fn remove(
 /// pointing `evil.example.com` at our backend won't trigger an ACME
 /// request because this endpoint will 404 and the proxy will refuse to
 /// continue.
-pub async fn cert_ok(
-    State(state): State<AppState>,
-    Path(host): Path<String>,
-) -> StatusCode {
+pub async fn cert_ok(State(state): State<AppState>, Path(host): Path<String>) -> StatusCode {
     let host = normalize_host(&host);
     if state.custom_domain_tenant(&host).await.is_some() {
         StatusCode::OK
@@ -372,10 +373,7 @@ fn validate_hostname(raw: &str) -> AppResult<String> {
                 "hostname labels must be 1..63 characters".into(),
             ));
         }
-        if !label
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-        {
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return Err(AppError::BadRequest(
                 "hostname labels must be ASCII alphanumeric or `-`".into(),
             ));
@@ -422,9 +420,7 @@ async fn lookup_verification_txt(hostname: &str, expected: &str) -> Result<(), S
     // resolver still works.
     let resolver = match TokioAsyncResolver::tokio_from_system_conf() {
         Ok(r) => r,
-        Err(_) => {
-            TokioAsyncResolver::tokio(ResolverConfig::cloudflare(), ResolverOpts::default())
-        }
+        Err(_) => TokioAsyncResolver::tokio(ResolverConfig::cloudflare(), ResolverOpts::default()),
     };
 
     let txt = match resolver.txt_lookup(&lookup_name).await {

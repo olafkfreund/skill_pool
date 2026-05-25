@@ -182,8 +182,13 @@ pub async fn run_mirror(db: &PgPool, storage: &Storage, job: &PluginMirrorJob) -
     .await
     .context("fetch plugin row")?;
 
-    let (slug, upstream_url_opt) = row_opt
-        .ok_or_else(|| anyhow!("plugin {}/{} not found or not a mirror", job.tenant_id, job.plugin_id))?;
+    let (slug, upstream_url_opt) = row_opt.ok_or_else(|| {
+        anyhow!(
+            "plugin {}/{} not found or not a mirror",
+            job.tenant_id,
+            job.plugin_id
+        )
+    })?;
 
     let row = PluginRow {
         slug,
@@ -204,12 +209,11 @@ pub async fn run_mirror(db: &PgPool, storage: &Storage, job: &PluginMirrorJob) -
     // 3. Clone or fetch — runs in a blocking thread pool since libgit2 is sync.
     let upstream_url_owned = upstream_url.clone();
     let repo_path_owned = repo_path.clone();
-    let head_commit_id = tokio::task::spawn_blocking(move || {
-        clone_or_fetch(&upstream_url_owned, &repo_path_owned)
-    })
-    .await
-    .context("spawn_blocking for git clone/fetch")?
-    .context("git clone/fetch")?;
+    let head_commit_id =
+        tokio::task::spawn_blocking(move || clone_or_fetch(&upstream_url_owned, &repo_path_owned))
+            .await
+            .context("spawn_blocking for git clone/fetch")?
+            .context("git clone/fetch")?;
 
     // 4. Read manifest from the fetched tree (blocking).
     let repo_path_owned = repo_path.clone();
@@ -330,9 +334,7 @@ fn clone_or_fetch(upstream_url: &str, repo_path: &std::path::Path) -> Result<git
         let repo = Repository::open_bare(repo_path)
             .with_context(|| format!("open existing bare repo {}", repo_path.display()))?;
         {
-            let mut remote = repo
-                .find_remote("origin")
-                .context("find origin remote")?;
+            let mut remote = repo.find_remote("origin").context("find origin remote")?;
             remote
                 .fetch(&["HEAD:refs/heads/main"], Some(&mut fetch_opts), None)
                 .context("git fetch")?;
@@ -368,9 +370,7 @@ fn read_manifest_from_commit(repo_path: &std::path::Path, commit_id: git2::Oid) 
 
     let repo = Repository::open_bare(repo_path)
         .with_context(|| format!("open bare repo {}", repo_path.display()))?;
-    let commit = repo
-        .find_commit(commit_id)
-        .context("find HEAD commit")?;
+    let commit = repo.find_commit(commit_id).context("find HEAD commit")?;
     let tree = commit.tree().context("get commit tree")?;
 
     // Traverse the tree to find `.claude-plugin/plugin.json`.

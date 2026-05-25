@@ -37,8 +37,8 @@ pub fn init() -> Result<()> {
         let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
             .unwrap_or_else(|_| "http://localhost:4318".to_owned());
 
-        let service_name = std::env::var("OTEL_SERVICE_NAME")
-            .unwrap_or_else(|_| "skill-pool-server".to_owned());
+        let service_name =
+            std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "skill-pool-server".to_owned());
 
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_http()
@@ -79,7 +79,8 @@ pub fn init() -> Result<()> {
 /// [`tracing_opentelemetry::OpenTelemetryLayer`] keyed on the provider stashed
 /// by [`init`]. Call [`init`] before this.
 #[cfg(feature = "otlp")]
-pub fn otel_layer<S>() -> tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::Tracer>
+pub fn otel_layer<S>(
+) -> tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::Tracer>
 where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {

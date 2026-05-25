@@ -16,9 +16,7 @@
     Math.max(1, ...data.timeline.map((b: TimelineBucket) => b.downloads + b.views)),
   );
 
-  const barWidth = $derived(
-    data.timeline.length > 0 ? innerW / data.timeline.length : 0,
-  );
+  const barWidth = $derived(data.timeline.length > 0 ? innerW / data.timeline.length : 0);
 
   function fmtDay(iso: string): string {
     try {
@@ -38,9 +36,9 @@
     <BarChart3 size="22" /> Usage
   </h1>
   <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-    Catalog activity over the last <strong>{data.days}</strong> days. Every bundle download
-    is a <em>download</em>; every SKILL.md fetch (e.g. the inbox preview or the MCP `get_skill` tool)
-    is a <em>view</em>. Tune the window with
+    Catalog activity over the last <strong>{data.days}</strong> days. Every bundle download is a
+    <em>download</em>; every SKILL.md fetch (e.g. the inbox preview or the MCP `get_skill` tool) is
+    a <em>view</em>. Tune the window with
     <code class="rounded bg-[var(--sp-muted)] px-1">?days=7</code> or
     <code class="rounded bg-[var(--sp-muted)] px-1">?days=90</code>.
   </p>
@@ -120,7 +118,7 @@
         <g>
           <!-- Stacked: downloads on bottom (primary), views on top (accent) -->
           <rect
-            x={x}
+            {x}
             y={PAD.top + innerH - downloadsH}
             width={w}
             height={downloadsH}
@@ -129,7 +127,7 @@
             <title>{fmtDay(b.day)}: {b.downloads} downloads, {b.views} views</title>
           </rect>
           <rect
-            x={x}
+            {x}
             y={PAD.top + innerH - downloadsH - viewsH}
             width={w}
             height={viewsH}
@@ -140,13 +138,7 @@
           </rect>
           {#if total === 0 && data.timeline.length <= 14}
             <!-- Faint marker for empty days when the window is short. -->
-            <rect
-              x={x}
-              y={PAD.top + innerH - 2}
-              width={w}
-              height="2"
-              fill="var(--sp-border)"
-            />
+            <rect {x} y={PAD.top + innerH - 2} width={w} height="2" fill="var(--sp-border)" />
           {/if}
         </g>
         <!-- X-axis labels: show ~every 5th day to avoid overlap. -->
@@ -163,10 +155,7 @@
     </svg>
     <div class="mt-3 flex flex-wrap items-center gap-4 text-xs text-[var(--sp-muted-fg)]">
       <span class="inline-flex items-center gap-1.5">
-        <span
-          class="inline-block h-3 w-3 rounded-sm"
-          style="background: var(--sp-primary);"
-        ></span>
+        <span class="inline-block h-3 w-3 rounded-sm" style="background: var(--sp-primary);"></span>
         <Download size="11" /> Downloads
       </span>
       <span class="inline-flex items-center gap-1.5">
@@ -181,7 +170,9 @@
 </section>
 
 <section>
-  <h2 class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wider text-[var(--sp-muted-fg)] uppercase">
+  <h2
+    class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wider text-[var(--sp-muted-fg)] uppercase"
+  >
     <Trophy size="13" /> Top skills · last {data.days} days
   </h2>
   {#if data.top.length === 0}

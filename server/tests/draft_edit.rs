@@ -57,10 +57,9 @@ async fn boot() -> Result<Harness> {
     let acme_token = admin::create_token(&pool, "acme", "test", "skills:read skills:publish")
         .await?
         .raw_token;
-    let globex_token =
-        admin::create_token(&pool, "globex", "test", "skills:read skills:publish")
-            .await?
-            .raw_token;
+    let globex_token = admin::create_token(&pool, "globex", "test", "skills:read skills:publish")
+        .await?
+        .raw_token;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -116,8 +115,15 @@ fn client() -> reqwest::Client {
         .unwrap()
 }
 
-fn req(c: &reqwest::Client, m: reqwest::Method, base: &str, p: &str, t: &str) -> reqwest::RequestBuilder {
-    c.request(m, format!("{base}{p}")).header("x-skill-pool-tenant", t)
+fn req(
+    c: &reqwest::Client,
+    m: reqwest::Method,
+    base: &str,
+    p: &str,
+    t: &str,
+) -> reqwest::RequestBuilder {
+    c.request(m, format!("{base}{p}"))
+        .header("x-skill-pool-tenant", t)
 }
 fn authed(b: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
     b.bearer_auth(token)
@@ -274,7 +280,12 @@ async fn patch_draft_round_trip() -> Result<()> {
     .json(&json!({ "version": "1.0.0" }))
     .send()
     .await?;
-    assert_eq!(resp.status().as_u16(), 200, "publish failed: {}", resp.text().await?);
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "publish failed: {}",
+        resp.text().await?
+    );
     let resp = authed(
         req(
             &c,

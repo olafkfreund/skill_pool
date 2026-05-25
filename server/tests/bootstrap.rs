@@ -185,14 +185,12 @@ async fn publish_skill(
         "---\nname: {slug}\ndescription: {description}\ntags:\n{tag_yaml}\n---\n\n# {slug}\n"
     ));
     let meta = json!({ "slug": slug, "version": "1.0.0" });
-    let form = Form::new()
-        .text("metadata", meta.to_string())
-        .part(
-            "bundle",
-            Part::bytes(bundle.to_vec())
-                .file_name(format!("{slug}.tar.gz"))
-                .mime_str("application/gzip")?,
-        );
+    let form = Form::new().text("metadata", meta.to_string()).part(
+        "bundle",
+        Part::bytes(bundle.to_vec())
+            .file_name(format!("{slug}.tar.gz"))
+            .mime_str("application/gzip")?,
+    );
     let resp = authed(
         req(c, reqwest::Method::POST, &h.base, "/v1/skills", tenant),
         token,
@@ -216,14 +214,11 @@ async fn bootstrap_get(
     query: &str,
 ) -> Result<Value> {
     let url = format!("/v1/bootstrap?{query}");
-    let body = authed(
-        req(c, reqwest::Method::GET, &h.base, &url, tenant),
-        token,
-    )
-    .send()
-    .await?
-    .json()
-    .await?;
+    let body = authed(req(c, reqwest::Method::GET, &h.base, &url, tenant), token)
+        .send()
+        .await?
+        .json()
+        .await?;
     Ok(body)
 }
 
@@ -280,7 +275,10 @@ async fn bootstrap_falls_back_to_tag_and_semantic() -> Result<()> {
     // to tier 2 (matched the `rust` tag) — semantic also picked it up but
     // dedup keeps it in the higher tier.
     let tb = &body["tier_breakdown"];
-    assert!(tb.is_object(), "expected tier_breakdown with debug=1: {body}");
+    assert!(
+        tb.is_object(),
+        "expected tier_breakdown with debug=1: {body}"
+    );
     let curated: Vec<String> = serde_json::from_value(tb["curated"].clone())?;
     let tagged: Vec<String> = serde_json::from_value(tb["tagged"].clone())?;
     assert!(curated.is_empty(), "curated should be empty: {tb}");
@@ -317,10 +315,7 @@ async fn bootstrap_dedups_curated_over_tag_intersection() -> Result<()> {
     let skills: Vec<String> = serde_json::from_value(body["skills"].clone())?;
 
     // Appears exactly once.
-    let count = skills
-        .iter()
-        .filter(|s| *s == "axum-handler")
-        .count();
+    let count = skills.iter().filter(|s| *s == "axum-handler").count();
     assert_eq!(count, 1, "duplicate slug in response: {skills:?}");
 
     // Attributed to `curated`, NOT to `tagged`.
@@ -374,8 +369,7 @@ async fn bootstrap_caps_at_eight_slugs() -> Result<()> {
 
     // No tier_breakdown when debug is off.
     assert!(
-        body.get("tier_breakdown")
-            .is_none_or(|v| v.is_null()),
+        body.get("tier_breakdown").is_none_or(|v| v.is_null()),
         "tier_breakdown leaked into non-debug response: {body}"
     );
 
@@ -390,9 +384,14 @@ async fn bootstrap_project_tier0_precedes_stack_tiers() -> Result<()> {
     let c = client();
 
     // Admin token (needs tenant:admin to create the project).
-    let admin_token = admin::create_token(&h.pool, "acme", "admin-tok", "tenant:admin skills:read skills:publish")
-        .await?
-        .raw_token;
+    let admin_token = admin::create_token(
+        &h.pool,
+        "acme",
+        "admin-tok",
+        "tenant:admin skills:read skills:publish",
+    )
+    .await?
+    .raw_token;
 
     // Create a project named "acme-billing" and give it 3 items.
     let proj_body = serde_json::json!({
