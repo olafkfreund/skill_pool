@@ -427,3 +427,20 @@ sudo systemctl restart skill-pool-server
 
 None of these were exercised — the publish and the post-publish hooks
 were clean throughout.
+
+## Followup status (2026-05-25)
+
+The two BLOCKED items above have landed code-side fixes; they remain
+BLOCKED in this run log because the live portal still runs the v0.3.0
+binary. Once a v0.3.1 deploy lands, re-running Step 7 (shallow clone)
+and Step 8 (mirror import) is expected to succeed without further code
+changes.
+
+| BLOCKED in this run | Resolved by | Re-test |
+|---|---|---|
+| Step 7 — `git clone --depth=1` "Server does not support shallow clients" | #58 / PR #62 — capability + protocol handling | Re-run the depth=1 clone after v0.3.1 deploys; expect a packfile, not a fatal. |
+| Step 8 — `POST /v1/plugins/import` "Redis not configured" | #59 / PR #63 — in-process tokio task fallback | Re-run the import; expect 202 with `outcome:"enqueued_inline"` and `job_id:"inline-<plugin_id>"`. |
+
+The CLI-side bug found during this gate (`skill-pool plugin publish`
+posting bare `PluginManifest` instead of the `PublishBody` envelope)
+was also fixed — #57 / PR #61.

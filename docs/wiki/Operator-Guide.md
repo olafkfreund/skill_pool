@@ -33,7 +33,9 @@ You need:
 - (Optional) **Redis** — used as a read-through cache, rate-limit
   store, and job queue. The server falls back gracefully when it's
   absent (caches become no-ops, rate limits fail-open, jobs run
-  inline).
+  inline as detached tokio tasks). See [Redis & the job
+  queue](#redis--the-job-queue) below for when in-process fallback is
+  acceptable vs. when to provision Redis.
 
 ## Path 1 — Single-node systemd + Caddy
 
@@ -537,20 +539,24 @@ on the response. Conditional GETs return 304 on match.
 Storage cost: a few hundred bytes per plugin per tenant — negligible
 versus the bundle tarballs.
 
-### Mirror refresh (deferred)
+### Mirror refresh
 
-`mirror`-sourced plugins are listed in `marketplace.json` and have a
-local bare repo row, but the periodic-pull worker that refreshes
-those repos from upstream is tracked in a follow-up issue. Until it
-ships:
+`mirror`-sourced plugins are listed in `marketplace.json` with a local
+bare repo. Two things drive the cache forward:
 
-- Mirror plugins serve whatever the upstream tree looked like at
-  publish time (or when the operator manually re-runs a publish).
-- A stale mirror does not break clones — the cached objects still
-  serve. It just doesn't pick up upstream commits automatically.
+- **Per-plugin `pull_interval_secs`** (set on `POST /v1/plugins/import`,
+  default 86400 = 24h, minimum 300). The server's periodic sweep
+  (`spawn_mirror_sweep` in `server/src/main.rs`) re-enqueues mirror jobs
+  whose `last_pulled_at` is older than the interval.
+- **Failures** record `fetch_error` + `fetch_error_at` on the plugin
+  row so operators can spot stuck mirrors. The next sweep retries.
 
-If you need fresh mirror content before the worker lands, republish
-the plugin (which re-materialises the tree from upstream).
+`fetch_error` is surfaced in the admin Plugin detail page; the
+`/marketplace` public browser hides plugins whose latest pull failed.
+
+If you need fresh mirror content immediately, hit `POST /v1/plugins/import`
+again with the same `slug` and `url` — the upsert is idempotent and the
+job is re-enqueued (or, without Redis, spawned in-process).
 
 ### Growth notes
 
@@ -565,6 +571,46 @@ the plugin (which re-materialises the tree from upstream).
   with thousands of plugins will see noticeable cold-fetch latency.
   Tier-by-tier sizing for plugins-heavy tenants is on the capacity
   planning backlog (`docs/ops/capacity.md`).
+
+---
+
+## Redis & the job queue
+
+skill-pool uses Redis for three optional things:
+
+| Use | Without Redis | When you need Redis |
+|---|---|---|
+| Read-through cache for hot reads | Falls back to direct DB | Multi-replica deployments where you want all replicas hot |
+| Per-tenant rate-limit counters | Fail-open | Production multi-tenant with strict per-tenant SLOs |
+| Job queue for `PluginMirrorJob` (and future job kinds) | In-process tokio task per import (no retry, no durability across restarts) | You need durability, retry-with-backoff, multi-worker scale-out, or queue observability |
+
+Set `SKILL_POOL_REDIS_URL=redis://host:6379/0` (or its NixOS module
+equivalent: `services.skill-pool-server.environment.SKILL_POOL_REDIS_URL`)
+to enable.
+
+### When in-process fallback is fine
+
+- Single-node deployments (e.g. one VM running both server and Postgres).
+- Light mirror traffic — a handful of `/v1/plugins/import` calls per day.
+- You're OK with: mirror jobs interrupted by a server restart need to be
+  re-triggered via a second `POST /v1/plugins/import`.
+
+The fallback path returns `outcome:"enqueued_inline"` and
+`job_id:"inline-<plugin_id>"` so callers can distinguish it from durable
+queueing. The actual `run_mirror` work is identical.
+
+### When to provision Redis
+
+- Multi-node server replicas (the in-process queue does not coordinate
+  across nodes — two replicas would each enqueue inline tasks for the
+  same import).
+- Any expectation of automatic retry on transient git fetch failures.
+- You want to inspect or replay jobs out of band (Redis stream gives you
+  a real queue UI; the in-process path does not).
+
+The provisioning itself is straightforward — a single Redis container
+or managed instance, no clustering required at typical skill-pool
+scale. Wire `SKILL_POOL_REDIS_URL` and restart; no schema changes.
 
 ---
 

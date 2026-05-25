@@ -584,6 +584,23 @@ Local validation runs before the network call:
 - Every `contents[i].slug` non-empty, `contents[i].kind` ∈
   `{skill, agent, command}`.
 
+The CLI then wraps the manifest in the `PublishBody` envelope the server
+expects:
+
+```json
+{
+  "slug": "<manifest.name>",
+  "manifest": { /* full plugin.json */ },
+  "contents": [ /* manifest.contents passthrough */ ],
+  "sourcing_mode": "internal",
+  "status": "published"
+}
+```
+
+(The `slug` derives from `manifest.name` per the Claude Code spec — the
+name doubles as the URL-safe identifier under which the plugin lives in
+the registry.)
+
 Server-side validation (`POST /v1/plugins`, see
 [`docs/api.md`](../api.md#post-v1plugins--publish)) is the canonical
 contract: `manifest.description` required, cross-tenant content refs

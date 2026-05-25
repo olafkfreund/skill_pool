@@ -71,6 +71,8 @@ This alignment is deliberate: it mirrors how Projects and Plans are scoped, and 
 
 Mirrored plugins have a `pull_interval_secs` configured per plugin (default 24h). A background worker wakes every 60s, finds plugins whose `last_pulled_at + pull_interval_secs` is in the past, pulls up to N in parallel (default 4), and updates the local git endpoint. Pull failures keep the last-good copy serving and surface a warning chip on the plugin's detail page in the portal. The pattern matches the plan auto-refresh sweep already in production (`docs/plans.md`, search "Auto-refresh").
 
+The refresh worker uses Redis when `SKILL_POOL_REDIS_URL` is set; without it, mirror imports spawn an in-process tokio task per call (no retry, no durability across restarts). See [Redis & the job queue](wiki/Operator-Guide.md#redis--the-job-queue) in the Operator Guide for the trade-offs and when to provision Redis.
+
 ## Architecture diagram
 
 ```
