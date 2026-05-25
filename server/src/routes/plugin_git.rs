@@ -459,15 +459,20 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
 }
 
 /// BFS from each `want` up to `depth` commits deep. Commits at exactly
-/// level `depth` whose chain doesn't terminate naturally are the new
-/// shallow boundaries — the client will record them in `.git/shallow`
-/// and refuse to walk past them on subsequent ops.
+/// level `depth` are the new shallow boundaries — the client will record
+/// them in `.git/shallow` and refuse to walk past them on subsequent ops.
 ///
 /// `depth` semantics match `git clone --depth=N`:
 ///   * `depth=1`: include the wanted commit only. Wanted commits are
-///     boundaries (if they have parents).
+///     boundaries.
 ///   * `depth=N`: include N commits per chain. The Nth commit is the
 ///     boundary.
+///
+/// Root commits at the boundary still get reported. The git protocol
+/// requires the shallow list to contain every commit at the boundary
+/// depth regardless of whether parents exist; clients send
+/// "fatal: git fetch-pack: expected shallow list" if the list is empty
+/// when `deepen` was requested but at least one want exists.
 fn compute_shallow_boundaries(
     repo: &git2::Repository,
     wants: &[git2::Oid],
@@ -489,11 +494,12 @@ fn compute_shallow_boundaries(
         };
         let parent_ids: Vec<git2::Oid> = commit.parents().map(|p| p.id()).collect();
         if d == depth {
-            // Boundary candidate — only emit a shallow line if the chain
-            // continues past this commit. Root commits don't need one.
-            if !parent_ids.is_empty() {
-                boundaries.push(oid);
-            }
+            // Boundary — emit unconditionally. Root commits at the
+            // boundary are valid shallow markers; the client treats
+            // `shallow <root>` as "stop walking past this commit",
+            // which is a no-op for a root, but the protocol requires
+            // the line.
+            boundaries.push(oid);
         } else {
             // d < depth: enqueue parents one level deeper.
             for p in parent_ids {
@@ -648,12 +654,13 @@ mod tests {
     }
 
     #[test]
-    fn boundaries_depth_one_is_the_tip_when_history_continues() {
+    fn boundaries_depth_one_is_the_tip() {
         let tmp = tempfile::tempdir().unwrap();
         let (repo, tip) = make_linear_repo(tmp.path(), 3);
         let bounds = compute_shallow_boundaries(&repo, &[tip], 1).unwrap();
-        // depth=1 means "include just the tip". Tip has a parent → it's a
-        // shallow boundary.
+        // depth=1 means "include just the tip". Tip is the boundary
+        // regardless of whether it has parents — the client needs the
+        // line either way.
         assert_eq!(bounds, vec![tip]);
     }
 
@@ -664,20 +671,32 @@ mod tests {
         let parent = repo.find_commit(tip).unwrap().parent(0).unwrap().id();
         let bounds = compute_shallow_boundaries(&repo, &[tip], 2).unwrap();
         // depth=2 means "include tip + tip.parent". The parent is the
-        // boundary (it still has its own parent).
+        // boundary.
         assert_eq!(bounds, vec![parent]);
     }
 
     #[test]
-    fn boundaries_skip_root_commits() {
+    fn boundaries_depth_one_on_single_commit_repo_is_the_root() {
+        // Regression for the post-#58 bug: a 1-commit repo cloned with
+        // --depth=1 must still emit `shallow <tip>` — otherwise the
+        // client errors with "fatal: git fetch-pack: expected shallow
+        // list". The tip happens to be the root, and that's fine.
         let tmp = tempfile::tempdir().unwrap();
-        // 3-commit linear history; depth=10 walks past the root.
+        let (repo, tip) = make_linear_repo(tmp.path(), 1);
+        let bounds = compute_shallow_boundaries(&repo, &[tip], 1).unwrap();
+        assert_eq!(bounds, vec![tip]);
+    }
+
+    #[test]
+    fn boundaries_walking_past_root_returns_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 3-commit linear history; depth=10 walks past the root — there
+        // is no commit at depth=10, so no boundary needed (and no error).
         let (repo, tip) = make_linear_repo(tmp.path(), 3);
         let bounds = compute_shallow_boundaries(&repo, &[tip], 10).unwrap();
-        // The root commit has no parents → no `shallow` line needed.
         assert!(
             bounds.is_empty(),
-            "expected no boundaries past the root, got {:?}",
+            "no commit exists at depth=10, expected empty boundary list, got {:?}",
             bounds
         );
     }
