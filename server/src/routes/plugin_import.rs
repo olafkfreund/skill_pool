@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use crate::auth::AuthedCaller;
 use crate::error::{AppError, AppResult};
-use crate::jobs::plugin_mirror::{PluginMirrorJob, MIN_PULL_INTERVAL_SECS};
+use crate::jobs::plugin_mirror::{run_mirror, PluginMirrorJob, MIN_PULL_INTERVAL_SECS};
 use crate::queue::{EnqueueOutcome, Job};
 use crate::state::AppState;
 
@@ -60,7 +60,9 @@ pub struct ImportBody {
 pub struct ImportResponse {
     /// The job id in the queue. Stable for 7 days (envelope TTL).
     pub job_id: String,
-    /// `"enqueued"` or `"deduped"` (re-submitted within 24h dedup window).
+    /// One of: `"enqueued"` (Redis queue accepted the job),
+    /// `"deduped"` (re-submitted within the 24h Redis dedup window),
+    /// `"enqueued_inline"` (no Redis configured; in-process task spawned).
     pub outcome: &'static str,
     /// UUID of the plugin row — created by this call or returned from an
     /// existing row for this `(tenant_id, slug)`.
@@ -135,36 +137,53 @@ pub async fn import(
         AppError::from(e)
     })?;
 
-    // 4. Enqueue the mirror job — or accept the dedup outcome gracefully.
-    let queue = state.queue().ok_or_else(|| {
-        AppError::BadRequest(
-            "job queue not available (Redis not configured); cannot enqueue mirror job".into(),
-        )
-    })?;
-
+    // 4. Hand off the mirror work. Two paths:
+    //    * `state.queue()` Some → enqueue via Redis (durable, retried).
+    //    * `state.queue()` None → spawn an in-process tokio task. No
+    //      durability / no retry on process crash; acceptable for
+    //      single-node deployments per #59 Option B. Operators who
+    //      want durability should provision Redis.
     let job = PluginMirrorJob {
         plugin_id,
         tenant_id,
         upstream_url: url,
     };
 
-    // The idempotency key embeds only plugin_id so that re-importing the same
-    // plugin (e.g. after updating refresh_interval_secs) within 24h returns
-    // "deduped" rather than racing two clone processes.
-    let outcome = queue
-        .enqueue(&job)
-        .await
-        .map_err(|e| AppError::BadRequest(format!("enqueue mirror job: {e}")))?;
+    let (outcome_str, job_id) = match state.queue() {
+        Some(queue) => {
+            // The idempotency key embeds only plugin_id so that re-importing the same
+            // plugin (e.g. after updating refresh_interval_secs) within 24h returns
+            // "deduped" rather than racing two clone processes.
+            let outcome = queue
+                .enqueue(&job)
+                .await
+                .map_err(|e| AppError::BadRequest(format!("enqueue mirror job: {e}")))?;
 
-    let (outcome_str, job_id) = match outcome {
-        EnqueueOutcome::Enqueued => {
-            // The job id we need for the response is embedded in the queue's
-            // internal envelope, but `enqueue` doesn't return it. We derive
-            // a deterministic representation from the idempotency key so the
-            // caller can correlate; the actual Redis job id differs.
-            ("enqueued", job.idempotency_key())
+            match outcome {
+                EnqueueOutcome::Enqueued => ("enqueued", job.idempotency_key()),
+                EnqueueOutcome::Deduped => ("deduped", job.idempotency_key()),
+            }
         }
-        EnqueueOutcome::Deduped => ("deduped", job.idempotency_key()),
+        None => {
+            // In-process fallback. We don't have a dedup window here — the
+            // route already upserted the plugin row, so re-imports are
+            // cheap (no duplicate DB rows). Re-cloning into the same bare
+            // repo is also idempotent on the git side.
+            let db = state.db().clone();
+            let storage = state.storage().clone();
+            let job_clone = job.clone();
+            tokio::spawn(async move {
+                if let Err(e) = run_mirror(&db, &storage, &job_clone).await {
+                    tracing::error!(
+                        error = %e,
+                        plugin_id = %job_clone.plugin_id,
+                        tenant_id = %job_clone.tenant_id,
+                        "in-process mirror job failed (no Redis fallback)"
+                    );
+                }
+            });
+            ("enqueued_inline", format!("inline-{}", job.plugin_id))
+        }
     };
 
     Ok((
