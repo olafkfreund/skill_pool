@@ -48,6 +48,11 @@ jobs:
       DATABASE_URL: postgres://skillpool:skillpool@localhost:5432/skillpool
       SKILL_POOL_DATABASE_URL: postgres://skillpool:skillpool@localhost:5432/skillpool
       RUST_BACKTRACE: 1
+      # SQLX_OFFLINE makes the `sqlx::query!` macro use the committed
+      # `.sqlx/` cache for compile-time query verification instead of
+      # connecting to a live DB. The cache is in git (160 entries as of
+      # this commit); runtime queries still hit the service container.
+      SQLX_OFFLINE: "true"
       # NIXPKGS_ALLOW_INSECURE bypasses the minio-abandoned gate that
       # nixpkgs-unstable currently surfaces. It's transitively pulled in
       # by the devshell (via opendal's optional s3 backend) even though
