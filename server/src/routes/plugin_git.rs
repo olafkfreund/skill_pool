@@ -390,16 +390,13 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
     //
     // Detection: deepen is set AND done is unset → first POST,
     // return only the shallow section.
-    let boundaries = if let Some(depth) = req.deepen {
+    if let Some(depth) = req.deepen {
         let bounds = compute_shallow_boundaries(&repo, &req.wants, depth)?;
         for oid in &bounds {
             pkt_line(&mut out, format!("shallow {oid}\n").as_bytes());
         }
         pkt_flush(&mut out);
-        bounds
-    } else {
-        Vec::new()
-    };
+    }
 
     // First-phase deepening: client hasn't sent `done` yet — return
     // only the shallow section. The client will follow up with a
@@ -423,36 +420,43 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
     let mut pb = repo
         .packbuilder()
         .map_err(|e| AppError::BadRequest(format!("create packbuilder: {e}")))?;
-    let mut revwalk = repo
-        .revwalk()
-        .map_err(|e| AppError::BadRequest(format!("create revwalk: {e}")))?;
-    for want in &req.wants {
-        revwalk
-            .push(*want)
-            .map_err(|e| AppError::BadRequest(format!("revwalk push: {e}")))?;
-    }
-    for have in &req.haves {
-        // Hide ancestors of haves so we don't re-send objects the client
-        // already has. Missing objects (client claimed something we don't
-        // have) are silently ignored — same behaviour as a real git server.
-        let _ = revwalk.hide(*have);
-    }
-    // For shallow clones, hide PARENTS of each boundary commit. This
-    // keeps the boundary commits themselves in the pack but stops the
-    // walk from following them further back. libgit2's revwalk.hide()
-    // hides the commit AND all its ancestors, so hiding parents-of-
-    // boundaries is exactly what we want.
-    for boundary in &boundaries {
-        if let Ok(commit) = repo.find_commit(*boundary) {
-            for parent in commit.parents() {
-                let _ = revwalk.hide(parent.id());
-            }
+
+    if req.deepen.is_some() {
+        // Shallow path: build the explicit commit set up to `depth`, then
+        // insert each commit individually via `pb.insert_commit`. libgit2
+        // auto-follows the commit's tree + blobs.
+        //
+        // We do NOT use `revwalk.hide(parent)` for boundary trimming —
+        // hide transitively hides the parent's blobs, which the tip's
+        // tree may reference (unchanged files). Result was "bad tree
+        // object: remote did not send all necessary objects" on
+        // single-commit-or-shallow-depth packs.
+        let included = collect_commits_up_to_depth(&repo, &req.wants, req.deepen.unwrap())?;
+        for oid in &included {
+            pb.insert_commit(*oid)
+                .map_err(|e| AppError::BadRequest(format!("packbuilder insert commit {oid}: {e}")))?;
         }
+    } else {
+        // Full-clone path: revwalk + insert_walk is fine because no
+        // shallow boundary means no parent-hiding artefacts.
+        let mut revwalk = repo
+            .revwalk()
+            .map_err(|e| AppError::BadRequest(format!("create revwalk: {e}")))?;
+        for want in &req.wants {
+            revwalk
+                .push(*want)
+                .map_err(|e| AppError::BadRequest(format!("revwalk push: {e}")))?;
+        }
+        for have in &req.haves {
+            // Hide ancestors of haves so we don't re-send objects the
+            // client already has. Missing objects (client claimed
+            // something we don't have) are silently ignored — same
+            // behaviour as a real git server.
+            let _ = revwalk.hide(*have);
+        }
+        pb.insert_walk(&mut revwalk)
+            .map_err(|e| AppError::BadRequest(format!("packbuilder insert walk: {e}")))?;
     }
-    // Mark every reachable commit, and let libgit2 follow each commit's
-    // tree + blobs into the pack.
-    pb.insert_walk(&mut revwalk)
-        .map_err(|e| AppError::BadRequest(format!("packbuilder insert walk: {e}")))?;
 
     // Generate the pack to a buffer.
     let mut pack_bytes: Vec<u8> = Vec::new();
@@ -475,6 +479,44 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
     pkt_flush(&mut out);
 
     Ok(out)
+}
+
+/// BFS from each `want` up to `depth` commits deep. Returns every commit
+/// visited (those within the depth window). The packfile must contain
+/// every one of these commits plus their trees and blobs.
+///
+/// Used in place of `revwalk + insert_walk` for shallow packs — see
+/// `run_upload_pack` for why we can't just hide parents.
+fn collect_commits_up_to_depth(
+    repo: &git2::Repository,
+    wants: &[git2::Oid],
+    depth: u32,
+) -> AppResult<Vec<git2::Oid>> {
+    use std::collections::{HashSet, VecDeque};
+    let mut seen: HashSet<git2::Oid> = HashSet::new();
+    let mut included: Vec<git2::Oid> = Vec::new();
+    let mut queue: VecDeque<(git2::Oid, u32)> = VecDeque::new();
+    for w in wants {
+        if seen.insert(*w) {
+            queue.push_back((*w, 1));
+        }
+    }
+    while let Some((oid, d)) = queue.pop_front() {
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        included.push(oid);
+        if d < depth {
+            for p in commit.parents() {
+                let p_oid = p.id();
+                if seen.insert(p_oid) {
+                    queue.push_back((p_oid, d + 1));
+                }
+            }
+        }
+    }
+    Ok(included)
 }
 
 /// BFS from each `want` up to `depth` commits deep. Commits at exactly
@@ -745,6 +787,117 @@ mod tests {
             resp, expected,
             "first-phase deepening must return only the shallow section"
         );
+    }
+
+    /// Build a 2-commit bare repo where the tip's tree SHARES a blob
+    /// with its parent (an unchanged file). Regression material for the
+    /// "bad tree object" bug — if we hide parent via revwalk, the
+    /// shared blob gets hidden too and the pack is incomplete.
+    fn make_shared_blob_repo(dir: &std::path::Path) -> (git2::Repository, git2::Oid) {
+        let repo = git2::Repository::init_bare(dir).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let stable_blob = repo.blob(b"stable\n").unwrap();
+        let new_blob = repo.blob(b"added\n").unwrap();
+
+        // Commit 1: tree contains keep.txt = "stable"
+        let t1 = {
+            let mut b = repo.treebuilder(None).unwrap();
+            b.insert("keep.txt", stable_blob, 0o100644).unwrap();
+            b.write().unwrap()
+        };
+        let c1 = {
+            let tree = repo.find_tree(t1).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "c1", &tree, &[])
+                .unwrap()
+        };
+
+        // Commit 2: tree contains keep.txt (same blob) + new.txt (new blob)
+        let t2 = {
+            let mut b = repo.treebuilder(None).unwrap();
+            b.insert("keep.txt", stable_blob, 0o100644).unwrap();
+            b.insert("new.txt", new_blob, 0o100644).unwrap();
+            b.write().unwrap()
+        };
+        let c2 = {
+            let tree = repo.find_tree(t2).unwrap();
+            let parent = repo.find_commit(c1).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "c2", &tree, &[&parent])
+                .unwrap()
+        };
+        (repo, c2)
+    }
+
+    /// Extract the raw packfile bytes from a side-band-64k framed response,
+    /// stripping the shallow section + NAK pkt-line first.
+    fn extract_pack(resp: &[u8]) -> Vec<u8> {
+        // Skip shallow section: read pkt-lines until we hit a flush.
+        let mut cursor = 0;
+        loop {
+            let len_hex = std::str::from_utf8(&resp[cursor..cursor + 4]).unwrap();
+            let len = u32::from_str_radix(len_hex, 16).unwrap();
+            cursor += 4;
+            if len == 0 {
+                break; // flush pkt
+            }
+            cursor += (len - 4) as usize;
+        }
+        // Read the NAK pkt-line.
+        let len_hex = std::str::from_utf8(&resp[cursor..cursor + 4]).unwrap();
+        let len = u32::from_str_radix(len_hex, 16).unwrap();
+        cursor += 4 + (len - 4) as usize; // skip "NAK\n"
+
+        // Concatenate sideband-1 frames into raw pack bytes.
+        let mut pack = Vec::new();
+        while cursor < resp.len() {
+            let len_hex = std::str::from_utf8(&resp[cursor..cursor + 4]).unwrap();
+            let len = u32::from_str_radix(len_hex, 16).unwrap();
+            cursor += 4;
+            if len == 0 {
+                break; // final flush
+            }
+            let payload = &resp[cursor..cursor + (len - 4) as usize];
+            cursor += (len - 4) as usize;
+            if !payload.is_empty() && payload[0] == 0x01 {
+                pack.extend_from_slice(&payload[1..]);
+            }
+        }
+        pack
+    }
+
+    #[test]
+    fn shallow_pack_includes_blobs_shared_with_hidden_parent() {
+        // Regression for the "bad tree object" bug: with a 2-commit
+        // history where the tip's tree references blobs that ALSO exist
+        // in the parent's tree (unchanged files), the pack must include
+        // every blob the tip's tree points at. The previous
+        // `revwalk.hide(parent)` strategy hid the shared blob and the
+        // client errored with "bad tree object: remote did not send all
+        // necessary objects".
+        let tmp = tempfile::tempdir().unwrap();
+        let (_repo, tip) = make_shared_blob_repo(tmp.path());
+
+        let body = make_request(tip, Some(1), /* send_done= */ true);
+        let resp = run_upload_pack(tmp.path(), &body).unwrap();
+        let pack = extract_pack(&resp);
+
+        // Index the pack against a fresh repo and verify the tip's tree
+        // resolves end-to-end (commit -> tree -> "keep.txt" blob).
+        let dst_dir = tempfile::tempdir().unwrap();
+        let dst = git2::Repository::init_bare(dst_dir.path()).unwrap();
+        let odb = dst.odb().unwrap();
+        let mut writer = odb.packwriter().unwrap();
+        std::io::Write::write_all(&mut writer, &pack).unwrap();
+        writer.commit().unwrap();
+
+        let commit = dst.find_commit(tip).expect("tip commit present in pack");
+        let tree = commit.tree().expect("tip tree present in pack");
+        let entry = tree
+            .get_name("keep.txt")
+            .expect("keep.txt entry in tree");
+        let blob = dst
+            .find_blob(entry.id())
+            .expect("keep.txt blob present in pack (shared with parent)");
+        assert_eq!(blob.content(), b"stable\n");
     }
 
     #[test]
