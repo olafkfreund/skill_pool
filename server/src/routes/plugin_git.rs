@@ -128,11 +128,7 @@ fn strip_git_suffix(raw: &str) -> AppResult<&str> {
     Ok(slug)
 }
 
-async fn resolve_repo_path(
-    state: &AppState,
-    tenant: &TenantCtx,
-    slug: &str,
-) -> AppResult<PathBuf> {
+async fn resolve_repo_path(state: &AppState, tenant: &TenantCtx, slug: &str) -> AppResult<PathBuf> {
     // Verify the plugin exists for this tenant + is internal/mirror (external
     // plugins live elsewhere; we don't proxy them). 404 otherwise.
     let row = sqlx::query!(
@@ -150,10 +146,7 @@ async fn resolve_repo_path(
         return Err(AppError::NotFound);
     }
 
-    let storage = state
-        .storage_for(tenant)
-        .await
-        .map_err(AppError::Anyhow)?;
+    let storage = state.storage_for(tenant).await.map_err(AppError::Anyhow)?;
     let path = storage
         .plugin_git_path(tenant.tenant_id, slug)
         .map_err(AppError::Anyhow)?;
@@ -308,9 +301,7 @@ fn parse_upload_request(body: &[u8]) -> AppResult<UploadRequest> {
             continue;
         }
         if len < 4 {
-            return Err(AppError::BadRequest(format!(
-                "pkt-line length {len} < 4"
-            )));
+            return Err(AppError::BadRequest(format!("pkt-line length {len} < 4")));
         }
         let payload_len = (len - 4) as usize;
         if cursor + payload_len > body.len() {
@@ -328,24 +319,22 @@ fn parse_upload_request(body: &[u8]) -> AppResult<UploadRequest> {
             // `want <40-hex>` optionally followed by space-separated caps
             // on the first want line.
             let sha = rest.split_whitespace().next().unwrap_or("");
-            let oid = git2::Oid::from_str(sha).map_err(|_| {
-                AppError::BadRequest(format!("invalid want SHA `{sha}`"))
-            })?;
+            let oid = git2::Oid::from_str(sha)
+                .map_err(|_| AppError::BadRequest(format!("invalid want SHA `{sha}`")))?;
             req.wants.push(oid);
         } else if let Some(sha) = line.strip_prefix("have ") {
-            let oid = git2::Oid::from_str(sha).map_err(|_| {
-                AppError::BadRequest(format!("invalid have SHA `{sha}`"))
-            })?;
+            let oid = git2::Oid::from_str(sha)
+                .map_err(|_| AppError::BadRequest(format!("invalid have SHA `{sha}`")))?;
             req.haves.push(oid);
         } else if let Some(sha) = line.strip_prefix("shallow ") {
-            let oid = git2::Oid::from_str(sha).map_err(|_| {
-                AppError::BadRequest(format!("invalid shallow SHA `{sha}`"))
-            })?;
+            let oid = git2::Oid::from_str(sha)
+                .map_err(|_| AppError::BadRequest(format!("invalid shallow SHA `{sha}`")))?;
             req.shallows.push(oid);
         } else if let Some(n) = line.strip_prefix("deepen ") {
-            let depth: u32 = n.trim().parse().map_err(|_| {
-                AppError::BadRequest(format!("invalid deepen value `{n}`"))
-            })?;
+            let depth: u32 = n
+                .trim()
+                .parse()
+                .map_err(|_| AppError::BadRequest(format!("invalid deepen value `{n}`")))?;
             // Reject 0 — git's protocol treats `deepen 0` as "no depth",
             // which is ambiguous. Clients send `deepen 1` for `--depth=1`.
             if depth == 0 {
@@ -433,8 +422,9 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
         // single-commit-or-shallow-depth packs.
         let included = collect_commits_up_to_depth(&repo, &req.wants, req.deepen.unwrap())?;
         for oid in &included {
-            pb.insert_commit(*oid)
-                .map_err(|e| AppError::BadRequest(format!("packbuilder insert commit {oid}: {e}")))?;
+            pb.insert_commit(*oid).map_err(|e| {
+                AppError::BadRequest(format!("packbuilder insert commit {oid}: {e}"))
+            })?;
         }
     } else {
         // Full-clone path: revwalk + insert_walk is fine because no
@@ -602,10 +592,7 @@ mod tests {
         );
         pkt_line(&mut body, want_line.as_bytes());
         pkt_flush(&mut body);
-        let have_line = format!(
-            "have {}\n",
-            "fedcba9876543210fedcba9876543210fedcba98"
-        );
+        let have_line = format!("have {}\n", "fedcba9876543210fedcba9876543210fedcba98");
         pkt_line(&mut body, have_line.as_bytes());
         pkt_line(&mut body, b"done\n");
 
@@ -661,10 +648,7 @@ mod tests {
             "0123456789abcdef0123456789abcdef01234567"
         );
         pkt_line(&mut body, want_line.as_bytes());
-        let shallow_line = format!(
-            "shallow {}\n",
-            "fedcba9876543210fedcba9876543210fedcba98"
-        );
+        let shallow_line = format!("shallow {}\n", "fedcba9876543210fedcba9876543210fedcba98");
         pkt_line(&mut body, shallow_line.as_bytes());
         pkt_flush(&mut body);
 
@@ -694,10 +678,8 @@ mod tests {
             // Empty tree is fine for the structural test.
             let tree_id = idx.write_tree().unwrap();
             let tree = repo.find_tree(tree_id).unwrap();
-            let parents: Vec<git2::Commit> = tip
-                .iter()
-                .map(|p| repo.find_commit(*p).unwrap())
-                .collect();
+            let parents: Vec<git2::Commit> =
+                tip.iter().map(|p| repo.find_commit(*p).unwrap()).collect();
             let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
             let oid = repo
                 .commit(
@@ -891,9 +873,7 @@ mod tests {
 
         let commit = dst.find_commit(tip).expect("tip commit present in pack");
         let tree = commit.tree().expect("tip tree present in pack");
-        let entry = tree
-            .get_name("keep.txt")
-            .expect("keep.txt entry in tree");
+        let entry = tree.get_name("keep.txt").expect("keep.txt entry in tree");
         let blob = dst
             .find_blob(entry.id())
             .expect("keep.txt blob present in pack (shared with parent)");

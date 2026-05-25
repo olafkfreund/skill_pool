@@ -176,7 +176,11 @@ async fn publish_lists_and_isolates_per_tenant() -> Result<()> {
     assert_eq!(resp.status().as_u16(), 200);
     let listing: Value = resp.json().await?;
     let items = listing["items"].as_array().expect("items array");
-    assert_eq!(items.len(), 1, "acme list should have the plugin: {listing}");
+    assert_eq!(
+        items.len(),
+        1,
+        "acme list should have the plugin: {listing}"
+    );
     assert_eq!(items[0]["slug"], "rust-toolkit");
     assert_eq!(items[0]["tags"], json!(["rust", "tooling"]));
 

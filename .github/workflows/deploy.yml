@@ -36,6 +36,11 @@ jobs:
   deploy:
     name: helm upgrade → EKS
     runs-on: ubuntu-latest
+    # Gate: only attempt the deploy when AWS_DEPLOY_ENABLED=true. Without
+    # this, every v* tag push triggers a red badge on a never-configured
+    # production deploy. See .github/workflows/build.yml for the full
+    # enabling recipe.
+    if: ${{ vars.AWS_DEPLOY_ENABLED == 'true' }}
     environment:
       name: production
       # The environment is a GitHub-side gate. Pair it with required

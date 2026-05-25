@@ -101,9 +101,7 @@ export const actions: Actions = {
       return fail(500, { action: 'addItem', kind, error: 'Could not load current items.' });
     }
 
-    const alreadyExists = current.some(
-      (it) => it.skill_slug === skill_slug && it.kind === kind,
-    );
+    const alreadyExists = current.some((it) => it.skill_slug === skill_slug && it.kind === kind);
     if (alreadyExists) {
       return fail(409, {
         action: 'addItem',
@@ -140,9 +138,7 @@ export const actions: Actions = {
       return fail(500, { action: 'removeItem', kind, error: 'Could not load current items.' });
     }
 
-    const next = current.filter(
-      (it) => !(it.skill_slug === skill_slug && it.kind === kind),
-    );
+    const next = current.filter((it) => !(it.skill_slug === skill_slug && it.kind === kind));
     const result = await setProjectItems(auth, params.slug, next);
     if (!result.ok) {
       return fail(result.status, { action: 'removeItem', kind, error: result.error });

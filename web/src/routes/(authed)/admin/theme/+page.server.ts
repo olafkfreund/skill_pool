@@ -18,12 +18,7 @@ import { checkThemeContrast } from '$lib/contrast';
 import type { Actions, PageServerLoad } from './$types';
 
 /** Allowed client-side MIME types — mirrors the server allow-list. */
-const ALLOWED_LOGO_MIME = new Set([
-  'image/svg+xml',
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-]);
+const ALLOWED_LOGO_MIME = new Set(['image/svg+xml', 'image/png', 'image/jpeg', 'image/webp']);
 
 /**
  * Favicons accept everything a logo does plus `image/x-icon`. Same allow-list
@@ -94,10 +89,7 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
   return { theme, hasLogo, hasFavicon, fonts, customCss };
 };
 
-async function checkAssetExists(
-  tenantSlug: string,
-  kind: 'logo' | 'favicon',
-): Promise<boolean> {
+async function checkAssetExists(tenantSlug: string, kind: 'logo' | 'favicon'): Promise<boolean> {
   // Lightweight presence check against the API server. We use GET because
   // the server doesn't currently expose HEAD; the response is tiny so the
   // overhead is acceptable for a single admin page load.
@@ -144,9 +136,7 @@ export const actions: Actions = {
     // WCAG AA contrast validation — refuse to save before touching the API.
     const contrastFailures = checkThemeContrast(theme);
     if (contrastFailures.length > 0) {
-      const lines = contrastFailures.map(
-        (f) => `${f.pair}: ${f.ratio} (need ${f.required})`,
-      );
+      const lines = contrastFailures.map((f) => `${f.pair}: ${f.ratio} (need ${f.required})`);
       return fail(422, {
         error: `WCAG AA contrast failures:\n${lines.join('\n')}`,
         contrastFailures,

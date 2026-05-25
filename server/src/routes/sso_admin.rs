@@ -136,7 +136,14 @@ pub fn mask_secret(s: &str) -> String {
     if s.len() <= 4 {
         return "••••".to_string();
     }
-    let tail: String = s.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = s
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("••••{tail}")
 }
 
@@ -217,7 +224,9 @@ fn validate_oidc(body: &PutOidcBody) -> AppResult<()> {
         return Err(AppError::BadRequest("client_id must not be empty".into()));
     }
     if body.client_secret.trim().is_empty() {
-        return Err(AppError::BadRequest("client_secret must not be empty".into()));
+        return Err(AppError::BadRequest(
+            "client_secret must not be empty".into(),
+        ));
     }
     validate_role(body.default_role.trim())?;
     Ok(())
@@ -305,7 +314,9 @@ fn parse_saml_metadata(body: &PutSamlBody) -> AppResult<ParsedSamlMetadata> {
 
     let xml = body.metadata_xml.trim();
     if xml.is_empty() {
-        return Err(AppError::BadRequest("metadata_xml must not be empty".into()));
+        return Err(AppError::BadRequest(
+            "metadata_xml must not be empty".into(),
+        ));
     }
     // samael parses the EntityDescriptor and validates the XML
     // structurally. If the IdP gave us a SP descriptor by mistake, this
@@ -324,8 +335,7 @@ fn parse_saml_metadata(body: &PutSamlBody) -> AppResult<ParsedSamlMetadata> {
         .and_then(|v| v.first())
         .ok_or_else(|| {
             AppError::BadRequest(
-                "metadata_xml has no IDPSSODescriptor — paste IdP metadata, not SP metadata"
-                    .into(),
+                "metadata_xml has no IDPSSODescriptor — paste IdP metadata, not SP metadata".into(),
             )
         })?;
 
@@ -352,7 +362,9 @@ fn parse_saml_metadata(body: &PutSamlBody) -> AppResult<ParsedSamlMetadata> {
         .and_then(|x| x.certificates.first())
         .map(|s| s.trim().to_string())
         .ok_or_else(|| {
-            AppError::BadRequest("metadata_xml has no X.509 certificate in any KeyDescriptor".into())
+            AppError::BadRequest(
+                "metadata_xml has no X.509 certificate in any KeyDescriptor".into(),
+            )
         })?;
 
     let pem = wrap_pem(&cert_b64);
@@ -595,9 +607,15 @@ mod tests {
             parsed.idp_sso_url,
             "https://idp.example.com/saml2/idp/SSOService.php"
         );
-        assert!(parsed.idp_x509_cert_pem.contains("-----BEGIN CERTIFICATE-----"));
-        assert!(parsed.idp_x509_cert_pem.contains("MIIBszCCARygAwIBAgIJAKxQfake"));
-        assert!(parsed.idp_x509_cert_pem.contains("-----END CERTIFICATE-----"));
+        assert!(parsed
+            .idp_x509_cert_pem
+            .contains("-----BEGIN CERTIFICATE-----"));
+        assert!(parsed
+            .idp_x509_cert_pem
+            .contains("MIIBszCCARygAwIBAgIJAKxQfake"));
+        assert!(parsed
+            .idp_x509_cert_pem
+            .contains("-----END CERTIFICATE-----"));
         assert!(parsed.sp_entity_id.is_none());
     }
 

@@ -859,10 +859,7 @@ impl Client {
     /// when the plugin slug genuinely doesn't exist — both surface as
     /// 404 from the server; we treat them identically so a stale
     /// manifest pin doesn't hard-fail `ensure`).
-    pub async fn get_plugin(
-        &self,
-        slug: &str,
-    ) -> Result<PluginEndpointOutcome<PluginDetail>> {
+    pub async fn get_plugin(&self, slug: &str) -> Result<PluginEndpointOutcome<PluginDetail>> {
         let url = self.base.join(&format!("/v1/plugins/{slug}"))?;
         let resp = self.http.get(url).send().await?;
         let status = resp.status();

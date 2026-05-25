@@ -102,7 +102,9 @@ pub async fn put_config(
         ));
     }
     if body.smtp_password.is_empty() {
-        return Err(AppError::BadRequest("smtp_password must not be empty".into()));
+        return Err(AppError::BadRequest(
+            "smtp_password must not be empty".into(),
+        ));
     }
 
     let enc = email_branding::encrypt_password(&body.smtp_password);

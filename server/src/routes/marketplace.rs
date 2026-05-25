@@ -47,13 +47,10 @@ pub async fn get_marketplace(
     // Owner display name + URL. Falls back to the slug when the row is
     // missing somehow (shouldn't happen — TenantCtx already resolved it,
     // but a between-request tenant delete is theoretically possible).
-    let tenant_row = sqlx::query!(
-        "SELECT name FROM tenants WHERE id = $1",
-        tenant.tenant_id,
-    )
-    .fetch_optional(state.db_read())
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let tenant_row = sqlx::query!("SELECT name FROM tenants WHERE id = $1", tenant.tenant_id,)
+        .fetch_optional(state.db_read())
+        .await?
+        .ok_or(AppError::NotFound)?;
     let owner_name = if tenant_row.name.is_empty() {
         tenant.tenant_slug.clone()
     } else {

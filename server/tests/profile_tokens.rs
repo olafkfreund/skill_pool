@@ -50,11 +50,10 @@ async fn mint_session(pool: &PgPool, tenant_slug: &str, email: &str, role: &str)
     use rand::RngCore;
     use sha2::{Digest, Sha256};
 
-    let (tenant_id,): (Uuid,) =
-        sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
-            .bind(tenant_slug)
-            .fetch_one(pool)
-            .await?;
+    let (tenant_id,): (Uuid,) = sqlx::query_as("SELECT id FROM tenants WHERE slug = $1")
+        .bind(tenant_slug)
+        .fetch_one(pool)
+        .await?;
 
     let (user_id,): (Uuid,) = sqlx::query_as(
         "INSERT INTO users (email, display_name) VALUES ($1, $2) \

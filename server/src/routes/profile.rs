@@ -57,7 +57,9 @@ pub async fn get_banner(
     .fetch_optional(state.db_read())
     .await?;
 
-    let (text, url) = row.map(|r| (r.banner_text, r.banner_url)).unwrap_or((None, None));
+    let (text, url) = row
+        .map(|r| (r.banner_text, r.banner_url))
+        .unwrap_or((None, None));
     Ok(Json(TenantBanner { text, url }))
 }
 
@@ -106,8 +108,7 @@ pub async fn list_tokens(
     caller: AuthedCaller,
 ) -> AppResult<Json<Vec<TokenView>>> {
     let user_id = require_user(&caller)?;
-    let rows =
-        admin::list_user_tokens(state.db(), &caller.tenant.tenant_slug, user_id).await?;
+    let rows = admin::list_user_tokens(state.db(), &caller.tenant.tenant_slug, user_id).await?;
     Ok(Json(rows.into_iter().map(TokenView::from).collect()))
 }
 
@@ -138,11 +139,7 @@ impl ScopeInput {
             Self::Empty => Vec::new(),
             Self::List(v) => v
                 .into_iter()
-                .flat_map(|s| {
-                    s.split_whitespace()
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
+                .flat_map(|s| s.split_whitespace().map(str::to_string).collect::<Vec<_>>())
                 .collect(),
             Self::Joined(s) => s.split_whitespace().map(str::to_string).collect(),
         }
@@ -169,9 +166,7 @@ pub async fn create_token(
 
     let label = body.label.trim();
     if label.is_empty() || label.chars().count() > 80 {
-        return Err(AppError::BadRequest(
-            "label must be 1–80 characters".into(),
-        ));
+        return Err(AppError::BadRequest("label must be 1–80 characters".into()));
     }
 
     let scopes_vec = body.scopes.into_canonical();
@@ -230,14 +225,10 @@ pub async fn revoke_token(
 ) -> AppResult<StatusCode> {
     let user_id = require_user(&caller)?;
 
-    let existed = admin::revoke_user_token(
-        state.db(),
-        &caller.tenant.tenant_slug,
-        user_id,
-        token_id,
-    )
-    .await
-    .map_err(AppError::Anyhow)?;
+    let existed =
+        admin::revoke_user_token(state.db(), &caller.tenant.tenant_slug, user_id, token_id)
+            .await
+            .map_err(AppError::Anyhow)?;
     if !existed {
         return Err(AppError::NotFound);
     }

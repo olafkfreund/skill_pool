@@ -201,10 +201,7 @@ async fn git_clone_yields_plugin_tree() -> Result<()> {
     assert_eq!(manifest["name"], "rust-toolkit");
     assert_eq!(manifest["version"], "1.2.0");
 
-    let skill_md = repo_path
-        .join("skills")
-        .join("rust-fmt")
-        .join("SKILL.md");
+    let skill_md = repo_path.join("skills").join("rust-fmt").join("SKILL.md");
     assert!(
         skill_md.exists(),
         "missing skills/rust-fmt/SKILL.md in cloned tree"

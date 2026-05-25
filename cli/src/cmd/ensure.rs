@@ -359,10 +359,7 @@ async fn resolve_plugins(
             }
             Err(e) => {
                 if !quiet {
-                    println!(
-                        "  warn:     could not resolve plugin `{}`: {e}",
-                        item.slug
-                    );
+                    println!("  warn:     could not resolve plugin `{}`: {e}", item.slug);
                 }
                 continue;
             }

@@ -101,7 +101,12 @@ pub async fn list(
         .unwrap_or_default();
 
     // --- Semantic-ranked branch -----------------------------------------
-    if let Some(query_text) = q.semantic.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(query_text) = q
+        .semantic
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         let embedding = state
             .embedder()
             .embed(query_text)
@@ -351,10 +356,7 @@ pub async fn get_bundle(
         }
     }
 
-    let bytes = storage
-        .read_bundle(&key)
-        .await
-        .map_err(AppError::Anyhow)?;
+    let bytes = storage.read_bundle(&key).await.map_err(AppError::Anyhow)?;
 
     let mut resp = (StatusCode::OK, bytes).into_response();
     resp.headers_mut().insert(
@@ -1062,7 +1064,11 @@ fn parse_requires_entry(raw: &str) -> (String, String) {
             let v = version.trim();
             (
                 slug.trim().to_string(),
-                if v.is_empty() { "*".into() } else { v.to_string() },
+                if v.is_empty() {
+                    "*".into()
+                } else {
+                    v.to_string()
+                },
             )
         }
         None => (trimmed.to_string(), "*".into()),

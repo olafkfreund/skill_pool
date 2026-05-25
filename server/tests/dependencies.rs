@@ -163,7 +163,12 @@ async fn publish(
 
 async fn deps(c: &reqwest::Client, h: &Harness, slug: &str) -> Result<Vec<Value>> {
     let resp = authed(
-        req(c, reqwest::Method::GET, &h.base, &format!("/v1/skills/{slug}/deps")),
+        req(
+            c,
+            reqwest::Method::GET,
+            &h.base,
+            &format!("/v1/skills/{slug}/deps"),
+        ),
         &h.acme_token,
     )
     .send()
@@ -194,10 +199,7 @@ async fn dependency_graph_round_trip() -> Result<()> {
     let (status, _) = publish(&c, &h, "skill-c", &["skill-a@1.0.0"]).await?;
     assert_eq!(status, 201);
     let c_deps = deps(&c, &h, "skill-c").await?;
-    let slugs: Vec<&str> = c_deps
-        .iter()
-        .map(|d| d["slug"].as_str().unwrap())
-        .collect();
+    let slugs: Vec<&str> = c_deps.iter().map(|d| d["slug"].as_str().unwrap()).collect();
     assert!(slugs.contains(&"skill-a"), "{c_deps:?}");
     assert!(slugs.contains(&"skill-b"), "{c_deps:?}");
     // Depth: A is depth 1, B is depth 2.
@@ -205,7 +207,10 @@ async fn dependency_graph_round_trip() -> Result<()> {
     let b = c_deps.iter().find(|d| d["slug"] == "skill-b").unwrap();
     assert_eq!(a["depth"], 1);
     assert_eq!(b["depth"], 2);
-    assert_eq!(a["version_range"], "1.0.0", "explicit @1.0.0 carried through");
+    assert_eq!(
+        a["version_range"], "1.0.0",
+        "explicit @1.0.0 carried through"
+    );
 
     // 3. Diamond: D requires E + F. E + F both require G.
     let (status, _) = publish(&c, &h, "skill-g", &[]).await?;
@@ -248,7 +253,10 @@ async fn dependency_graph_round_trip() -> Result<()> {
     let body = "---\nname: cyc-b\ndescription: cyc-b v2.\nrequires:\n  - cyc-a\n---\n\n# cyc-b\n";
     let bundle = build_bundle(body);
     let form = Form::new()
-        .text("metadata", json!({"slug": "cyc-b", "version": "2.0.0"}).to_string())
+        .text(
+            "metadata",
+            json!({"slug": "cyc-b", "version": "2.0.0"}).to_string(),
+        )
         .part(
             "bundle",
             Part::bytes(bundle.to_vec())

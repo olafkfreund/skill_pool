@@ -113,7 +113,10 @@ async fn per_tenant_rate_limit_429_after_threshold() -> Result<()> {
             s => panic!("unexpected status {s} on request {i}"),
         }
     }
-    assert_eq!(allowed, 5, "expected exactly 5 allowed requests, got {allowed}");
+    assert_eq!(
+        allowed, 5,
+        "expected exactly 5 allowed requests, got {allowed}"
+    );
     assert_eq!(denied, 5, "expected 5 throttled requests, got {denied}");
 
     // ----- 2. The first 429 carries the headers the docs promise -----
@@ -131,13 +134,20 @@ async fn per_tenant_rate_limit_429_after_threshold() -> Result<()> {
         h.get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()),
         Some("0")
     );
-    assert!(h.get("x-ratelimit-reset").is_some(), "missing X-RateLimit-Reset");
+    assert!(
+        h.get("x-ratelimit-reset").is_some(),
+        "missing X-RateLimit-Reset"
+    );
 
     // ----- 3. Skip list — /v1/healthz is never throttled --------------
     // Hammer the health endpoint past the cap; all must succeed.
     for _ in 0..20 {
         let resp = c.get(format!("{base}/v1/healthz")).send().await?;
-        assert_eq!(resp.status().as_u16(), 200, "/v1/healthz must bypass limits");
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "/v1/healthz must bypass limits"
+        );
     }
 
     // ----- 4. Flushing the Redis counters resets the window ----------

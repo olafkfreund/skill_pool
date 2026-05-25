@@ -129,7 +129,13 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
 
     // --- Test 1: import via body_md ---
     let r = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -139,7 +145,12 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
     }))
     .send()
     .await?;
-    assert_eq!(r.status().as_u16(), 201, "import failed: {}", r.text().await?);
+    assert_eq!(
+        r.status().as_u16(),
+        201,
+        "import failed: {}",
+        r.text().await?
+    );
     let plan: Value = r.json().await?;
     assert_eq!(plan["version"], 1, "first import should be version 1");
     assert_eq!(plan["status"], "active");
@@ -148,7 +159,13 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
 
     // --- GET active plan returns it ---
     let active: Value = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .send()
@@ -175,11 +192,20 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
     .await?;
     assert_eq!(versions.len(), 1, "expected 1 version: {versions:?}");
     // body_md is absent from the slim listing
-    assert!(versions[0].get("body_md").is_none(), "slim listing must omit body_md");
+    assert!(
+        versions[0].get("body_md").is_none(),
+        "slim listing must omit body_md"
+    );
 
     // --- Test 2: re-import same content → dedup → still 1 version ---
     let r2 = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -188,7 +214,12 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
     }))
     .send()
     .await?;
-    assert_eq!(r2.status().as_u16(), 201, "dedup import failed: {}", r2.text().await?);
+    assert_eq!(
+        r2.status().as_u16(),
+        201,
+        "dedup import failed: {}",
+        r2.text().await?
+    );
     let deduped: Value = r2.json().await?;
     // Must return the SAME version id (no new row created).
     assert_eq!(
@@ -211,11 +242,21 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
     .await?
     .json()
     .await?;
-    assert_eq!(versions_after_dedup.len(), 1, "dedup should not create a new version");
+    assert_eq!(
+        versions_after_dedup.len(),
+        1,
+        "dedup should not create a new version"
+    );
 
     // --- Test 3: import different content → 2 versions, latest active ---
     let r3 = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -224,14 +265,28 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
     }))
     .send()
     .await?;
-    assert_eq!(r3.status().as_u16(), 201, "v2 import failed: {}", r3.text().await?);
+    assert_eq!(
+        r3.status().as_u16(),
+        201,
+        "v2 import failed: {}",
+        r3.text().await?
+    );
     let plan_v2: Value = r3.json().await?;
-    assert_eq!(plan_v2["version"], 2, "second unique import should be version 2");
+    assert_eq!(
+        plan_v2["version"], 2,
+        "second unique import should be version 2"
+    );
     assert_eq!(plan_v2["status"], "active");
 
     // Active plan should now be v2.
     let active_v2: Value = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .send()
@@ -254,7 +309,11 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
     .await?
     .json()
     .await?;
-    assert_eq!(versions_after_v2.len(), 2, "should have 2 versions: {versions_after_v2:?}");
+    assert_eq!(
+        versions_after_v2.len(),
+        2,
+        "should have 2 versions: {versions_after_v2:?}"
+    );
 
     // --- Test 4: activate v1 → v1 is active, v2 is superseded ---
     let r4 = authed(
@@ -270,21 +329,35 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
     .json(&json!({ "version": 1 }))
     .send()
     .await?;
-    assert_eq!(r4.status().as_u16(), 200, "activate failed: {}", r4.text().await?);
+    assert_eq!(
+        r4.status().as_u16(),
+        200,
+        "activate failed: {}",
+        r4.text().await?
+    );
     let activated: Value = r4.json().await?;
     assert_eq!(activated["version"], 1);
     assert_eq!(activated["status"], "active");
 
     // GET active should now be v1.
     let re_active: Value = authed(
-        req(&cl, reqwest::Method::GET, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .send()
     .await?
     .json()
     .await?;
-    assert_eq!(re_active["version"], 1, "after activate v1, active should be v1");
+    assert_eq!(
+        re_active["version"], 1,
+        "after activate v1, active should be v1"
+    );
 
     // --- Test 5: GET /plan/versions/{v} returns specific version with body ---
     let specific: Value = authed(
@@ -310,7 +383,13 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
 
     // --- Test 6: import with file source_type + explicit source_url provenance ---
     let r6 = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -320,7 +399,12 @@ async fn plan_import_versions_activate_lifecycle() -> Result<()> {
     }))
     .send()
     .await?;
-    assert_eq!(r6.status().as_u16(), 201, "file+url import failed: {}", r6.text().await?);
+    assert_eq!(
+        r6.status().as_u16(),
+        201,
+        "file+url import failed: {}",
+        r6.text().await?
+    );
     let plan_v3: Value = r6.json().await?;
     assert_eq!(plan_v3["source_type"], "file");
     assert_eq!(plan_v3["source_url"], "/home/user/docs/plan.md");
@@ -339,7 +423,13 @@ async fn plan_refresh_no_source_url_unchanged() -> Result<()> {
 
     // Import a file-sourced plan (no URL to re-fetch).
     authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({
@@ -362,14 +452,22 @@ async fn plan_refresh_no_source_url_unchanged() -> Result<()> {
     )
     .send()
     .await?;
-    assert_eq!(r.status().as_u16(), 200, "refresh failed: {}", r.text().await?);
+    assert_eq!(
+        r.status().as_u16(),
+        200,
+        "refresh failed: {}",
+        r.text().await?
+    );
     let resp: Value = r.json().await?;
     assert_eq!(
         resp["outcome"].as_str().unwrap(),
         "unchanged",
         "refresh with no source_url must return outcome=unchanged"
     );
-    assert!(resp["version"].is_null(), "version should be null for unchanged outcome");
+    assert!(
+        resp["version"].is_null(),
+        "version should be null for unchanged outcome"
+    );
 
     Ok(())
 }
@@ -384,7 +482,13 @@ async fn plan_import_requires_admin() -> Result<()> {
     let cl = client();
 
     let r = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_reader,
     )
     .json(&json!({
@@ -445,7 +549,13 @@ async fn plan_empty_body_400() -> Result<()> {
     let cl = client();
 
     let r = authed(
-        req(&cl, reqwest::Method::POST, &h.base, "/v1/tenant/projects/billing/plan", "acme"),
+        req(
+            &cl,
+            reqwest::Method::POST,
+            &h.base,
+            "/v1/tenant/projects/billing/plan",
+            "acme",
+        ),
         &h.acme_admin,
     )
     .json(&json!({

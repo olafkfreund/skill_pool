@@ -53,10 +53,9 @@ async fn marketplace_and_git_endpoints_are_public_and_rate_limited() -> Result<(
         .raw_token;
 
     // Seed a skill + plugin so info/refs has something real to serve.
-    let acme: uuid::Uuid =
-        sqlx::query_scalar("SELECT id FROM tenants WHERE slug = 'acme'")
-            .fetch_one(&pool)
-            .await?;
+    let acme: uuid::Uuid = sqlx::query_scalar("SELECT id FROM tenants WHERE slug = 'acme'")
+        .fetch_one(&pool)
+        .await?;
     sqlx::query(
         "INSERT INTO skills \
            (tenant_id, slug, version, description, when_to_use, tags, \
@@ -152,11 +151,7 @@ async fn marketplace_and_git_endpoints_are_public_and_rate_limited() -> Result<(
         .header("x-skill-pool-tenant", "acme")
         .send()
         .await?;
-    assert_eq!(
-        resp.status().as_u16(),
-        200,
-        "info/refs must be public-read"
-    );
+    assert_eq!(resp.status().as_u16(), 200, "info/refs must be public-read");
 
     // ----- 2. Rate limit still applies --------------------------------
     let mut allowed = 0;

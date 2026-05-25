@@ -109,9 +109,9 @@ mod fastembed_impl {
                 return Ok(());
             }
             tracing::info!("loading fastembed BGE-small-en-v1.5 (first use, ~30MB)…");
-            let model = fastembed::TextEmbedding::try_new(
-                fastembed::InitOptions::new(fastembed::EmbeddingModel::BGESmallENV15),
-            )?;
+            let model = fastembed::TextEmbedding::try_new(fastembed::InitOptions::new(
+                fastembed::EmbeddingModel::BGESmallENV15,
+            ))?;
             *guard = Some(model);
             Ok(())
         }

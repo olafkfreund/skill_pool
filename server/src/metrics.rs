@@ -19,9 +19,8 @@ use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use prometheus::{
-    register_histogram_vec, register_int_counter_vec, register_int_gauge,
-    register_int_gauge_vec, Encoder, HistogramVec, IntCounter, IntCounterVec, IntGauge,
-    IntGaugeVec, TextEncoder,
+    register_histogram_vec, register_int_counter_vec, register_int_gauge, register_int_gauge_vec,
+    Encoder, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, TextEncoder,
 };
 
 use crate::state::AppState;
@@ -69,8 +68,11 @@ fn http_requests_in_flight() -> &'static IntGauge {
 fn db_pool_size() -> &'static IntGauge {
     static ONCE: std::sync::OnceLock<IntGauge> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
-        register_int_gauge!("db_pool_size", "Current number of connections in the sqlx pool")
-            .expect("register db_pool_size")
+        register_int_gauge!(
+            "db_pool_size",
+            "Current number of connections in the sqlx pool"
+        )
+        .expect("register db_pool_size")
     })
 }
 
@@ -147,11 +149,7 @@ pub fn queue_jobs_total(queue: &str, outcome: &str) -> IntCounter {
 ///
 /// Wire it with `axum::middleware::from_fn_with_state` so it has access to
 /// `AppState` and can sample the DB pool size alongside each request.
-pub async fn track(
-    State(state): State<AppState>,
-    req: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn track(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
     // Capture matched route pattern (e.g. `/v1/skills/:slug`) so the
     // cardinality of the `path` label stays bounded even with UUID segments.
     let path = req
@@ -191,9 +189,7 @@ pub async fn handler() -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let families = prometheus::gather();
     let mut buf = Vec::with_capacity(4096);
-    encoder
-        .encode(&families, &mut buf)
-        .expect("encode metrics");
+    encoder.encode(&families, &mut buf).expect("encode metrics");
 
     (
         StatusCode::OK,

@@ -14,9 +14,7 @@
   let skillMd = $state(untrack(() => form?.draft?.skillMd ?? data.template));
   let kind = $state(untrack(() => form?.draft?.kind ?? data.kind));
 
-  const kindLabel = $derived(
-    kind === 'agent' ? 'agent' : kind === 'command' ? 'command' : 'skill',
-  );
+  const kindLabel = $derived(kind === 'agent' ? 'agent' : kind === 'command' ? 'command' : 'skill');
 
   // When the validate action returns auto-filled metadata, populate the
   // frontmatter fields the user hasn't touched yet.
@@ -38,9 +36,9 @@
 <header class="mb-6">
   <h1 class="text-2xl font-semibold">New {kindLabel}</h1>
   <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-    Write a SKILL.md, validate it (frontmatter / secret scan / quality gates), then publish.
-    The on-disk format is the same for all three catalog kinds — the kind selector below just
-    tells the server which catalog tab this item belongs to.
+    Write a SKILL.md, validate it (frontmatter / secret scan / quality gates), then publish. The
+    on-disk format is the same for all three catalog kinds — the kind selector below just tells the
+    server which catalog tab this item belongs to.
   </p>
 </header>
 

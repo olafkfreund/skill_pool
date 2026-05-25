@@ -161,7 +161,12 @@ async fn put_theme(c: &reqwest::Client, h: &Harness) -> Result<()> {
         .json(&body)
         .send()
         .await?;
-    assert_eq!(r.status().as_u16(), 200, "theme put failed: {}", r.text().await?);
+    assert_eq!(
+        r.status().as_u16(),
+        200,
+        "theme put failed: {}",
+        r.text().await?
+    );
     Ok(())
 }
 
@@ -207,7 +212,11 @@ async fn og_image_basic_render_etag_and_304() -> Result<()> {
     let bytes = r.bytes().await?;
     assert!(!bytes.is_empty(), "expected non-empty body");
     let s = String::from_utf8_lossy(&bytes);
-    assert!(s.contains("<svg"), "body should be SVG: {}", &s[..120.min(s.len())]);
+    assert!(
+        s.contains("<svg"),
+        "body should be SVG: {}",
+        &s[..120.min(s.len())]
+    );
     assert!(s.contains("axum-handler"), "should embed slug");
     assert!(s.contains("v1.2.3"), "should embed version pill");
     assert!(s.contains("Acme Corp"), "should embed brand name");

@@ -150,10 +150,9 @@ async fn republish_with_same_input_does_not_add_a_new_commit() -> Result<()> {
     assert_eq!(resp.status().as_u16(), 201);
 
     // Locate the repo on disk. Tenant UUID is the slug-keyed lookup.
-    let tenant_id: uuid::Uuid =
-        sqlx::query_scalar("SELECT id FROM tenants WHERE slug = 'acme'")
-            .fetch_one(&pool)
-            .await?;
+    let tenant_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM tenants WHERE slug = 'acme'")
+        .fetch_one(&pool)
+        .await?;
     let repo_path = storage_dir
         .path()
         .join(tenant_id.to_string())
@@ -162,14 +161,16 @@ async fn republish_with_same_input_does_not_add_a_new_commit() -> Result<()> {
 
     assert!(repo_path.exists(), "bare repo not created on first publish");
     let commits_after_first = count_commits_on_main(&repo_path).await?;
-    assert_eq!(commits_after_first, 1, "first publish should create exactly one commit");
+    assert_eq!(
+        commits_after_first, 1,
+        "first publish should create exactly one commit"
+    );
 
-    let entries_after_first: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM plugin_marketplace_entries WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(&pool)
-    .await?;
+    let entries_after_first: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM plugin_marketplace_entries WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(entries_after_first, 1);
 
     // ----- Republish: identical inputs except `version` must bump in
@@ -221,12 +222,11 @@ async fn republish_with_same_input_does_not_add_a_new_commit() -> Result<()> {
         "republish with identical tree should not add a new commit (got {commits_after_second})"
     );
 
-    let entries_after_second: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM plugin_marketplace_entries WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(&pool)
-    .await?;
+    let entries_after_second: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM plugin_marketplace_entries WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(
         entries_after_second, 1,
         "marketplace UPSERT must not duplicate rows on republish"

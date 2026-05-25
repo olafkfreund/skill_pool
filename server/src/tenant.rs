@@ -61,11 +61,7 @@ pub fn slug_from_request(parts: &Parts, tenancy: &TenancyMode) -> Result<String,
 /// Used by both the subdomain fallback in `slug_from_request` and the
 /// custom-domain cache lookup in `TenantCtx`.
 pub(crate) fn normalize_host(host: &str) -> String {
-    host.split(':')
-        .next()
-        .unwrap_or(host)
-        .trim()
-        .to_lowercase()
+    host.split(':').next().unwrap_or(host).trim().to_lowercase()
 }
 
 impl<S> FromRequestParts<S> for TenantCtx

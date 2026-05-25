@@ -61,10 +61,7 @@ impl Job for DemoJob {
     }
 }
 
-async fn boot_redis() -> Result<(
-    cache::Redis,
-    testcontainers::ContainerAsync<RedisContainer>,
-)> {
+async fn boot_redis() -> Result<(cache::Redis, testcontainers::ContainerAsync<RedisContainer>)> {
     let r = RedisContainer::default().start().await?;
     let port = r.get_host_port_ipv4(6379).await?;
     let url = format!("redis://127.0.0.1:{port}");
@@ -150,7 +147,10 @@ async fn idempotent_enqueue_dedupes() -> Result<()> {
 
     let due = q.try_dequeue().await?.expect("first job is due");
     let payload: DemoJob = serde_json::from_value(due.payload)?;
-    assert_eq!(payload.note, "first", "the deduped second job must not overwrite the first");
+    assert_eq!(
+        payload.note, "first",
+        "the deduped second job must not overwrite the first"
+    );
 
     Ok(())
 }
@@ -177,7 +177,10 @@ async fn retry_uses_exponential_backoff() -> Result<()> {
     let now_before_nack = unix_ms();
     let outcome = q.nack(&due.id, "boom").await?;
     let (next_run_at_1, attempts_1) = match outcome {
-        NackOutcome::Retrying { next_run_at, attempts } => (next_run_at, attempts),
+        NackOutcome::Retrying {
+            next_run_at,
+            attempts,
+        } => (next_run_at, attempts),
         _ => panic!("expected Retrying"),
     };
     assert_eq!(attempts_1, 1, "attempts increments to 1 on first nack");
@@ -276,7 +279,10 @@ async fn dlq_after_max_attempts() -> Result<()> {
     let id: Vec<String> = conn.lrange(format!("q:{name}:dlq"), 0, -1).await?;
     assert_eq!(id.len(), 1);
     let json: Option<String> = conn.get(format!("q:{name}:job:{}", id[0])).await?;
-    assert!(json.is_some(), "DLQ job envelope should remain for inspection");
+    assert!(
+        json.is_some(),
+        "DLQ job envelope should remain for inspection"
+    );
 
     Ok(())
 }
@@ -385,7 +391,10 @@ async fn graceful_fallback_inline_email_send_when_no_redis() -> Result<()> {
     let state = state::AppState::new(&cfg).await?;
     // Sanity check: no queue, no Redis.
     assert!(state.redis().is_none(), "Redis must be None for this test");
-    assert!(state.queue().is_none(), "Queue must be None when Redis is None");
+    assert!(
+        state.queue().is_none(),
+        "Queue must be None when Redis is None"
+    );
 
     let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -404,7 +413,9 @@ async fn graceful_fallback_inline_email_send_when_no_redis() -> Result<()> {
     let meta = json!({ "slug": "x", "origin": "cli" });
     let form = Form::new().text("metadata", meta.to_string()).part(
         "bundle",
-        Part::bytes(bundle.to_vec()).file_name("x.tar.gz").mime_str("application/gzip")?,
+        Part::bytes(bundle.to_vec())
+            .file_name("x.tar.gz")
+            .mime_str("application/gzip")?,
     );
     let r = c
         .post(format!("{base}/v1/drafts"))
@@ -494,4 +505,3 @@ fn build_bundle(skill_md: &str) -> Bytes {
     gz.write_all(&tar_bytes).unwrap();
     Bytes::from(gz.finish().unwrap())
 }
-

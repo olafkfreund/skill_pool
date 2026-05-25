@@ -150,8 +150,7 @@ async fn projects_crud_and_items_round_trip() -> Result<()> {
     assert_eq!(created["name"], "Acme Billing Service");
     // git_remote should be normalized (SSH → HTTPS, .git stripped)
     assert_eq!(
-        created["git_remote"],
-        "https://github.com/acme/billing",
+        created["git_remote"], "https://github.com/acme/billing",
         "git_remote not normalized: {created}"
     );
 

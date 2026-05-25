@@ -97,7 +97,9 @@ pub async fn commit_skill(
             return Err(anyhow!("git_sync: {label} must not be empty"));
         }
         if value.contains(['/', '\\', '\0']) || value == "." || value == ".." {
-            return Err(anyhow!("git_sync: {label} contains forbidden chars: {value}"));
+            return Err(anyhow!(
+                "git_sync: {label} contains forbidden chars: {value}"
+            ));
         }
     }
 
@@ -201,7 +203,9 @@ async fn do_commit(repo: &Path, rel_path: &str, subject: &str) -> Result<String>
     .await
     .context("git commit")?;
 
-    git(repo, &["rev-parse", "HEAD"]).await.context("rev-parse HEAD")
+    git(repo, &["rev-parse", "HEAD"])
+        .await
+        .context("rev-parse HEAD")
 }
 
 /// Decompress `bundle_bytes` (gz-tar produced by `bundle::validate`) into
@@ -274,12 +278,7 @@ mod tests {
         let init = SyncCommand::new("git")
             .arg("-C")
             .arg(tmp.path())
-            .args([
-                "-c",
-                "init.defaultBranch=main",
-                "init",
-                "-q",
-            ])
+            .args(["-c", "init.defaultBranch=main", "init", "-q"])
             .status()
             .ok()?;
         if !init.success() {
@@ -341,9 +340,7 @@ mod tests {
         assert_eq!(sha.len(), 40, "full sha");
 
         // File landed at the expected path.
-        let landed = tmp
-            .path()
-            .join("acme/skill/axum-tip/1.0.0/SKILL.md");
+        let landed = tmp.path().join("acme/skill/axum-tip/1.0.0/SKILL.md");
         assert!(landed.exists(), "expected file at {}", landed.display());
 
         // git log -1 --pretty=%s shows our subject.
@@ -439,7 +436,11 @@ mod tests {
         let extra = tmp
             .path()
             .join("acme/skill/withbundle/1.0.0/examples/quick.md");
-        assert!(extra.exists(), "extracted file should exist at {}", extra.display());
+        assert!(
+            extra.exists(),
+            "extracted file should exist at {}",
+            extra.display()
+        );
         let content = std::fs::read_to_string(&extra).unwrap();
         assert_eq!(content, "hello extra\n");
     }

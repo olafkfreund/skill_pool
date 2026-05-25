@@ -23,8 +23,8 @@
     Curated <code class="rounded bg-[var(--sp-muted)] px-1">stack-tag → skill-slug</code>
     pairs that drive <code class="rounded bg-[var(--sp-muted)] px-1">skill-pool bootstrap</code>.
     When a developer enters a project that fingerprints as
-    <code class="rounded bg-[var(--sp-muted)] px-1">rust + axum + postgres</code>, the union of
-    the skills mapped to any of those tags is what they're recommended to install.
+    <code class="rounded bg-[var(--sp-muted)] px-1">rust + axum + postgres</code>, the union of the
+    skills mapped to any of those tags is what they're recommended to install.
   </p>
   <p class="mt-2 text-xs text-[var(--sp-muted-fg)]">
     Forward references are allowed — a mapping can name a skill that doesn't exist yet.
@@ -42,17 +42,15 @@
   <div
     class="mb-4 flex items-center gap-2 rounded-[var(--sp-radius)] border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800"
   >
-    <CheckCircle2 size="16" /> Added <code class="rounded bg-emerald-100 px-1"
-      >{form.mapping.stack} → {form.mapping.skill}</code
-    >.
+    <CheckCircle2 size="16" /> Added
+    <code class="rounded bg-emerald-100 px-1">{form.mapping.stack} → {form.mapping.skill}</code>.
   </div>
 {:else if form?.removed}
   <div
     class="mb-4 flex items-center gap-2 rounded-[var(--sp-radius)] border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800"
   >
-    <CheckCircle2 size="16" /> Removed <code class="rounded bg-emerald-100 px-1"
-      >{form.mapping.stack} → {form.mapping.skill}</code
-    >.
+    <CheckCircle2 size="16" /> Removed
+    <code class="rounded bg-emerald-100 px-1">{form.mapping.stack} → {form.mapping.skill}</code>.
   </div>
 {:else if 'error' in data && data.error}
   <div
@@ -98,8 +96,8 @@
     class="rounded-[var(--sp-radius)] border border-dashed border-[var(--sp-border)] p-12 text-center text-sm text-[var(--sp-muted-fg)]"
   >
     No stack mappings yet. Once you add some,
-    <code class="rounded bg-[var(--sp-muted)] px-1">skill-pool bootstrap</code> will start
-    recommending skills based on detected stacks.
+    <code class="rounded bg-[var(--sp-muted)] px-1">skill-pool bootstrap</code> will start recommending
+    skills based on detected stacks.
   </div>
 {:else}
   <div

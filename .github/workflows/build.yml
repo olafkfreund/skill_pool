@@ -32,6 +32,19 @@ jobs:
   build-and-push:
     name: build/push ${{ matrix.image.name }}
     runs-on: ubuntu-latest
+    # Gate: only push to ECR when the operator has opted in by setting
+    # the repo variable `AWS_DEPLOY_ENABLED=true` (and the matching
+    # secrets/vars below). Local NixOS / Helm / Compose deployments
+    # don't need this workflow; gating prevents two red CI badges on
+    # every push to main.
+    #
+    # To enable:
+    #   gh variable set AWS_DEPLOY_ENABLED --body true
+    #   gh variable set AWS_REGION         --body <your-region>
+    #   gh variable set ECR_REPO_SERVER    --body <repo>
+    #   gh variable set ECR_REPO_WEB       --body <repo>
+    #   gh secret   set AWS_ROLE_ARN       --body <role-arn>
+    if: ${{ vars.AWS_DEPLOY_ENABLED == 'true' }}
 
     strategy:
       fail-fast: false

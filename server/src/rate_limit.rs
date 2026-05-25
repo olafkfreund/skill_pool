@@ -312,10 +312,18 @@ async fn check_and_bump(
     let mut conn = (**redis).clone();
     let (rpm_count, burst_count): (i64, i64) = redis::pipe()
         .atomic()
-        .cmd("INCR").arg(&rpm_key)
-        .cmd("EXPIRE").arg(&rpm_key).arg(90).ignore()
-        .cmd("INCR").arg(&burst_key)
-        .cmd("EXPIRE").arg(&burst_key).arg(5).ignore()
+        .cmd("INCR")
+        .arg(&rpm_key)
+        .cmd("EXPIRE")
+        .arg(&rpm_key)
+        .arg(90)
+        .ignore()
+        .cmd("INCR")
+        .arg(&burst_key)
+        .cmd("EXPIRE")
+        .arg(&burst_key)
+        .arg(5)
+        .ignore()
         .query_async(&mut conn)
         .await?;
 
@@ -449,7 +457,9 @@ mod tests {
         assert!(is_skipped("/v1/tenant/session-policy"));
         assert!(is_skipped("/v1/auth/oidc/acme/start"));
         assert!(is_skipped("/v1/auth/saml/acme/acs"));
-        assert!(is_skipped("/v1/tenant/custom-domains/skills.acme.com/cert-ok"));
+        assert!(is_skipped(
+            "/v1/tenant/custom-domains/skills.acme.com/cert-ok"
+        ));
         // Real API paths must NOT be skipped.
         assert!(!is_skipped("/v1/skills"));
         assert!(!is_skipped("/v1/drafts"));

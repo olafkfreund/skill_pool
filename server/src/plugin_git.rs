@@ -91,9 +91,11 @@ pub async fn materialise_internal(
     // which is fast for plugin-sized trees (<< 1 MB typical).
     let slug_owned = slug.to_string();
     let version_owned = version.to_string();
-    tokio::task::spawn_blocking(move || write_commit(&repo_path, &slug_owned, &version_owned, &tree))
-        .await
-        .map_err(|e| anyhow!("plugin_git materialise join: {e}"))??;
+    tokio::task::spawn_blocking(move || {
+        write_commit(&repo_path, &slug_owned, &version_owned, &tree)
+    })
+    .await
+    .map_err(|e| anyhow!("plugin_git materialise join: {e}"))??;
     Ok(())
 }
 
@@ -109,8 +111,8 @@ pub(crate) async fn build_tree(
 
     // 1. .claude-plugin/plugin.json — manifest JSONB serialised pretty so
     //    cloners reading it in an editor see the same shape they pasted.
-    let manifest_pretty = serde_json::to_vec_pretty(manifest)
-        .context("serialise manifest for plugin.json")?;
+    let manifest_pretty =
+        serde_json::to_vec_pretty(manifest).context("serialise manifest for plugin.json")?;
     out.insert(
         PathBuf::from(".claude-plugin").join("plugin.json"),
         manifest_pretty,
@@ -159,8 +161,8 @@ fn copy_inline(
     if !v.is_object() {
         return Ok(());
     }
-    let pretty = serde_json::to_vec_pretty(v)
-        .with_context(|| format!("serialise inline {field}"))?;
+    let pretty =
+        serde_json::to_vec_pretty(v).with_context(|| format!("serialise inline {field}"))?;
     out.insert(PathBuf::from(dest), pretty);
     Ok(())
 }
@@ -297,9 +299,8 @@ fn write_commit(
     // Create the bare repo on first publish. Idempotent — opening an
     // existing bare repo at the same path Just Works.
     if let Some(parent) = repo_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!("create plugin git parent dir {}", parent.display())
-        })?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create plugin git parent dir {}", parent.display()))?;
     }
     let repo = if repo_path.exists() {
         Repository::open_bare(repo_path)
@@ -336,8 +337,8 @@ fn write_commit(
         }
     }
 
-    let sig = Signature::now("skill-pool", "noreply@skill-pool")
-        .context("build commit signature")?;
+    let sig =
+        Signature::now("skill-pool", "noreply@skill-pool").context("build commit signature")?;
     let parents: Vec<&git2::Commit<'_>> = parent_commit.iter().collect();
 
     let message = format!("publish {slug}@{version}");

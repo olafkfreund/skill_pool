@@ -35,10 +35,10 @@
     <Skull size="22" /> Graveyard
   </h1>
   <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-    Skills that haven't been downloaded in a while and have few invocations. The defaults
-    follow the master plan: <strong>{data.days} days</strong> stale,
-    <strong>&lt;{data.maxUses} uses</strong>. Archive a skill to remove it from the catalog
-    (the row stays in the database for audit). Use the URL params
+    Skills that haven't been downloaded in a while and have few invocations. The defaults follow the
+    master plan: <strong>{data.days} days</strong> stale,
+    <strong>&lt;{data.maxUses} uses</strong>. Archive a skill to remove it from the catalog (the row
+    stays in the database for audit). Use the URL params
     <code class="rounded bg-[var(--sp-muted)] px-1">?days=</code> and
     <code class="rounded bg-[var(--sp-muted)] px-1">?max_uses=</code> to retune.
   </p>

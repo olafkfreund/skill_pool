@@ -147,14 +147,12 @@ async fn create_draft(
         "notes": notes,
         "tags": ["from-cli"],
     });
-    let form = Form::new()
-        .text("metadata", meta.to_string())
-        .part(
-            "bundle",
-            Part::bytes(bundle.to_vec())
-                .file_name(format!("{slug}.tar.gz"))
-                .mime_str("application/gzip")?,
-        );
+    let form = Form::new().text("metadata", meta.to_string()).part(
+        "bundle",
+        Part::bytes(bundle.to_vec())
+            .file_name(format!("{slug}.tar.gz"))
+            .mime_str("application/gzip")?,
+    );
     let resp = authed(
         req(c, reqwest::Method::POST, &h.base, "/v1/drafts", "acme"),
         &h.acme_token,

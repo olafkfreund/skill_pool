@@ -7,7 +7,10 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
   // Truthy value (`'1'`, `'on'`, `'true'`) enables semantic mode.
   const semanticParam = url.searchParams.get('semantic');
   const semanticOn =
-    semanticParam !== null && semanticParam !== '' && semanticParam !== '0' && semanticParam !== 'false';
+    semanticParam !== null &&
+    semanticParam !== '' &&
+    semanticParam !== '0' &&
+    semanticParam !== 'false';
 
   const rawKind = url.searchParams.get('kind');
   const kind: CatalogKind = isCatalogKind(rawKind) ? rawKind : 'skill';

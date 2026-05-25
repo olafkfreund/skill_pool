@@ -145,9 +145,8 @@ async fn publish_version(
     version: &str,
     description: &str,
 ) -> Result<()> {
-    let body = format!(
-        "---\nname: {slug}\ndescription: {description}\ntags: [test]\n---\n\n# {slug}\n"
-    );
+    let body =
+        format!("---\nname: {slug}\ndescription: {description}\ntags: [test]\n---\n\n# {slug}\n");
     let bundle = build_bundle(&body);
     let meta = json!({ "slug": slug, "version": version });
     let form = Form::new().text("metadata", meta.to_string()).part(
@@ -182,7 +181,12 @@ async fn versions_returns_all_in_desc_order() -> Result<()> {
     publish_version(&c, &h, "axum-router", "2.0.0", "rewrite for axum 0.8").await?;
 
     let r = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/skills/axum-router/versions"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/axum-router/versions",
+        ),
         &h.acme_token,
     )
     .send()
@@ -211,7 +215,12 @@ async fn versions_returns_all_in_desc_order() -> Result<()> {
 
     // 404 for unknown slug.
     let r = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/skills/nope/versions"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/nope/versions",
+        ),
         &h.acme_token,
     )
     .send()
@@ -230,7 +239,12 @@ async fn versions_truncates_long_descriptions_to_200_chars() -> Result<()> {
     publish_version(&c, &h, "long-desc", "1.0.0", &long).await?;
 
     let body: Value = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/skills/long-desc/versions"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/long-desc/versions",
+        ),
         &h.acme_token,
     )
     .send()

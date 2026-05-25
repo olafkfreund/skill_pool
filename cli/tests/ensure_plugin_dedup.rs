@@ -164,6 +164,7 @@ async fn direct_skill_pin_wins_over_plugin_bundled_at_different_versions() {
 
     // The resolved version on disk is 1.0 (the direct pin), proven by
     // the marker content we put in the bundle the server served.
-    let installed = std::fs::read_to_string(project_root.join(".claude/skills/a/SKILL.md")).unwrap();
+    let installed =
+        std::fs::read_to_string(project_root.join(".claude/skills/a/SKILL.md")).unwrap();
     assert_eq!(installed, "MARKER-A-version-1.0");
 }

@@ -42,10 +42,10 @@
     <ShieldCheck size="22" /> Single sign-on
   </h1>
   <p class="mt-1 text-sm text-[var(--sp-muted-fg)]">
-    Configure how members of <code class="rounded bg-[var(--sp-muted)] px-1">{data.tenant
-        .slug}</code> sign in. Pick OIDC for OpenID Connect IdPs (Okta, Auth0, Keycloak,
-    Authentik, Azure AD) or SAML 2.0 for IdPs that don't speak OIDC. SCIM provisioning runs
-    independently of the sign-in protocol.
+    Configure how members of <code class="rounded bg-[var(--sp-muted)] px-1"
+      >{data.tenant.slug}</code
+    > sign in. Pick OIDC for OpenID Connect IdPs (Okta, Auth0, Keycloak, Authentik, Azure AD) or SAML
+    2.0 for IdPs that don't speak OIDC. SCIM provisioning runs independently of the sign-in protocol.
   </p>
 </header>
 
@@ -125,10 +125,12 @@
 {#if activeTab === 'oidc'}
   <section class="mb-10">
     <p class="mb-4 max-w-2xl text-sm text-[var(--sp-muted-fg)]">
-      Paste your IdP's issuer URL and the client credentials it issued for skill-pool. The
-      server discovers <code class="rounded bg-[var(--sp-muted)] px-1">.well-known/openid-configuration</code>
-      at the issuer URL, so any spec-compliant IdP works without per-vendor wiring. Members
-      sign in at <code class="rounded bg-[var(--sp-muted)] px-1">/v1/auth/oidc/&lt;tenant&gt;/start</code>.
+      Paste your IdP's issuer URL and the client credentials it issued for skill-pool. The server
+      discovers <code class="rounded bg-[var(--sp-muted)] px-1"
+        >.well-known/openid-configuration</code
+      >
+      at the issuer URL, so any spec-compliant IdP works without per-vendor wiring. Members sign in at
+      <code class="rounded bg-[var(--sp-muted)] px-1">/v1/auth/oidc/&lt;tenant&gt;/start</code>.
     </p>
 
     <form method="POST" action="?/saveOidc" class="max-w-2xl space-y-4">
@@ -227,9 +229,9 @@
   <section class="mb-10">
     <p class="mb-4 max-w-2xl text-sm text-[var(--sp-muted-fg)]">
       Paste the full <code class="rounded bg-[var(--sp-muted)] px-1">EntityDescriptor</code> XML
-      published by your IdP (e.g. <code class="rounded bg-[var(--sp-muted)] px-1">https://idp/saml2/idp/metadata.php</code>).
-      We extract the entity ID, SSO URL, and signing certificate. Hand your IdP admin our
-      metadata at
+      published by your IdP (e.g.
+      <code class="rounded bg-[var(--sp-muted)] px-1">https://idp/saml2/idp/metadata.php</code>). We
+      extract the entity ID, SSO URL, and signing certificate. Hand your IdP admin our metadata at
       <code class="rounded bg-[var(--sp-muted)] px-1 break-all">{data.samlMetadataUrl}</code>.
     </p>
 
@@ -334,8 +336,8 @@
       class="flex items-center justify-between rounded-[var(--sp-radius)] border border-red-200 bg-red-50 p-3 text-sm"
     >
       <span class="text-red-800">
-        Remove the current {config.kind === 'oidc' ? 'OIDC' : 'SAML'} configuration. Members will
-        no longer be able to start an SSO sign-in.
+        Remove the current {config.kind === 'oidc' ? 'OIDC' : 'SAML'} configuration. Members will no longer
+        be able to start an SSO sign-in.
       </span>
       <button
         type="submit"
@@ -353,9 +355,9 @@
     SCIM 2.0 provisioning
   </h2>
   <p class="mb-3 text-sm text-[var(--sp-muted-fg)]">
-    Optional. Point your IdP's user-provisioning at the endpoint below using a bearer token with
-    the <code class="rounded bg-[var(--sp-muted)] px-1">scim:provision</code> scope. SCIM works
-    whether OIDC or SAML is configured — or even when neither is.
+    Optional. Point your IdP's user-provisioning at the endpoint below using a bearer token with the <code
+      class="rounded bg-[var(--sp-muted)] px-1">scim:provision</code
+    > scope. SCIM works whether OIDC or SAML is configured — or even when neither is.
   </p>
   <dl
     class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-muted)] p-3 text-xs"

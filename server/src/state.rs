@@ -289,8 +289,9 @@ impl AppState {
                 Arc::new(self.inner.storage.clone())
             }
             Some(uri) => {
-                let s = Storage::from_uri(&uri)
-                    .map_err(|e| anyhow::anyhow!("tenant `{}` storage_uri: {e}", tenant.tenant_slug))?;
+                let s = Storage::from_uri(&uri).map_err(|e| {
+                    anyhow::anyhow!("tenant `{}` storage_uri: {e}", tenant.tenant_slug)
+                })?;
                 Arc::new(s)
             }
         };
@@ -386,7 +387,6 @@ impl AppState {
         }
         Ok(state)
     }
-
 
     /// Shared cache of per-tenant branded SMTP transports.
     pub fn email_transport(&self) -> &Arc<EmailTransportCache> {

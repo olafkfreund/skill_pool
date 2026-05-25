@@ -107,10 +107,9 @@ async fn boot() -> Result<Harness> {
     admin::create_tenant(&pool, "acme", "Acme Corp", "team").await?;
     // tenant:admin scope covers both the SIEM config endpoint and the
     // theme-PUT we use to trigger an audit write below.
-    let acme_admin_token =
-        admin::create_token(&pool, "acme", "admin", "tenant:admin")
-            .await?
-            .raw_token;
+    let acme_admin_token = admin::create_token(&pool, "acme", "admin", "tenant:admin")
+        .await?
+        .raw_token;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -228,10 +227,7 @@ async fn put_and_get_audit_siem_config_redacts_token() -> Result<()> {
     let status = resp.status().as_u16();
     let body: Value = resp.json().await?;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(
-        body["url"],
-        "https://siem.example.com/services/collector"
-    );
+    assert_eq!(body["url"], "https://siem.example.com/services/collector");
     assert_eq!(body["token_configured"], true);
     // Token must never come back over the wire.
     assert!(
@@ -254,10 +250,7 @@ async fn put_and_get_audit_siem_config_redacts_token() -> Result<()> {
     .await?
     .json()
     .await?;
-    assert_eq!(
-        body["url"],
-        "https://siem.example.com/services/collector"
-    );
+    assert_eq!(body["url"], "https://siem.example.com/services/collector");
     assert_eq!(body["token_configured"], true);
     Ok(())
 }

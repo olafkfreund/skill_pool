@@ -94,11 +94,7 @@ fn client() -> reqwest::Client {
         .unwrap()
 }
 
-async fn upload(
-    c: &reqwest::Client,
-    h: &Harness,
-    body: Vec<u8>,
-) -> Result<reqwest::Response> {
+async fn upload(c: &reqwest::Client, h: &Harness, body: Vec<u8>) -> Result<reqwest::Response> {
     let part = Part::bytes(body)
         .file_name("overlay.css")
         .mime_str("text/css")?;
@@ -156,7 +152,11 @@ async fn upload_get_delete_roundtrip() -> Result<()> {
         Some("nosniff"),
     );
     let returned = resp.bytes().await?;
-    assert_eq!(returned.as_ref(), css.as_slice(), "body should match upload byte-for-byte");
+    assert_eq!(
+        returned.as_ref(),
+        css.as_slice(),
+        "body should match upload byte-for-byte"
+    );
 
     // DELETE → 204.
     let resp = c
@@ -189,7 +189,10 @@ async fn rejects_import() -> Result<()> {
     let body: Value = resp.json().await?;
     assert_eq!(status, 400, "@import upload should be 400: {body}");
     let msg = body["message"].as_str().unwrap_or("").to_ascii_lowercase();
-    assert!(msg.contains("@import"), "error should mention @import: {msg}");
+    assert!(
+        msg.contains("@import"),
+        "error should mention @import: {msg}"
+    );
 
     Ok(())
 }
@@ -204,10 +207,7 @@ async fn rejects_external_url() -> Result<()> {
     assert_eq!(resp.status().as_u16(), 400);
     let body: Value = resp.json().await?;
     let msg = body["message"].as_str().unwrap_or("").to_ascii_lowercase();
-    assert!(
-        msg.contains("url"),
-        "error should mention url(): {msg}",
-    );
+    assert!(msg.contains("url"), "error should mention url(): {msg}",);
 
     Ok(())
 }
@@ -224,7 +224,10 @@ async fn rejects_comment_hidden_import() -> Result<()> {
     assert_eq!(resp.status().as_u16(), 400);
     let body: Value = resp.json().await?;
     let msg = body["message"].as_str().unwrap_or("").to_ascii_lowercase();
-    assert!(msg.contains("@import"), "error should mention @import: {msg}");
+    assert!(
+        msg.contains("@import"),
+        "error should mention @import: {msg}"
+    );
 
     Ok(())
 }

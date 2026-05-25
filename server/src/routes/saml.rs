@@ -66,7 +66,9 @@ pub async fn metadata(
     .await?;
 
     let sp_entity_id = match row {
-        Some(r) => r.sp_entity_id.unwrap_or_else(|| default_sp_entity_id(&tenant.tenant_slug)),
+        Some(r) => r
+            .sp_entity_id
+            .unwrap_or_else(|| default_sp_entity_id(&tenant.tenant_slug)),
         None => {
             return Err(AppError::BadRequest(
                 "SAML not configured for this tenant".into(),
@@ -214,7 +216,9 @@ async fn load_saml_config(
     Ok(SamlConfig {
         idp_entity_id: row.idp_entity_id,
         idp_x509_cert: row.idp_x509_cert,
-        sp_entity_id: row.sp_entity_id.unwrap_or_else(|| default_sp_entity_id(tenant_slug)),
+        sp_entity_id: row
+            .sp_entity_id
+            .unwrap_or_else(|| default_sp_entity_id(tenant_slug)),
         default_role: row.default_role,
     })
 }

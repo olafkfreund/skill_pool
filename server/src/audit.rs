@@ -224,6 +224,11 @@ impl SiemConfig {
         )
         .fetch_optional(db)
         .await?;
-        Ok(row.and_then(|r| r.tenant_audit_siem_url.map(|u| Self { url: u, token: r.tenant_audit_siem_token })))
+        Ok(row.and_then(|r| {
+            r.tenant_audit_siem_url.map(|u| Self {
+                url: u,
+                token: r.tenant_audit_siem_token,
+            })
+        }))
     }
 }

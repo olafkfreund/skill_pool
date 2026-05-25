@@ -142,7 +142,9 @@ pub fn decrypt_password(blob: &[u8]) -> Result<String> {
                 .map_err(|e| anyhow!("base64 decode: {e}"))?;
             String::from_utf8(pt).map_err(|e| anyhow!("decoded bytes not UTF-8: {e}"))
         }
-        other => Err(anyhow!("unknown email-branding password format byte: {other:#04x}")),
+        other => Err(anyhow!(
+            "unknown email-branding password format byte: {other:#04x}"
+        )),
     }
 }
 
@@ -315,7 +317,10 @@ pub async fn send_branded(
         Err(e) => return SendOutcome::Failed(format!("invalid to address: {e}")),
     };
 
-    let mut builder = Message::builder().from(from.clone()).to(to).subject(subject);
+    let mut builder = Message::builder()
+        .from(from.clone())
+        .to(to)
+        .subject(subject);
     if let Some(rt) = &row.reply_to {
         if !rt.trim().is_empty() {
             match rt.parse::<Mailbox>() {

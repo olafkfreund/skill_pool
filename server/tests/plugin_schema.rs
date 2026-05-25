@@ -29,7 +29,10 @@ async fn fresh_db() -> Result<Db> {
         .await?;
     let port = pg.get_host_port_ipv4(5432).await?;
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = PgPoolOptions::new().max_connections(4).connect(&url).await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&url)
+        .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(Db { pool, _pg: pg })
 }
@@ -38,12 +41,7 @@ async fn make_tenant(pool: &PgPool, slug: &str) -> Result<Uuid> {
     Ok(admin::create_tenant(pool, slug, slug, "team").await?.id)
 }
 
-async fn insert_plugin(
-    pool: &PgPool,
-    tenant_id: Uuid,
-    slug: &str,
-    version: &str,
-) -> Result<Uuid> {
+async fn insert_plugin(pool: &PgPool, tenant_id: Uuid, slug: &str, version: &str) -> Result<Uuid> {
     let row = sqlx::query!(
         "INSERT INTO plugins (tenant_id, slug, version, name, manifest) \
          VALUES ($1, $2, $3, $4, $5) RETURNING id",
@@ -86,8 +84,13 @@ async fn tenant_cascade_deletes_plugins_and_contents() -> Result<()> {
         "INSERT INTO plugin_contents \
            (plugin_id, content_slug, content_kind, content_version) \
          VALUES ($1, $2, $3, $4), ($1, $5, $6, $7)",
-        plugin_id, "fmt", "skill", "0.1.0",
-        "lint", "agent", "0.2.0",
+        plugin_id,
+        "fmt",
+        "skill",
+        "0.1.0",
+        "lint",
+        "agent",
+        "0.2.0",
     )
     .execute(&db.pool)
     .await?;
@@ -96,7 +99,10 @@ async fn tenant_cascade_deletes_plugins_and_contents() -> Result<()> {
         "INSERT INTO plugin_marketplace_entries \
            (tenant_id, plugin_slug, plugin_id, version, source_url, entry_json) \
          VALUES ($1, $2, $3, $4, $5, $6)",
-        acme, "rust-toolkit", plugin_id, "1.0.0",
+        acme,
+        "rust-toolkit",
+        plugin_id,
+        "1.0.0",
         "https://acme.skill-pool.example.com/git/plugins/rust-toolkit.git",
         json!({ "name": "rust-toolkit", "version": "1.0.0" }),
     )
@@ -125,15 +131,20 @@ async fn tenant_cascade_deletes_plugins_and_contents() -> Result<()> {
             .bind(plugin_id)
             .fetch_one(&db.pool)
             .await?;
-    assert_eq!(contents.0, 0, "plugin_contents should cascade via plugin_id");
+    assert_eq!(
+        contents.0, 0,
+        "plugin_contents should cascade via plugin_id"
+    );
 
-    let entries: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM plugin_marketplace_entries WHERE tenant_id = $1",
-    )
-    .bind(acme)
-    .fetch_one(&db.pool)
-    .await?;
-    assert_eq!(entries.0, 0, "marketplace entries should cascade with tenant");
+    let entries: (i64,) =
+        sqlx::query_as("SELECT count(*) FROM plugin_marketplace_entries WHERE tenant_id = $1")
+            .bind(acme)
+            .fetch_one(&db.pool)
+            .await?;
+    assert_eq!(
+        entries.0, 0,
+        "marketplace entries should cascade with tenant"
+    );
 
     Ok(())
 }
@@ -161,15 +172,17 @@ async fn cross_tenant_plugin_id_in_marketplace_entry_rejected_at_schema_layer() 
         "INSERT INTO plugin_marketplace_entries \
            (tenant_id, plugin_slug, plugin_id, version, source_url, entry_json) \
          VALUES ($1, $2, $3, $4, $5, $6)",
-        globex, "shared", acme_plugin, "1.0.0",
-        "https://example.com/git.git", json!({}),
+        globex,
+        "shared",
+        acme_plugin,
+        "1.0.0",
+        "https://example.com/git.git",
+        json!({}),
     )
     .execute(&db.pool)
     .await;
 
-    let err = res.expect_err(
-        "composite FK must reject cross-tenant plugin_id at the schema layer",
-    );
+    let err = res.expect_err("composite FK must reject cross-tenant plugin_id at the schema layer");
     let msg = err.to_string();
     assert!(
         msg.contains("plugin_marketplace_entries_plugin_tenant_match")
@@ -183,8 +196,12 @@ async fn cross_tenant_plugin_id_in_marketplace_entry_rejected_at_schema_layer() 
         "INSERT INTO plugin_marketplace_entries \
            (tenant_id, plugin_slug, plugin_id, version, source_url, entry_json) \
          VALUES ($1, $2, $3, $4, $5, $6)",
-        acme, "shared", acme_plugin, "1.0.0",
-        "https://acme.skill-pool.example.com/git/plugins/shared.git", json!({}),
+        acme,
+        "shared",
+        acme_plugin,
+        "1.0.0",
+        "https://acme.skill-pool.example.com/git/plugins/shared.git",
+        json!({}),
     )
     .execute(&db.pool)
     .await?;
@@ -206,7 +223,10 @@ async fn plugin_contents_kind_check_rejects_bogus() -> Result<()> {
         "INSERT INTO plugin_contents \
            (plugin_id, content_slug, content_kind, content_version) \
          VALUES ($1, $2, $3, $4)",
-        plugin, "bogus", "plugin", "1.0.0",
+        plugin,
+        "bogus",
+        "plugin",
+        "1.0.0",
     )
     .execute(&db.pool)
     .await
@@ -264,7 +284,10 @@ async fn plugin_cascade_deletes_contents_and_entries() -> Result<()> {
         "INSERT INTO plugin_contents \
            (plugin_id, content_slug, content_kind, content_version) \
          VALUES ($1, $2, $3, $4)",
-        plugin, "fmt", "skill", "0.1.0",
+        plugin,
+        "fmt",
+        "skill",
+        "0.1.0",
     )
     .execute(&db.pool)
     .await?;
@@ -273,7 +296,12 @@ async fn plugin_cascade_deletes_contents_and_entries() -> Result<()> {
         "INSERT INTO plugin_marketplace_entries \
            (tenant_id, plugin_slug, plugin_id, version, source_url, entry_json) \
          VALUES ($1, $2, $3, $4, $5, $6)",
-        acme, "kit", plugin, "1.0.0", "https://example.com/g.git", json!({}),
+        acme,
+        "kit",
+        plugin,
+        "1.0.0",
+        "https://example.com/g.git",
+        json!({}),
     )
     .execute(&db.pool)
     .await?;
@@ -289,12 +317,11 @@ async fn plugin_cascade_deletes_contents_and_entries() -> Result<()> {
             .await?;
     assert_eq!(contents.0, 0);
 
-    let entries: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM plugin_marketplace_entries WHERE plugin_id = $1",
-    )
-    .bind(plugin)
-    .fetch_one(&db.pool)
-    .await?;
+    let entries: (i64,) =
+        sqlx::query_as("SELECT count(*) FROM plugin_marketplace_entries WHERE plugin_id = $1")
+            .bind(plugin)
+            .fetch_one(&db.pool)
+            .await?;
     assert_eq!(entries.0, 0);
 
     Ok(())
@@ -313,7 +340,11 @@ async fn sourcing_mode_invariants() -> Result<()> {
     let bad_external = sqlx::query!(
         "INSERT INTO plugins (tenant_id, slug, version, name, manifest, sourcing_mode) \
          VALUES ($1, $2, $3, $4, $5, 'external')",
-        acme, "ext-no-url", "1.0.0", "ext-no-url", json!({}),
+        acme,
+        "ext-no-url",
+        "1.0.0",
+        "ext-no-url",
+        json!({}),
     )
     .execute(&db.pool)
     .await;
@@ -323,7 +354,11 @@ async fn sourcing_mode_invariants() -> Result<()> {
     let bad_mirror = sqlx::query!(
         "INSERT INTO plugins (tenant_id, slug, version, name, manifest, sourcing_mode) \
          VALUES ($1, $2, $3, $4, $5, 'mirror')",
-        acme, "mir-no-url", "1.0.0", "mir-no-url", json!({}),
+        acme,
+        "mir-no-url",
+        "1.0.0",
+        "mir-no-url",
+        json!({}),
     )
     .execute(&db.pool)
     .await;
@@ -333,7 +368,11 @@ async fn sourcing_mode_invariants() -> Result<()> {
     sqlx::query!(
         "INSERT INTO plugins (tenant_id, slug, version, name, manifest, sourcing_mode) \
          VALUES ($1, $2, $3, $4, $5, 'internal')",
-        acme, "internal-ok", "1.0.0", "internal-ok", json!({}),
+        acme,
+        "internal-ok",
+        "1.0.0",
+        "internal-ok",
+        json!({}),
     )
     .execute(&db.pool)
     .await?;

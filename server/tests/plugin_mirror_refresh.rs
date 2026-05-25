@@ -49,14 +49,7 @@ fn make_upstream_repo_v1(repo_path: &Path) -> Result<()> {
     let root_oid = root.write()?;
     let tree = repo.find_tree(root_oid)?;
     let sig = Signature::now("test", "test@example.com")?;
-    repo.commit(
-        Some("refs/heads/main"),
-        &sig,
-        &sig,
-        "v1",
-        &tree,
-        &[],
-    )?;
+    repo.commit(Some("refs/heads/main"), &sig, &sig, "v1", &tree, &[])?;
     repo.set_head("refs/heads/main")?;
     Ok(())
 }
@@ -81,14 +74,7 @@ fn push_upstream_v2(repo_path: &Path) -> Result<()> {
     let tree = repo.find_tree(root_oid)?;
     let sig = Signature::now("test", "test@example.com")?;
     let parent = repo.head()?.peel_to_commit()?;
-    repo.commit(
-        Some("refs/heads/main"),
-        &sig,
-        &sig,
-        "v2",
-        &tree,
-        &[&parent],
-    )?;
+    repo.commit(Some("refs/heads/main"), &sig, &sig, "v2", &tree, &[&parent])?;
     Ok(())
 }
 
@@ -123,11 +109,10 @@ async fn plugin_mirror_refresh_propagates_upstream_changes() -> Result<()> {
     make_upstream_repo_v1(&upstream_path)?;
     let upstream_url = format!("file://{}", upstream_path.display());
 
-    let tenant_id: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT id FROM tenants WHERE slug = 'acme'",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let tenant_id: uuid::Uuid =
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM tenants WHERE slug = 'acme'")
+            .fetch_one(&pool)
+            .await?;
 
     let plugin_id: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
         "INSERT INTO plugins \

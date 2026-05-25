@@ -12,7 +12,9 @@
 </a>
 
 <header class="mb-6">
-  <div class="flex items-center gap-2 text-[10px] tracking-wider text-[var(--sp-muted-fg)] uppercase">
+  <div
+    class="flex items-center gap-2 text-[10px] tracking-wider text-[var(--sp-muted-fg)] uppercase"
+  >
     {#if data.doc.category === 'example'}
       <Lightbulb size="11" /> Example
     {:else}

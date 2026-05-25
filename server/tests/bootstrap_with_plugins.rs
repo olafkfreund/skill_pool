@@ -74,10 +74,14 @@ async fn boot() -> Result<Harness> {
     // the project transparently via `admin::get_project` which doesn't
     // re-check scope, so the publisher token is enough for the GET
     // assertion.
-    let acme_admin_token =
-        admin::create_token(&pool, "acme", "admin", "tenant:admin skills:read skills:publish")
-            .await?
-            .raw_token;
+    let acme_admin_token = admin::create_token(
+        &pool,
+        "acme",
+        "admin",
+        "tenant:admin skills:read skills:publish",
+    )
+    .await?
+    .raw_token;
 
     let cfg = config::Config {
         bind: "127.0.0.1:0".into(),
@@ -135,9 +139,8 @@ fn authed(b: reqwest::RequestBuilder, t: &str) -> reqwest::RequestBuilder {
 }
 
 fn build_bundle(name: &str) -> Bytes {
-    let body = format!(
-        "---\nname: {name}\ndescription: Test fixture for {name}\n---\n\n# {name}\n"
-    );
+    let body =
+        format!("---\nname: {name}\ndescription: Test fixture for {name}\n---\n\n# {name}\n");
     let mut tar = tar::Builder::new(Vec::new());
     let mut header = tar::Header::new_gnu();
     header.set_path("SKILL.md").unwrap();

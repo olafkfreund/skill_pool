@@ -1,13 +1,5 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    Bot,
-    Library,
-    Plus,
-    Search,
-    Sparkles,
-    Terminal,
-  } from '@lucide/svelte';
+  import { AlertTriangle, Bot, Library, Plus, Search, Sparkles, Terminal } from '@lucide/svelte';
   import type { CatalogKind } from '$lib/server/api';
 
   let { data } = $props();
@@ -90,7 +82,8 @@
     class="inline-flex items-center gap-2 rounded-[var(--sp-radius)] px-4 py-2 text-sm font-medium"
     style="background: var(--sp-primary); color: var(--sp-primary-fg);"
   >
-    <Plus size="14" /> {active.newCta}
+    <Plus size="14" />
+    {active.newCta}
   </a>
 </header>
 
@@ -117,7 +110,10 @@
   {/if}
   <div class="flex items-center gap-2">
     <div class="relative flex-1">
-      <Search size="16" class="absolute top-1/2 left-3 -translate-y-1/2 text-[var(--sp-muted-fg)]" />
+      <Search
+        size="16"
+        class="absolute top-1/2 left-3 -translate-y-1/2 text-[var(--sp-muted-fg)]"
+      />
       <input
         type="search"
         name="q"

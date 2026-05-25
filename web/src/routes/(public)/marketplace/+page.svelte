@@ -29,9 +29,7 @@
 </svelte:head>
 
 <!-- Page header -->
-<header
-  class="border-b border-[var(--sp-border)] bg-[var(--sp-bg)] px-6 py-8 md:px-12"
->
+<header class="border-b border-[var(--sp-border)] bg-[var(--sp-bg)] px-6 py-8 md:px-12">
   <div class="mx-auto max-w-6xl">
     <div class="flex items-center gap-3">
       <Package size="28" class="shrink-0 text-[var(--sp-primary)]" />
@@ -45,7 +43,7 @@
 
     <!-- Tenant install command -->
     <div class="mt-6 max-w-xl">
-      <p class="mb-1.5 text-xs font-medium text-[var(--sp-muted-fg)] uppercase tracking-wide">
+      <p class="mb-1.5 text-xs font-medium tracking-wide text-[var(--sp-muted-fg)] uppercase">
         Add this marketplace to Claude Code
       </p>
       <div class="flex items-stretch gap-2">
@@ -59,7 +57,7 @@
           type="button"
           onclick={() => copyInstall('__header__')}
           aria-label="Copy marketplace install command"
-          class="inline-flex items-center gap-1.5 rounded-[var(--sp-radius)] border border-[var(--sp-border)] px-3 py-2 text-xs font-medium hover:border-[var(--sp-primary)] bg-[var(--sp-bg)] text-[var(--sp-fg)]"
+          class="inline-flex items-center gap-1.5 rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-3 py-2 text-xs font-medium text-[var(--sp-fg)] hover:border-[var(--sp-primary)]"
         >
           <Copy size="12" />
           {copiedSlug === '__header__' ? 'Copied' : 'Copy'}
@@ -91,10 +89,7 @@
         </p>
       </div>
     {:else}
-      <ul
-        class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
-        aria-label="Plugin list"
-      >
+      <ul class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Plugin list">
         {#each data.plugins as plugin (plugin.slug)}
           <li class="flex flex-col">
             <article
@@ -103,10 +98,10 @@
               <!-- Card header: name + version -->
               <div class="flex-1 px-4 pt-4 pb-3">
                 <div class="flex items-start justify-between gap-2">
-                  <h2 class="font-semibold text-[var(--sp-fg)] leading-snug">
+                  <h2 class="leading-snug font-semibold text-[var(--sp-fg)]">
                     <a
                       href={`/marketplace/${encodeURIComponent(plugin.slug)}`}
-                      class="hover:underline focus:outline-none focus:underline"
+                      class="hover:underline focus:underline focus:outline-none"
                     >
                       {plugin.name || plugin.slug}
                     </a>
@@ -121,7 +116,7 @@
                 <!-- Description (2-line clamp via line-clamp utility) -->
                 {#if plugin.description}
                   <p
-                    class="mt-1.5 text-sm text-[var(--sp-muted-fg)] line-clamp-2"
+                    class="mt-1.5 line-clamp-2 text-sm text-[var(--sp-muted-fg)]"
                     title={plugin.description}
                   >
                     {plugin.description}
@@ -154,7 +149,7 @@
               >
                 <a
                   href={`/marketplace/${encodeURIComponent(plugin.slug)}`}
-                  class="text-xs text-[var(--sp-primary)] hover:underline focus:outline-none focus:underline"
+                  class="text-xs text-[var(--sp-primary)] hover:underline focus:underline focus:outline-none"
                 >
                   View details
                 </a>
@@ -162,7 +157,7 @@
                   type="button"
                   onclick={() => copyInstall(plugin.slug)}
                   aria-label={`Copy install command for ${plugin.name || plugin.slug}`}
-                  class="inline-flex items-center gap-1 rounded-[var(--sp-radius)] border border-[var(--sp-border)] px-2 py-1 text-[11px] font-medium hover:border-[var(--sp-primary)] bg-[var(--sp-bg)] text-[var(--sp-fg)]"
+                  class="inline-flex items-center gap-1 rounded-[var(--sp-radius)] border border-[var(--sp-border)] bg-[var(--sp-bg)] px-2 py-1 text-[11px] font-medium text-[var(--sp-fg)] hover:border-[var(--sp-primary)]"
                 >
                   <Copy size="10" aria-hidden="true" />
                   {copiedSlug === plugin.slug ? 'Copied!' : 'Copy install'}

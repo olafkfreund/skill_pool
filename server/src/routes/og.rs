@@ -192,8 +192,10 @@ pub async fn og_image(
     // Failure modes (storage miss, unknown content-type) silently fall
     // back to a textual brand initial. We deliberately don't 5xx — a
     // broken share preview is worse than a slightly-less-branded one.
-    let logo_data_uri = match (theme.logo_storage_key.as_deref(), theme.logo_content_type.as_deref())
-    {
+    let logo_data_uri = match (
+        theme.logo_storage_key.as_deref(),
+        theme.logo_content_type.as_deref(),
+    ) {
         (Some(key), Some(ct)) => fetch_logo_data_uri(&state, &tenant, key, ct).await,
         _ => None,
     };
@@ -469,7 +471,10 @@ fn render_svg(i: SvgInputs<'_>) -> String {
         pty = pill_text_y,
         pill_size = pill_text_size,
         pill_text = escape_xml(&pill_text),
-        aria = escape_attr(&format!("Open Graph card for {} on {}", i.skill_slug, i.brand_name)),
+        aria = escape_attr(&format!(
+            "Open Graph card for {} on {}",
+            i.skill_slug, i.brand_name
+        )),
     )
 }
 

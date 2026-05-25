@@ -33,7 +33,9 @@ const config = {
         '*',
         // Permanent overrides take precedence over `*` matching. Add
         // specific Origins here only if you switch off the wildcard.
-        ...(process.env.SP_TRUSTED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean) ?? []),
+        ...(process.env.SP_TRUSTED_ORIGINS?.split(',')
+          .map((s) => s.trim())
+          .filter(Boolean) ?? []),
       ],
     },
   },

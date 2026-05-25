@@ -136,10 +136,14 @@ fn build_bundle(skill_md: &str) -> Bytes {
 }
 
 fn client() -> reqwest::Client {
-    reqwest::Client::builder().timeout(Duration::from_secs(15)).build().unwrap()
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap()
 }
 fn req(c: &reqwest::Client, m: reqwest::Method, b: &str, p: &str) -> reqwest::RequestBuilder {
-    c.request(m, format!("{b}{p}")).header("x-skill-pool-tenant", "acme")
+    c.request(m, format!("{b}{p}"))
+        .header("x-skill-pool-tenant", "acme")
 }
 fn authed(b: reqwest::RequestBuilder, t: &str) -> reqwest::RequestBuilder {
     b.bearer_auth(t)
@@ -151,7 +155,11 @@ async fn publish(c: &reqwest::Client, h: &Harness, slug: &str, requires: &[&str]
     } else {
         format!(
             "requires:\n{}\n",
-            requires.iter().map(|r| format!("  - {r}")).collect::<Vec<_>>().join("\n")
+            requires
+                .iter()
+                .map(|r| format!("  - {r}"))
+                .collect::<Vec<_>>()
+                .join("\n")
         )
     };
     let body = format!(
@@ -161,10 +169,17 @@ async fn publish(c: &reqwest::Client, h: &Harness, slug: &str, requires: &[&str]
     let meta = json!({ "slug": slug, "version": "1.0.0" });
     let form = Form::new().text("metadata", meta.to_string()).part(
         "bundle",
-        Part::bytes(bundle.to_vec()).file_name(format!("{slug}.tar.gz")).mime_str("application/gzip")?,
+        Part::bytes(bundle.to_vec())
+            .file_name(format!("{slug}.tar.gz"))
+            .mime_str("application/gzip")?,
     );
-    let r = authed(req(c, reqwest::Method::POST, &h.base, "/v1/skills"), &h.acme_token)
-        .multipart(form).send().await?;
+    let r = authed(
+        req(c, reqwest::Method::POST, &h.base, "/v1/skills"),
+        &h.acme_token,
+    )
+    .multipart(form)
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().await?);
     Ok(())
 }
@@ -177,10 +192,17 @@ async fn create_draft(c: &reqwest::Client, h: &Harness, slug: &str) -> Result<()
     let meta = json!({ "slug": slug, "origin": "cli" });
     let form = Form::new().text("metadata", meta.to_string()).part(
         "bundle",
-        Part::bytes(bundle.to_vec()).file_name(format!("{slug}.tar.gz")).mime_str("application/gzip")?,
+        Part::bytes(bundle.to_vec())
+            .file_name(format!("{slug}.tar.gz"))
+            .mime_str("application/gzip")?,
     );
-    let r = authed(req(c, reqwest::Method::POST, &h.base, "/v1/drafts"), &h.acme_token)
-        .multipart(form).send().await?;
+    let r = authed(
+        req(c, reqwest::Method::POST, &h.base, "/v1/drafts"),
+        &h.acme_token,
+    )
+    .multipart(form)
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().await?);
     Ok(())
 }
@@ -204,18 +226,32 @@ async fn skill_detail_returns_full_view() -> Result<()> {
     let meta = json!({ "slug": "axum-handler", "version": "2.0.0" });
     let form = Form::new().text("metadata", meta.to_string()).part(
         "bundle",
-        Part::bytes(bundle.to_vec()).file_name("axum-handler.tar.gz").mime_str("application/gzip")?,
+        Part::bytes(bundle.to_vec())
+            .file_name("axum-handler.tar.gz")
+            .mime_str("application/gzip")?,
     );
-    let r = authed(req(&c, reqwest::Method::POST, &h.base, "/v1/skills"), &h.acme_token)
-        .multipart(form).send().await?;
+    let r = authed(
+        req(&c, reqwest::Method::POST, &h.base, "/v1/skills"),
+        &h.acme_token,
+    )
+    .multipart(form)
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 201);
 
     // Bundle download bumps use_count.
     for _ in 0..3 {
         let r = authed(
-            req(&c, reqwest::Method::GET, &h.base, "/v1/skills/axum-handler/bundle.tar.gz"),
+            req(
+                &c,
+                reqwest::Method::GET,
+                &h.base,
+                "/v1/skills/axum-handler/bundle.tar.gz",
+            ),
             &h.acme_token,
-        ).send().await?;
+        )
+        .send()
+        .await?;
         assert_eq!(r.status().as_u16(), 200);
     }
 
@@ -225,9 +261,18 @@ async fn skill_detail_returns_full_view() -> Result<()> {
 
     // ---- The detail endpoint ----
     let body: Value = authed(
-        req(&c, reqwest::Method::GET, &h.base, "/v1/skills/axum-handler/detail"),
+        req(
+            &c,
+            reqwest::Method::GET,
+            &h.base,
+            "/v1/skills/axum-handler/detail",
+        ),
         &h.acme_token,
-    ).send().await?.json().await?;
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
 
     // Base fields reflect the latest version (v2.0.0 with deps).
     assert_eq!(body["slug"], "axum-handler");
@@ -235,7 +280,10 @@ async fn skill_detail_returns_full_view() -> Result<()> {
     assert_eq!(body["status"], "published");
     // use_count from the bundle downloads.
     let uc = body["use_count"].as_i64().unwrap();
-    assert!(uc >= 1, "expected use_count >= 1 (only the v2 row counts here), got {uc}");
+    assert!(
+        uc >= 1,
+        "expected use_count >= 1 (only the v2 row counts here), got {uc}"
+    );
     assert!(body["last_used_at"].is_string(), "{body}");
 
     // Forward deps: v2 declares tower-layer. tower-layer is unpublished
@@ -248,10 +296,16 @@ async fn skill_detail_returns_full_view() -> Result<()> {
 
     // Reverse deps: two published skills depend on axum-handler.
     let required_by = body["required_by"].as_array().unwrap();
-    let slugs: Vec<&str> = required_by.iter().map(|r| r["slug"].as_str().unwrap()).collect();
+    let slugs: Vec<&str> = required_by
+        .iter()
+        .map(|r| r["slug"].as_str().unwrap())
+        .collect();
     assert!(slugs.contains(&"axum-middleware"), "{required_by:?}");
     assert!(slugs.contains(&"axum-tenant-ext"), "{required_by:?}");
-    let ext = required_by.iter().find(|r| r["slug"] == "axum-tenant-ext").unwrap();
+    let ext = required_by
+        .iter()
+        .find(|r| r["slug"] == "axum-tenant-ext")
+        .unwrap();
     assert_eq!(ext["version_range"], "1.0.0");
     assert_eq!(ext["version"], "1.0.0");
 
@@ -266,7 +320,9 @@ async fn skill_detail_returns_full_view() -> Result<()> {
     let r = authed(
         req(&c, reqwest::Method::GET, &h.base, "/v1/skills/nope/detail"),
         &h.acme_token,
-    ).send().await?;
+    )
+    .send()
+    .await?;
     assert_eq!(r.status().as_u16(), 404);
 
     Ok(())

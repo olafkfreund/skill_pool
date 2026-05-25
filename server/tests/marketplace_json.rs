@@ -178,8 +178,24 @@ async fn marketplace_json_is_per_tenant_with_local_git_source() -> Result<()> {
     seed_skill(&pool, globex, "lint").await?;
 
     let client = reqwest::Client::new();
-    publish_plugin(&client, &h.base, "acme", &h.acme_token, "acme-toolkit", "fmt").await?;
-    publish_plugin(&client, &h.base, "globex", &h.globex_token, "globex-pack", "lint").await?;
+    publish_plugin(
+        &client,
+        &h.base,
+        "acme",
+        &h.acme_token,
+        "acme-toolkit",
+        "fmt",
+    )
+    .await?;
+    publish_plugin(
+        &client,
+        &h.base,
+        "globex",
+        &h.globex_token,
+        "globex-pack",
+        "lint",
+    )
+    .await?;
 
     // ----- acme's marketplace -----------------------------------------
     let resp = client
@@ -203,7 +219,11 @@ async fn marketplace_json_is_per_tenant_with_local_git_source() -> Result<()> {
     assert_eq!(body["name"], "acme");
     assert_eq!(body["owner"]["name"], "Acme Corp");
     let plugins = body["plugins"].as_array().expect("plugins array");
-    assert_eq!(plugins.len(), 1, "acme should see exactly one plugin: {body}");
+    assert_eq!(
+        plugins.len(),
+        1,
+        "acme should see exactly one plugin: {body}"
+    );
     assert_eq!(plugins[0]["name"], "acme-toolkit");
     assert_eq!(plugins[0]["version"], "1.0.0");
     assert_eq!(plugins[0]["description"], "acme-toolkit test plugin");
@@ -252,7 +272,11 @@ async fn marketplace_json_is_per_tenant_with_local_git_source() -> Result<()> {
     assert_eq!(resp.status().as_u16(), 200);
     let body: Value = resp.json().await?;
     assert_eq!(body["name"], "wayne");
-    assert_eq!(body["plugins"], json!([]), "empty tenant should serve empty plugins[]");
+    assert_eq!(
+        body["plugins"],
+        json!([]),
+        "empty tenant should serve empty plugins[]"
+    );
 
     drop(pool);
     Ok(())

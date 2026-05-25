@@ -139,7 +139,8 @@ pub async fn bootstrap(
     // At least one of stack or project must be provided.
     if tags.is_empty() && q.project.is_none() {
         return Err(AppError::BadRequest(
-            "stack query must contain at least one comma-separated tag (or supply ?project=)".into(),
+            "stack query must contain at least one comma-separated tag (or supply ?project=)"
+                .into(),
         ));
     }
 
@@ -162,13 +163,10 @@ pub async fn bootstrap(
     if let Some(ref proj_slug) = q.project {
         let proj_slug = proj_slug.trim();
         if !proj_slug.is_empty() {
-            let result = crate::admin::get_project(
-                state.db_read(),
-                &caller.tenant.tenant_slug,
-                proj_slug,
-            )
-            .await
-            .map_err(AppError::Anyhow)?;
+            let result =
+                crate::admin::get_project(state.db_read(), &caller.tenant.tenant_slug, proj_slug)
+                    .await
+                    .map_err(AppError::Anyhow)?;
 
             if let Some(pw) = result {
                 project_ref = Some(ProjectRef {
@@ -271,10 +269,7 @@ pub async fn bootstrap(
     let mut semantic: Vec<String> = Vec::new();
     if !tags.is_empty() {
         let joined = tags.join(" ");
-        let embedding = state
-            .embedder()
-            .embed(&joined)
-            .map_err(AppError::Anyhow)?;
+        let embedding = state.embedder().embed(&joined).map_err(AppError::Anyhow)?;
         if let Some(vec) = embedding {
             let lit = crate::embedding::vector_to_pg_literal(&vec);
             // JUSTIFIED runtime-checked: `$2::text::vector` casts a string
