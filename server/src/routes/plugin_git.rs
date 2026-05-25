@@ -376,8 +376,20 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
     let mut out = Vec::new();
 
     // For shallow requests, compute the new boundaries and emit
-    // `shallow <sha>` ACK lines + flush BEFORE the NAK. This is the
-    // section the client parses to update its `.git/shallow` file.
+    // `shallow <sha>` ACK lines + flush. This is the section the
+    // client parses to update its `.git/shallow` file.
+    //
+    // Smart-HTTP stateless-RPC two-phase deepening: git's client sends
+    // a FIRST POST with `want + deepen + flush + flush` (no `done`)
+    // expecting ONLY the shallow section, then a SECOND POST with
+    // `want + deepen + flush + done + flush` expecting shallow + NAK
+    // + pack. If we ship the full response on the first POST, the
+    // client reads shallow+flush and disconnects, the unread bytes
+    // (NAK + pack) sit in the kernel's send buffer / TCP RST, and
+    // the second POST gets confused with "expected shallow list".
+    //
+    // Detection: deepen is set AND done is unset → first POST,
+    // return only the shallow section.
     let boundaries = if let Some(depth) = req.deepen {
         let bounds = compute_shallow_boundaries(&repo, &req.wants, depth)?;
         for oid in &bounds {
@@ -388,6 +400,13 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
     } else {
         Vec::new()
     };
+
+    // First-phase deepening: client hasn't sent `done` yet — return
+    // only the shallow section. The client will follow up with a
+    // second POST that includes `done`, which we'll handle below.
+    if req.deepen.is_some() && !req.done {
+        return Ok(out);
+    }
 
     // Acknowledgement / NAK section.
     //
@@ -685,6 +704,80 @@ mod tests {
         let (repo, tip) = make_linear_repo(tmp.path(), 1);
         let bounds = compute_shallow_boundaries(&repo, &[tip], 1).unwrap();
         assert_eq!(bounds, vec![tip]);
+    }
+
+    /// Build a minimal upload-pack request body with the given options.
+    fn make_request(tip: git2::Oid, deepen: Option<u32>, send_done: bool) -> Vec<u8> {
+        let mut body = Vec::new();
+        let first_want = format!(
+            "want {} multi_ack_detailed no-done side-band-64k thin-pack ofs-delta agent=test/1.0\n",
+            tip
+        );
+        pkt_line(&mut body, first_want.as_bytes());
+        if let Some(d) = deepen {
+            pkt_line(&mut body, format!("deepen {d}\n").as_bytes());
+        }
+        pkt_flush(&mut body);
+        if send_done {
+            pkt_line(&mut body, b"done\n");
+        }
+        pkt_flush(&mut body);
+        body
+    }
+
+    #[test]
+    fn first_phase_deepening_returns_only_shallow_section() {
+        // Regression for the post-#65 bug: git's smart-HTTP stateless-RPC
+        // makes two POSTs for `--depth=N`. The first POST has deepen but
+        // no `done` and expects ONLY the shallow section + flush. If we
+        // ship the pack on this round, the client's second POST corrupts
+        // with "fatal: git fetch-pack: expected shallow list".
+        let tmp = tempfile::tempdir().unwrap();
+        let (_repo, tip) = make_linear_repo(tmp.path(), 1);
+        let body = make_request(tip, Some(1), /* send_done= */ false);
+        let resp = run_upload_pack(tmp.path(), &body).unwrap();
+
+        // Expected: pkt_line("shallow <tip>\n") + pkt_flush. NOTHING else.
+        let mut expected = Vec::new();
+        pkt_line(&mut expected, format!("shallow {tip}\n").as_bytes());
+        pkt_flush(&mut expected);
+        assert_eq!(
+            resp, expected,
+            "first-phase deepening must return only the shallow section"
+        );
+    }
+
+    #[test]
+    fn second_phase_deepening_returns_shallow_nak_pack() {
+        // Second POST: deepen + done + flush → must include shallow + flush
+        // + NAK + pack. We don't assert pack contents here (covered by
+        // plugin_git_clone.rs integration test); just that the response is
+        // strictly longer than the shallow-only first-phase response.
+        let tmp = tempfile::tempdir().unwrap();
+        let (_repo, tip) = make_linear_repo(tmp.path(), 1);
+        let body = make_request(tip, Some(1), /* send_done= */ true);
+        let resp = run_upload_pack(tmp.path(), &body).unwrap();
+
+        // Has the shallow header...
+        let shallow_prefix = format!("0035shallow {tip}\n0000", tip = tip);
+        assert!(
+            resp.starts_with(shallow_prefix.as_bytes()),
+            "expected shallow + flush prefix, got first 60 bytes: {:?}",
+            String::from_utf8_lossy(&resp[..resp.len().min(60)])
+        );
+        // ...then NAK pkt-line at expected offset (53 bytes after shallow + flush).
+        let nak_offset = shallow_prefix.len();
+        assert_eq!(
+            &resp[nak_offset..nak_offset + 8],
+            b"0008NAK\n",
+            "expected NAK pkt-line after shallow section"
+        );
+        // ...then sideband-framed pack data (band 0x01).
+        assert!(
+            resp.len() > nak_offset + 8 + 4,
+            "expected pack frames after NAK, response only {} bytes",
+            resp.len()
+        );
     }
 
     #[test]
