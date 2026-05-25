@@ -29,6 +29,8 @@ The trick: **retrospective capture**. When Claude finishes a non-trivial fix in 
 
 A 90-second walkthrough in three acts: (1) `init --project` + `login` + `bootstrap` (project-aware install), (2) `project list` + `project show` + `plan show` (browse the curated bundle + its plan), (3) `plan import` + `plan history` + `doctor` (import an updated plan and verify state).
 
+> **Onboarding showcase** — for a two-half walkthrough that pairs CLI onboarding with the curator-side portal view of the same project, see [`docs/demo/`](docs/demo/). One command (`./scripts/record-onboarding-demo.sh`) re-records both halves deterministically.
+
 ## Screenshots
 
 | Skill detail | Editor | Drafts inbox |

@@ -1,0 +1,12 @@
+{
+  "name": "skill-pool-demo-recorder",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Playwright-based portal demo recorder. Standalone from the web app's npm tree.",
+  "scripts": {
+    "record": "playwright test --reporter=line"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.0"
+  }
+}
