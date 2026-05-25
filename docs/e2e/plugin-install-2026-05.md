@@ -444,3 +444,61 @@ changes.
 The CLI-side bug found during this gate (`skill-pool plugin publish`
 posting bare `PluginManifest` instead of the `PublishBody` envelope)
 was also fixed — #57 / PR #61.
+
+### Live re-test against v0.3.4 (2026-05-25)
+
+Shipping #58/#59 surfaced three downstream protocol bugs in #58 alone;
+the chain landed across v0.3.1 → v0.3.2 → v0.3.3 → v0.3.4 with hotfixes
+in PRs #65, #66, #67. Final re-validation on v0.3.4:
+
+**Step 7 — `git clone --depth=1` against the seeded `rust-axum-toolkit` plugin:**
+
+```bash
+$ git -c http.extraHeader='Host: acme.localhost:8080' clone --depth=1 \
+    http://127.0.0.1:8080/git/plugins/rust-axum-toolkit.git /tmp/shallow
+Cloning into '/tmp/shallow'...
+$ git -C /tmp/shallow rev-list --all | wc -l
+1
+$ cat /tmp/shallow/.git/shallow
+0184012a2caaef36967ee7f2d3751a5bd922a358
+$ ls /tmp/shallow/.claude-plugin/
+plugin.json
+```
+
+Exit 0, 1 commit, `.git/shallow` ACK present, plugin tree materialised
+end-to-end. ✓
+
+**Step 8 — `POST /v1/plugins/import` against a real-world git URL:**
+
+```bash
+$ curl -sS -X POST -H "Host: acme.localhost:8080" \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    --data '{"url":"https://github.com/anthropics/claude-cookbooks.git","slug":"mirror-test"}' \
+    http://127.0.0.1:8080/v1/plugins/import -w "\n--- HTTP %{http_code} ---\n"
+{"job_id":"inline-0640e75d-f31c-447a-8244-08e4f1af09e2",
+ "outcome":"enqueued_inline",
+ "plugin_id":"0640e75d-f31c-447a-8244-08e4f1af09e2"}
+--- HTTP 202 ---
+```
+
+HTTP 202 (was: 400), `outcome:"enqueued_inline"` and `job_id:"inline-..."`
+prove the in-process fallback handled the import without Redis. The
+background tokio task spawned and ran; in this case the upstream URL
+isn't a Claude Code plugin (no `.claude-plugin/plugin.json`) so the
+manifest-parse step failed and the server logged the error correctly via
+the new `"in-process mirror job failed (no Redis fallback)"` log site. ✓
+(Mirroring a real plugin would update `last_pulled_at`; the fallback
+mechanism itself is proven.)
+
+### Bug chain that fell out of #58 during re-validation
+
+| Bug | Symptom | PR | Test |
+|---|---|---|---|
+| `compute_shallow_boundaries` skipped root commits | `expected shallow list` on 1-commit repo | #65 | `boundaries_depth_one_on_single_commit_repo_is_the_root` |
+| Smart-HTTP stateless-RPC two-phase deepening not implemented | `expected shallow list` on multi-POST clones | #66 | `first_phase_deepening_returns_only_shallow_section` |
+| `revwalk.hide(parent)` dropped blobs shared with tip's tree | `bad tree object: remote did not send all necessary objects` | #67 | `shallow_pack_includes_blobs_shared_with_hidden_parent` |
+
+All three caught only by live HTTP-level testing — the unit tests in #58
+covered the negotiation surface but not the pack-content invariants. The
+new regression tests in #65/#66/#67 close those gaps end-to-end against
+in-memory bare repos.

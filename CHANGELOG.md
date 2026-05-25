@@ -4,7 +4,38 @@ All notable changes to this project. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions track the
 git tags published from `main`.
 
-## Unreleased
+## [0.3.4] — 2026-05-25
+
+### Fixed
+
+- **Shallow pack must include blobs shared with parent** (#67, follow-up
+  to #58) — `revwalk.hide(parent)` was hiding the parent's blobs too,
+  dropping any blob the tip's tree referenced from a shared (unchanged)
+  file. Replaced shallow's pack-build path with explicit
+  `collect_commits_up_to_depth` + `pb.insert_commit` per commit;
+  full-clone path unchanged. Regression test pins the shared-blob case
+  end-to-end via in-memory bare repo.
+
+## [0.3.3] — 2026-05-25
+
+### Fixed
+
+- **Two-phase deepening for smart-HTTP stateless-RPC** (#66, follow-up
+  to #58) — git's smart-HTTP client makes TWO POSTs for shallow clones;
+  the first expects only the shallow section. v0.3.2 emitted full
+  shallow+NAK+pack on both POSTs, corrupting the client. Now returns
+  only the shallow section when `deepen` is set but `done` is unset.
+
+## [0.3.2] — 2026-05-25
+
+### Fixed
+
+- **Shallow boundary emission for root commits** (#65, follow-up to
+  #58) — `compute_shallow_boundaries` was skipping commits with no
+  parents as an optimization; git's protocol requires every boundary
+  to be emitted, including root commits. Fix emits unconditionally.
+
+## [0.3.1] — 2026-05-25
 
 ### Fixed
 
@@ -65,12 +96,14 @@ The plugins-and-marketplace release.
   `scripts/seed-tenant.sh` now respect `$PGPORT` for non-default Postgres
   deployments.
 
-### Known limitations at ship (resolved in Unreleased above)
+### Known limitations at ship (all resolved in v0.3.1 — v0.3.4)
 
-- CLI publish payload mismatch (#57) → fixed in Unreleased.
-- Git shallow clone unsupported (#58) → fixed in Unreleased.
+- CLI publish payload mismatch (#57) → v0.3.1 (#61).
+- Git shallow clone unsupported (#58) → initial fix v0.3.1 (#62);
+  downstream protocol bugs caught by live re-test fixed in v0.3.2 (#65),
+  v0.3.3 (#66), and v0.3.4 (#67).
 - Redis required for `/v1/plugins/import` (#59) → in-process fallback added in
-  Unreleased.
+  v0.3.1 (#63).
 
 ## [0.2.2] — 2026-05-21
 
@@ -84,6 +117,10 @@ The plugins-and-marketplace release.
 
 - Vitest coverage for Projects + Plans editors.
 
+[0.3.4]: https://github.com/olafkfreund/skill_pool/releases/tag/v0.3.4
+[0.3.3]: https://github.com/olafkfreund/skill_pool/releases/tag/v0.3.3
+[0.3.2]: https://github.com/olafkfreund/skill_pool/releases/tag/v0.3.2
+[0.3.1]: https://github.com/olafkfreund/skill_pool/releases/tag/v0.3.1
 [0.3.0]: https://github.com/olafkfreund/skill_pool/releases/tag/v0.3.0
 [0.2.2]: https://github.com/olafkfreund/skill_pool/releases/tag/v0.2.2
 [0.2.1]: https://github.com/olafkfreund/skill_pool/releases/tag/v0.2.1
