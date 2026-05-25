@@ -771,7 +771,17 @@ impl Client {
         manifest: &PluginManifest,
     ) -> Result<PluginEndpointOutcome<PublishedPlugin>> {
         let url = self.base.join("/v1/plugins")?;
-        let resp = self.http.post(url).json(manifest).send().await?;
+        // Server expects a PublishBody envelope, not the bare manifest:
+        // {slug, manifest, contents, sourcing_mode, status}. The plugin's
+        // `name` doubles as its registry slug per the Claude Code spec.
+        let envelope = serde_json::json!({
+            "slug": manifest.name,
+            "manifest": manifest,
+            "contents": manifest.contents,
+            "sourcing_mode": "internal",
+            "status": "published",
+        });
+        let resp = self.http.post(url).json(&envelope).send().await?;
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(PluginEndpointOutcome::Unavailable { issue: 30 });
