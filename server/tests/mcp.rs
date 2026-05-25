@@ -210,11 +210,12 @@ async fn mcp_protocol_round_trip() -> Result<()> {
     )
     .await?;
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 3);
+    assert_eq!(tools.len(), 4);
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"search_skills"));
     assert!(names.contains(&"get_skill"));
     assert!(names.contains(&"install_skill"));
+    assert!(names.contains(&"get_project_plan"));
 
     // 3. tools/call search_skills
     let search = rpc(
