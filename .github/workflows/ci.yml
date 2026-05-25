@@ -128,25 +128,40 @@ jobs:
   helm:
     name: Helm (lint + template + dry-run)
     runs-on: ubuntu-latest
-    # Gate: only runs when the chart actually exists in the tree.
-    if: ${{ hashFiles('deploy/helm/skill-pool/Chart.yaml') != '' }}
+    # Per-step gate: only does real work when the chart exists in the tree.
+    # `hashFiles()` is illegal at the job-level `if:` (only valid in step
+    # contexts), so we let the job start and short-circuit each step.
     steps:
       - uses: actions/checkout@v4
 
+      - name: Detect chart presence
+        id: chart
+        run: |
+          if [ -f deploy/helm/skill-pool/Chart.yaml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Helm chart not yet committed; skipping lint + template."
+          fi
+
       - name: Set up Helm
+        if: steps.chart.outputs.present == 'true'
         uses: azure/setup-helm@v5
         with:
           version: v3.15.0
 
       - name: Set up kubectl (client-only, for --dry-run=client)
+        if: steps.chart.outputs.present == 'true'
         uses: azure/setup-kubectl@v5
         with:
           version: v1.30.0
 
       - name: helm lint
+        if: steps.chart.outputs.present == 'true'
         run: helm lint deploy/helm/skill-pool/
 
       - name: helm template | kubectl apply --dry-run=client
+        if: steps.chart.outputs.present == 'true'
         run: |
           helm template skill-pool deploy/helm/skill-pool/ \
             --set image.server.tag=test \
