@@ -24,7 +24,12 @@ jobs:
   # ---------------------------------------------------------------------------
   rust:
     name: Rust (fmt + clippy + test)
-    runs-on: ubuntu-latest
+    # Pinned to 22.04 because samael 0.0.20 + libxmlsec1-dev 1.3.x (which
+    # ships on ubuntu-latest a.k.a. 24.04) produce a u32-vs-usize type
+    # mismatch in samael's hand-written xmlsec wrappers. 22.04 has
+    # libxmlsec1-dev 1.2.x which matches what samael was built against.
+    # Followup: bump samael (or pin a fork) when upstream addresses this.
+    runs-on: ubuntu-22.04
 
     services:
       postgres:
