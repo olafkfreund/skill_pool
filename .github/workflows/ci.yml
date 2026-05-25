@@ -25,6 +25,10 @@ jobs:
   rust:
     name: Rust (fmt + clippy + test)
     runs-on: ubuntu-latest
+    # Fail fast on hangs. A clean nix-cold-start + full workspace test
+    # run is ~12-15 min; 25 min is a generous cap that surfaces
+    # testcontainer / network deadlocks before they consume CI minutes.
+    timeout-minutes: 25
 
     services:
       postgres:
