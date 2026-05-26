@@ -50,15 +50,17 @@ fn build_skill_bundle() -> Bytes {
     Bytes::from(gz.finish().unwrap())
 }
 
-// Hangs both locally and in CI after `admin::create_tenant` succeeds —
-// suspected libgit2 HTTP-transport registration issue introduced by the
-// git2 0.19 → 0.20.4 bump (the upgrade was required for RUSTSEC-2026-0008).
-// Adding `features = ["https"]` to git2 in Cargo.toml didn't help. Marked
-// ignored to keep CI green; the full plugin_git surface is still covered by
-// the lower-level unit tests in plugin_git.rs (18 of them, including
-// shallow + sideband + pack-completeness regressions). Followup tracked
-// separately — needs a bisect against git2 0.19.x to confirm root cause.
-#[ignore = "git2 0.20 HTTP-transport hang; see <followup issue>"]
+// End-to-end clone-over-HTTP test hangs after the in-process server starts
+// accepting connections. Reproduces on git2 0.19 and 0.20.4 — earlier
+// suspicion that the 0.19→0.20 bump introduced the hang was wrong, the
+// behaviour is the same on both. Likely a libgit2 HTTP-transport
+// interaction with our axum smart-HTTP routes (the wire protocol negotiation
+// finishes but the response stream doesn't terminate). The lower-level
+// plugin_git.rs unit tests (18 of them — shallow, sideband, pack
+// completeness) cover the same surface without going through libgit2
+// client-side, so the regression-prevention loss is small. Tracked
+// separately — needs a wireshark-level bisect of the smart-HTTP exchange.
+#[ignore = "libgit2 HTTP-transport hang against in-process server (both 0.19 and 0.20.4); see plugin_git.rs for unit-level coverage"]
 #[tokio::test]
 async fn git_clone_yields_plugin_tree() -> Result<()> {
     let pg = Postgres::default()
