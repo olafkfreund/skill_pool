@@ -282,7 +282,9 @@ fn ascii_lower(raw: &[u8]) -> Vec<u8> {
 
 /// Scan for inline event handlers. The pattern is roughly:
 ///
-///     <attr-boundary> on <ascii-letter>{1,32} <optional-ws> =
+/// ```text
+/// <attr-boundary> on <ascii-letter>{1,32} <optional-ws> =
+/// ```
 ///
 /// where `<attr-boundary>` is whitespace or a quote (covers attributes
 /// emitted inline on an element). Hand-rolled because regex on every upload
