@@ -71,7 +71,7 @@ jobs:
       # env var unset is the correct gate.
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Use the project's nix devshell instead of apt-installed system
       # libs. Closes #71 — samael 0.0.20 + libxmlsec1-dev 1.2.x (ubuntu's
@@ -119,7 +119,7 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
         with:
@@ -151,7 +151,7 @@ jobs:
     # `hashFiles()` is illegal at the job-level `if:` (only valid in step
     # contexts), so we let the job start and short-circuit each step.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Detect chart presence
         id: chart
@@ -206,7 +206,7 @@ jobs:
     name: Security audit (cargo audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -252,7 +252,7 @@ jobs:
     name: Dependency policy (cargo deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: cargo deny check
         uses: EmbarkStudios/cargo-deny-action@v2

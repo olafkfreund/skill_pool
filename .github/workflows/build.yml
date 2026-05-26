@@ -60,7 +60,7 @@ jobs:
             repo_var: ECR_REPO_WEB
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref || github.ref }}
 
