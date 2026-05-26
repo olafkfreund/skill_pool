@@ -410,7 +410,7 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
         .packbuilder()
         .map_err(|e| AppError::BadRequest(format!("create packbuilder: {e}")))?;
 
-    if req.deepen.is_some() {
+    if let Some(depth) = req.deepen {
         // Shallow path: build the explicit commit set up to `depth`, then
         // insert each commit individually via `pb.insert_commit`. libgit2
         // auto-follows the commit's tree + blobs.
@@ -420,7 +420,7 @@ fn run_upload_pack(repo_path: &std::path::Path, body: &[u8]) -> AppResult<Vec<u8
         // tree may reference (unchanged files). Result was "bad tree
         // object: remote did not send all necessary objects" on
         // single-commit-or-shallow-depth packs.
-        let included = collect_commits_up_to_depth(&repo, &req.wants, req.deepen.unwrap())?;
+        let included = collect_commits_up_to_depth(&repo, &req.wants, depth)?;
         for oid in &included {
             pb.insert_commit(*oid).map_err(|e| {
                 AppError::BadRequest(format!("packbuilder insert commit {oid}: {e}"))

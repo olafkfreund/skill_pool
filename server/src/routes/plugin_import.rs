@@ -189,7 +189,7 @@ pub async fn import(
     Ok((
         StatusCode::ACCEPTED,
         Json(ImportResponse {
-            job_id: job_id,
+            job_id,
             outcome: outcome_str,
             plugin_id,
         }),

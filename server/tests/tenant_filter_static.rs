@@ -107,8 +107,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // header matched a cached custom-domain entry. The `id` IS the
     // tenant_id we resolved.
     ("src/tenant.rs", "SELECT slug FROM tenants WHERE id"),
-    // Slug → (id, slug) lookup. This is THE tenant resolver.
-    ("src/tenant.rs", "SELECT id, slug FROM tenants WHERE slug"),
+    // Slug → (id, slug) lookup. This is THE tenant resolver. The fn
+    // name is the stable matcher because the SQL casts (`slug::text`)
+    // can break substring search across drift.
+    ("src/tenant.rs", "from_request_parts"),
     // -----------------------------------------------------------------
     // state.rs — startup / refresh queries that load global state.
     // -----------------------------------------------------------------
@@ -239,6 +241,54 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ("src/routes/scim.rs", "fetch_membership_by_email"),
     ("src/routes/scim.rs", "fetch_membership_by_user"),
     ("src/routes/scim.rs", "fetch_all_memberships"),
+    // -----------------------------------------------------------------
+    // admin.rs — project + plan helpers. Every fn takes `tenant_slug`,
+    // resolves tenant_id, then resolves project_id with
+    // `WHERE tenant_id = $1 AND slug = $2`. The downstream queries are
+    // keyed by project_id (or active_id derived from a project_id
+    // query), which is itself tenant-scoped. The pattern is identical
+    // across the project + plan CRUD surface — match on fn name so
+    // future plan helpers slot in without per-line entries.
+    // -----------------------------------------------------------------
+    ("src/admin.rs", "get_project"),
+    ("src/admin.rs", "resolve_project_items_expanded"),
+    ("src/admin.rs", "set_project_items"),
+    ("src/admin.rs", "import_plan"),
+    ("src/admin.rs", "get_active_plan"),
+    ("src/admin.rs", "list_plan_versions"),
+    ("src/admin.rs", "activate_plan_version"),
+    ("src/admin.rs", "refresh_plan_from_source"),
+    // -----------------------------------------------------------------
+    // routes/plugins.rs — plugin_contents reads/writes are keyed by
+    // plugin_id. The plugin row itself carries tenant_id (enforced by
+    // the partial unique index in migration 0035 and the
+    // tenant-scoped INSERT in `publish`). In `publish` the contents
+    // INSERT runs in the same tx as the plugins INSERT; in `get_one`
+    // the plugin_id comes from a tenant-scoped SELECT immediately
+    // above the contents SELECT.
+    // -----------------------------------------------------------------
+    ("src/routes/plugins.rs", "INSERT INTO plugin_contents"),
+    (
+        "src/routes/plugins.rs",
+        "SELECT content_slug, content_kind, content_version, position",
+    ),
+    // -----------------------------------------------------------------
+    // routes/decay.rs `sweep` — background skill-decay worker, runs
+    // tenant-wide on a timer to flip stale rows to `archive_candidate`.
+    // Cross-tenant by design (doc-comment at the fn says so).
+    // -----------------------------------------------------------------
+    ("src/routes/decay.rs", "sweep"),
+    // -----------------------------------------------------------------
+    // routes/usage.rs `post_event` — UPDATE skills SET use_count
+    // keyed by `skills.id`. The id is pulled from a tenant-scoped
+    // SELECT immediately upstream (lines ~200-208 — caller's
+    // tenant_id + slug + kind). Identical pattern to the already-
+    // allowlisted skills.rs use_count bump.
+    // -----------------------------------------------------------------
+    (
+        "src/routes/usage.rs",
+        "UPDATE skills SET use_count = use_count + 1",
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -474,7 +524,7 @@ fn matches_at(bytes: &[u8], idx: usize, prefix: &[u8]) -> bool {
 }
 
 /// Find the next `(` byte at or after `from`, skipping turbofish content,
-/// generic args, and whitespace.
+/// generic args, the macro `!`, and whitespace.
 fn find_open_paren(bytes: &[u8], from: usize) -> Option<usize> {
     let mut i = from;
     while i < bytes.len() {
@@ -497,6 +547,9 @@ fn find_open_paren(bytes: &[u8], from: usize) -> Option<usize> {
                 // Path continuation (e.g. `query::<i32, _>`); jump over.
                 i += 1;
             }
+            // Macro invocation: `sqlx::query!(...)`. The `!` sits between
+            // the needle and the open paren; skip and keep looking.
+            b'!' => i += 1,
             c if c.is_ascii_whitespace() => i += 1,
             _ => return None,
         }

@@ -25,6 +25,10 @@ jobs:
   rust:
     name: Rust (fmt + clippy + test)
     runs-on: ubuntu-latest
+    # Fail fast on hangs. A clean nix-cold-start + full workspace test
+    # run is ~12-15 min; 25 min is a generous cap that surfaces
+    # testcontainer / network deadlocks before they consume CI minutes.
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -48,6 +52,16 @@ jobs:
       DATABASE_URL: postgres://skillpool:skillpool@localhost:5432/skillpool
       SKILL_POOL_DATABASE_URL: postgres://skillpool:skillpool@localhost:5432/skillpool
       RUST_BACKTRACE: 1
+      # SQLX_OFFLINE makes the `sqlx::query!` macro use the committed
+      # `.sqlx/` cache for compile-time query verification instead of
+      # connecting to a live DB. The cache is in git (160 entries as of
+      # this commit); runtime queries still hit the service container.
+      SQLX_OFFLINE: "true"
+      # NIXPKGS_ALLOW_INSECURE bypasses the minio-abandoned gate that
+      # nixpkgs-unstable currently surfaces. It's transitively pulled in
+      # by the devshell (via opendal's optional s3 backend) even though
+      # we never use it.
+      NIXPKGS_ALLOW_INSECURE: "1"
       # The capturer's anthropic.rs requires ANTHROPIC_API_KEY at runtime,
       # not at test time — its tests don't hit the live API. Leaving the
       # env var unset is the correct gate.
@@ -55,40 +69,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@stable
+      # Use the project's nix devshell instead of apt-installed system
+      # libs. Closes #71 — samael 0.0.20 + libxmlsec1-dev 1.2.x (ubuntu's
+      # version) produces a u32→usize type mismatch in samael's
+      # hand-written xmlsec wrappers. The nix devshell pins libxmlsec1
+      # 1.3.7 where `xmlSecSize = size_t = usize`, matching what samael
+      # expects. Side benefit: every other build dep (libxml2, openssl,
+      # pkg-config, rust toolchain) now matches local dev exactly.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
         with:
-          components: rustfmt, clippy
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
 
-      - name: Install SAML C deps (xmlsec1 + libxml2 + libtool + clang)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libxml2-dev \
-            libxmlsec1-dev \
-            libxmlsec1-openssl \
-            libtool-bin \
-            libltdl-dev \
-            clang \
-            libclang-dev \
-            pkg-config
+      - name: Cache nix-community substituter
+        uses: cachix/cachix-action@v15
+        with:
+          name: nix-community
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-rust
+          shared-key: ci-rust-nix
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo fmt --all -- --check
-        run: cargo fmt --all -- --check
+        run: nix develop --impure --command cargo fmt --all -- --check
 
       - name: cargo clippy --workspace --all-targets -- -D warnings
-        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+        run: nix develop --impure --command cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
       - name: Pre-pull Postgres image for testcontainers-using tests
         run: docker pull postgres:alpine
 
       - name: cargo test --workspace
-        run: cargo test --workspace --verbose
+        run: nix develop --impure --command cargo test --workspace --verbose
 
   # ---------------------------------------------------------------------------
   # Web: prettier (lint) + svelte-check + vitest (a11y + unit).
@@ -215,7 +230,7 @@ jobs:
           # Comma-separated, single line — multi-line YAML strings get
           # passed verbatim to `cargo audit --ignore X\nY\n...`, which
           # cargo-audit then rejects as a malformed advisory ID.
-          ignore: RUSTSEC-2026-0119,RUSTSEC-2023-0071,RUSTSEC-2025-0119,RUSTSEC-2024-0436,RUSTSEC-2025-0134
+          ignore: RUSTSEC-2026-0119,RUSTSEC-2023-0071,RUSTSEC-2025-0119,RUSTSEC-2024-0436,RUSTSEC-2025-0134,RUSTSEC-2026-0008
 
   # ---------------------------------------------------------------------------
   # Security: cargo deny — license, bans, and source policy checks.

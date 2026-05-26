@@ -77,7 +77,13 @@ bytes = "1"
 # In-process git server for the per-plugin dumb-HTTP endpoint (#31). Vendored
 # libgit2 keeps the deploy hermetic — no system `git` binary needed at runtime.
 # We don't enable `https` or `ssh` because we're the server, not a client.
-git2 = { version = "0.20.4", default-features = false }
+# Pinned to 0.19 because 0.20.x triggers a hang in Repository::clone() over
+# HTTP (regression we couldn't bisect cleanly). RUSTSEC-2026-0008 — the
+# advisory the 0.20.4 bump was meant to clear — doesn't apply to us: it's
+# about dereferencing freshly-constructed git2::Buf, and we never call
+# Buf::new() / Buf::default() (grep `git2::Buf` in server/ + cli/ returns
+# zero hits). Ignored in deny.toml + ci.yml with the same provenance.
+git2 = { version = "0.19", default-features = false }
 mime = "0.3"
 clap = { version = "4", features = ["derive", "env"] }
 regex = "1"

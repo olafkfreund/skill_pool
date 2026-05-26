@@ -411,7 +411,7 @@ pub async fn publish(
     let row = match insert_res {
         Ok(r) => r,
         Err(sqlx::Error::Database(dbe))
-            if dbe.constraint() == Some("plugins_tenant_id_slug_version_key") =>
+            if dbe.constraint() == Some("plugins_tenant_id_slug_version_active_key") =>
         {
             return Err(AppError::Conflict(format!(
                 "plugin {slug}@{version} already exists"

@@ -218,8 +218,12 @@ pub async fn create(
     )
     .await
     .map_err(|e| {
-        // Surface unique-constraint violations as 409 Conflict.
-        let msg = e.to_string();
+        // Surface unique-constraint violations as 409 Conflict. admin::create_project
+        // wraps the underlying sqlx error with anyhow context, so e.to_string()
+        // only renders the outer message ("create project ..."); use {:#} to walk
+        // the chain and reach the postgres "duplicate key value violates unique
+        // constraint" string.
+        let msg = format!("{e:#}");
         if msg.contains("unique") || msg.contains("duplicate") {
             AppError::Conflict(format!("a project with slug `{slug}` already exists"))
         } else {

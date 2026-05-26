@@ -658,15 +658,9 @@ async fn serve(cfg: config::Config) -> Result<()> {
     // actual clone/fetch; the sweep is only the scheduler. Bounded
     // concurrency: at most 8 plugins per tick (idempotency key dedupes
     // the queue if the previous job is still in-flight).
-    let mirror_sweep_handle = if let Some(q) = state.queue() {
-        Some(spawn_mirror_sweep(
-            state.db().clone(),
-            q.clone(),
-            shutdown_rx.clone(),
-        ))
-    } else {
-        None
-    };
+    let mirror_sweep_handle = state
+        .queue()
+        .map(|q| spawn_mirror_sweep(state.db().clone(), q.clone(), shutdown_rx.clone()));
 
     let app = routes::router(state);
 
