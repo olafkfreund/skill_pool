@@ -93,7 +93,7 @@ base64 = "0.22"
 urlencoding = "2"
 async-trait = "0.1"
 samael = { version = "0.0.20", features = ["xmlsec"] }
-quick-xml = "0.36"
+quick-xml = "0.38"
 
 config = { version = "0.15", default-features = false, features = ["toml", "json"] }
 figment = { version = "0.10", features = ["env", "toml"] }
