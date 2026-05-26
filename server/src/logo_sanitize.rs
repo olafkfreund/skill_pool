@@ -421,6 +421,12 @@ fn strip_xml_extras(raw: &[u8]) -> Result<Vec<u8>, quick_xml::Error> {
             }
             Ok(Event::Decl(e)) => writer.write_event(Event::Decl(e))?,
             Ok(Event::DocType(e)) => writer.write_event(Event::DocType(e))?,
+            // Added in quick-xml 0.38: general entity reference (e.g. `&foo;`).
+            // Logo SVGs have no legitimate reason to declare custom entities,
+            // and emitting them through would re-open the XXE / billion-laughs
+            // vector that the rest of this sanitizer is designed to block.
+            // Drop on the floor, same posture as Comment + PI above.
+            Ok(Event::GeneralRef(_)) => {}
             Err(e) => return Err(e),
         }
         buf.clear();
