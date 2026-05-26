@@ -25,10 +25,14 @@ jobs:
   rust:
     name: Rust (fmt + clippy + test)
     runs-on: ubuntu-latest
-    # Fail fast on hangs. A clean nix-cold-start + full workspace test
-    # run is ~12-15 min; 25 min is a generous cap that surfaces
-    # testcontainer / network deadlocks before they consume CI minutes.
-    timeout-minutes: 25
+    # Fail fast on hangs. Observed runtimes: warm-cache run finishes in
+    # ~12-15 min; a clean cold-start (no Swatinem cache hit, nix store
+    # fetch from substituter, full release-profile compile of the
+    # workspace including samael+libxmlsec1, postgres image pull,
+    # testcontainers spin-up) hit 25:01 in run 26468204301 — i.e. zero
+    # margin. Bumped to 40 min: still tight enough to catch a
+    # testcontainer/network deadlock, but gives cold starts headroom.
+    timeout-minutes: 40
 
     services:
       postgres:
