@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Plugin authoring · skill_pool</title>
+<meta name="description" content="How to author a Claude Code plugin in skill_pool — sourcing modes, marketplace endpoint, smart-HTTP git serving." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" />
+<link rel="stylesheet" href="css/terminal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container topnav-inner">
+    <a class="brand" href="index.html">skill_pool<span class="cursor"></span></a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="architecture.html">Architecture</a></li>
+      <li><a href="use-cases.html">Use Cases</a></li>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="plugins.html" class="active">Plugins</a></li>
+      <li><a href="api.html">API</a></li>
+      <li><a href="demo.html">Demo</a></li>
+    </ul>
+    <button class="search-btn" aria-label="Search"><span>search</span><kbd>⌘K</kbd></button>
+  </div>
+</nav>
+
+<div class="container doc-layout">
+
+  <aside class="toc">
+    <div class="toc-label">on this page</div>
+    <ul>
+      <li><a href="#intro">What is a plugin?</a></li>
+      <li><a href="#flow">Install flow</a></li>
+      <li><a href="#modes">Sourcing modes</a></li>
+      <li><a href="#author">Author your first plugin</a></li>
+      <li><a href="#manifest">Manifest schema</a></li>
+      <li><a href="#mirror">Mirror &amp; refresh</a></li>
+      <li><a href="#troubleshoot">Troubleshooting</a></li>
+    </ul>
+  </aside>
+
+  <main>
+    <div class="terminal-prompt">cat ./plugins.md</div>
+    <h2 style="margin-top:8px"><span class="accent">Plugin authoring</span></h2>
+    <p class="lede">
+      Plugins are the next layer above skills/agents/commands —
+      one installable unit that bundles several catalogue entries plus optional hooks and MCP servers.
+      skill_pool exposes them as a per-tenant Claude Code <em>marketplace</em>, served from the same Axum router.
+    </p>
+
+    <!-- ============ Intro ============ -->
+    <h3 id="intro" class="with-prompt">What is a plugin?</h3>
+    <p>
+      A <strong>plugin</strong> is Claude Code's packaging primitive: it bundles one or more
+      skills, agents, commands, hooks, MCP servers, LSP servers, and monitors into one installable unit
+      (<a href="https://code.claude.com/docs/en/plugins-reference">official reference</a>).
+      A <strong>marketplace</strong> is the catalog Claude Code consumes via <code>/plugin marketplace add &lt;url&gt;</code>.
+    </p>
+    <p>
+      skill_pool already distributes skills, agents, and commands as atomic units. Plugins sit one layer above:
+      a curator picks N already-registered atomic pieces, packages them into one plugin, and exposes the result
+      through their tenant's marketplace.
+    </p>
+
+    <table>
+      <thead><tr><th>Primitive</th><th>What it is</th><th>How it ships</th></tr></thead>
+      <tbody>
+        <tr><td>Skill</td><td><code>SKILL.md</code> Claude can invoke by name</td><td><code>~/.claude/skills/</code> or inside a plugin</td></tr>
+        <tr><td>Agent</td><td>Markdown declaring a subagent</td><td><code>~/.claude/agents/</code> or inside a plugin</td></tr>
+        <tr><td>Command</td><td>Markdown Claude treats as a slash command</td><td><code>~/.claude/commands/</code> or inside a plugin</td></tr>
+        <tr><td>Plugin</td><td>Directory with <code>.claude-plugin/plugin.json</code> bundling any of the above</td><td><code>/plugin install &lt;name&gt;@&lt;marketplace&gt;</code></td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      A plugin in skill_pool is a <em>composition</em>, not a duplicate. Bundled entries remain addressable, versioned catalogue rows; the plugin row just points at them.
+    </div>
+
+    <!-- ============ Flow ============ -->
+    <h3 id="flow" class="with-prompt">End-to-end install flow</h3>
+
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    actor Curator
+    actor Dev as Developer
+    participant Portal as skill_pool portal
+    participant API as skill_pool server
+    participant CC as Claude Code
+
+    Curator->>Portal: compose plugin · pick skills/agents/commands
+    Portal->>API: POST /v1/plugins
+    API-->>Portal: plugin row · marketplace entry generated
+    Dev->>CC: /plugin marketplace add https://acme.skills.example
+    CC->>API: GET /.claude-plugin/marketplace.json
+    API-->>CC: list of plugins (tenant-scoped)
+    Dev->>CC: /plugin install acme-toolkit
+    CC->>API: git clone /git/plugins/acme-toolkit.git
+    API-->>CC: bundle (skills · agents · commands · hooks · MCP)
+    Note over CC: cached at ~/.claude/plugins/cache/acme/acme-toolkit/&lt;ver&gt;/
+    </div>
+
+    <!-- ============ Sourcing modes ============ -->
+    <h3 id="modes" class="with-prompt">Three sourcing modes</h3>
+
+    <table>
+      <thead><tr><th>Mode</th><th>Curator effort</th><th>Bytes stored by skill_pool?</th><th>Egress required from dev?</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Internal</strong></td><td>High (assemble in portal)</td><td>Yes</td><td>No (skill_pool only)</td></tr>
+        <tr><td><strong>External</strong></td><td>Low (paste URL)</td><td>No</td><td>Yes (upstream URL)</td></tr>
+        <tr><td><strong>Mirror</strong></td><td>Medium (paste URL + refresh)</td><td>Yes</td><td>No (skill_pool only)</td></tr>
+      </tbody>
+    </table>
+
+    <ul>
+      <li><strong>Internal</strong> — authored in skill_pool. Portal composer assembles from registered skills/agents/commands; server materializes the plugin tree and serves it from <code>/git/plugins/&lt;slug&gt;.git</code>. Versions are git refs. <em>Reuses the most of the existing registry.</em></li>
+      <li><strong>External</strong> — plugin lives in someone else's repo (public GitHub, internal GitLab). Marketplace entry's <code>source</code> is the upstream URL; Claude clones it directly. <em>Cheapest mode to operate.</em></li>
+      <li><strong>Mirror</strong> — plugin lives upstream but skill_pool clones it locally, refreshes on a schedule, and serves the mirror. <em>Path for air-gapped tenants, slow upstreams, or curators wanting a snapshot they control.</em></li>
+    </ul>
+
+    <!-- ============ Authoring ============ -->
+    <h3 id="author" class="with-prompt">Author your first plugin</h3>
+<pre><code><span class="comment"># 1) Lay out the plugin directory</span>
+<span class="cmd">$</span> mkdir -p acme-platform-toolkit/.claude-plugin
+<span class="cmd">$</span> cd acme-platform-toolkit
+
+<span class="comment"># 2) Write the manifest</span>
+<span class="cmd">$</span> cat &gt; .claude-plugin/plugin.json &lt;&lt; 'JSON'
+{
+  "name": "acme-platform-toolkit",
+  "version": "1.0.0",
+  "description": "Acme platform team's review + migration + observability skills",
+  "author": "platform@acme.com",
+  "skills": [
+    { "slug": "code-reviewer",      "version": "1.4.0" },
+    { "slug": "sqlx-migrations",    "version": "2.0.1" },
+    { "slug": "axum-tracing",       "version": "0.3.0" }
+  ],
+  "agents":   [{ "slug": "platform-on-call",  "version": "0.2.0" }],
+  "commands": [{ "slug": "/postmortem-stub", "version": "1.0.0" }],
+  "hooks": {
+    "SessionStart": [{ "type": "command", "command": "${PLUGIN_DIR}/hooks/load-acme-ctx.sh" }]
+  }
+}
+JSON
+
+<span class="comment"># 3) Publish</span>
+<span class="cmd">$</span> skill-pool publish . --kind plugin --version 1.0.0
+  validating manifest...                            <span class="ok">OK</span>
+  resolving 3 skills · 1 agent · 1 command...       <span class="ok">OK</span>  (all in tenant)
+  secret scan (PLUGIN_DIR/hooks/)...                <span class="ok">OK</span>
+  packing...                                        <span class="ok">OK</span> (12.4 KB)
+  publishing to marketplace...                      <span class="ok">OK</span>
+  <span class="ok">OK</span> acme-platform-toolkit@1.0.0 published
+       https://acme.skills.example/.claude-plugin/marketplace.json
+       https://acme.skills.example/git/plugins/acme-platform-toolkit.git
+
+<span class="comment"># 4) Install in Claude Code</span>
+<span class="cmd">User:</span> /plugin marketplace add https://acme.skills.example
+<span class="cmd">User:</span> /plugin install acme-platform-toolkit
+  <span class="ok">OK</span> installed at ~/.claude/plugins/cache/acme/acme-platform-toolkit/1.0.0</code></pre>
+
+    <!-- ============ Manifest ============ -->
+    <h3 id="manifest" class="with-prompt">Manifest schema (key fields)</h3>
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>string</td><td>Slug; unique per tenant + version</td></tr>
+        <tr><td><code>version</code></td><td>semver</td><td>Immutable; republish requires a bump</td></tr>
+        <tr><td><code>skills[]</code> · <code>agents[]</code> · <code>commands[]</code></td><td>array</td><td><code>{slug, version}</code> pairs into the existing catalogue</td></tr>
+        <tr><td><code>hooks</code></td><td>object</td><td><code>SessionStart</code>, <code>Stop</code>, <code>SessionEnd</code> per Claude Code spec</td></tr>
+        <tr><td><code>mcp_servers</code></td><td>array</td><td>Embedded MCP server definitions</td></tr>
+        <tr><td><code>monitors</code> · <code>themes</code> · <code>settings</code></td><td>object</td><td>Claude Code passthrough fields</td></tr>
+      </tbody>
+    </table>
+    <p>Full schema: <a href="https://github.com/olafkfreund/skill_pool/blob/main/docs/plugin-manifest-schema.md">docs/plugin-manifest-schema.md</a>.</p>
+
+    <!-- ============ Mirror ============ -->
+    <h3 id="mirror" class="with-prompt">Mirror &amp; refresh worker</h3>
+    <p>
+      Mirrored plugins carry <code>pull_interval_secs</code> (default 24h). A background worker wakes every 60s,
+      finds plugins whose <code>last_pulled_at + pull_interval_secs</code> is in the past, pulls up to N in parallel,
+      and updates the local git endpoint. Pull failures keep the last-good copy serving and surface a warning chip
+      in the portal.
+    </p>
+    <p>
+      When <code>SKILL_POOL_REDIS_URL</code> is set, the refresh uses a durable Redis queue with DLQ.
+      Without it, refreshes spawn an in-process tokio task per call (fail-open, no retry across restarts).
+    </p>
+
+    <!-- ============ Troubleshooting ============ -->
+    <h3 id="troubleshoot" class="with-prompt">Troubleshooting</h3>
+    <table>
+      <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><code>/plugin marketplace add</code> returns 404</td><td>Tenant subdomain not resolved</td><td>Verify <code>Host</code> header / DNS; <code>curl /.claude-plugin/marketplace.json</code> from the dev machine</td></tr>
+        <tr><td><code>/plugin install</code> hangs</td><td>libgit2 HTTP-transport quirk</td><td>Issue #73 tracks this; current workaround is to use a system <code>git</code> client</td></tr>
+        <tr><td>Republish rejected as <code>409 conflict</code></td><td>That <code>(slug, version)</code> already exists and is not archived</td><td>Bump the version, or archive the prior row first</td></tr>
+        <tr><td>Mirror stays on stale ref</td><td>Worker can't reach upstream</td><td>Check <code>/v1/plugins/&lt;slug&gt;/health</code>; portal shows last error</td></tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top:32px">
+      <a class="btn" href="api.html">$ api reference →</a>
+      <a class="btn btn-ghost" href="https://github.com/olafkfreund/skill_pool/blob/main/docs/plugins.md">full docs/plugins.md</a>
+    </p>
+
+  </main>
+</div>
+
+<footer>
+  <div class="container">
+    <div>
+      <a href="https://github.com/olafkfreund/skill_pool">github</a>
+      <a href="architecture.html">architecture</a>
+      <a href="api.html">api</a>
+      <a href="plugins.html">plugins</a>
+      <a href="quickstart.html">quickstart</a>
+    </div>
+    <div>MIT · © <span id="year"></span></div>
+  </div>
+</footer>
+
+<div class="search-modal" id="search-modal" role="dialog" aria-modal="true">
+  <div class="search-box">
+    <div class="search-input-row">
+      <input id="search-input" class="search-input" type="text" placeholder="search docs · architecture · cli · plugins · api…" autocomplete="off" />
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lunr@2.3.9/lunr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="js/site.js"></script>
+</body>
+</html>

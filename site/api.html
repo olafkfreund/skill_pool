@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>API reference · skill_pool</title>
+<meta name="description" content="REST API reference for skill_pool: skills, agents, commands, plugins, drafts, projects, plans, tenants, audit." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" />
+<link rel="stylesheet" href="css/terminal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container topnav-inner">
+    <a class="brand" href="index.html">skill_pool<span class="cursor"></span></a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="architecture.html">Architecture</a></li>
+      <li><a href="use-cases.html">Use Cases</a></li>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="api.html" class="active">API</a></li>
+      <li><a href="demo.html">Demo</a></li>
+    </ul>
+    <button class="search-btn" aria-label="Search"><span>search</span><kbd>⌘K</kbd></button>
+  </div>
+</nav>
+
+<div class="container doc-layout">
+
+  <aside class="toc">
+    <div class="toc-label">on this page</div>
+    <ul>
+      <li><a href="#common">Common</a></li>
+      <li><a href="#health">Health</a></li>
+      <li><a href="#skills">Skills · Agents · Commands</a></li>
+      <li><a href="#plugins">Plugins</a></li>
+      <li><a href="#projects">Projects · Plans</a></li>
+      <li><a href="#drafts">Drafts (capture)</a></li>
+      <li><a href="#decay">Decay</a></li>
+      <li><a href="#tenants">Tenants · Tokens</a></li>
+      <li><a href="#audit">Audit</a></li>
+      <li><a href="#public">Public surfaces</a></li>
+      <li><a href="#mcp">MCP transport</a></li>
+    </ul>
+  </aside>
+
+  <main>
+    <div class="terminal-prompt">curl https://acme.skills.example/v1/healthz</div>
+    <h2 style="margin-top:8px"><span class="accent">API reference</span></h2>
+    <p class="lede">
+      Tenant-scoped REST. Bearer auth on every <code>/v1/*</code> except <code>/v1/healthz</code>.
+      Tenant resolution by subdomain or <code>X-Skill-Pool-Tenant</code> header.
+      Mutations write an <code>audit_events</code> row in the same transaction.
+    </p>
+
+    <!-- ============ Common ============ -->
+    <h3 id="common" class="with-prompt">Common</h3>
+
+    <p><strong>Auth.</strong> <code>Authorization: Bearer &lt;token&gt;</code> issued for the resolved tenant.</p>
+
+    <p><strong>Tenant resolution.</strong> Either subdomain (<code>acme.skill-pool.example.com</code>) or <code>X-Skill-Pool-Tenant: acme</code> header.</p>
+
+    <p><strong>Error shape.</strong></p>
+<pre><code>{
+  "error": "tenant_resolution_failed",
+  "message": "missing Host header"
+}</code></pre>
+    <p>Codes: <code>not_found</code> · <code>unauthorized</code> · <code>forbidden</code> · <code>bad_request</code> · <code>tenant_resolution_failed</code> · <code>not_implemented</code> · <code>internal_error</code>.</p>
+
+    <!-- ============ Health ============ -->
+    <h3 id="health" class="with-prompt">Health</h3>
+
+    <p><code><strong>GET /v1/healthz</strong></code> — no auth, no tenant. Always returns 200 so the load balancer doesn't pull a node on a transient blip. Page on <code>deps.db.status == "down"</code> from your monitoring.</p>
+
+<pre><code>{
+  "status": "ok",                  <span class="comment">// "ok" | "degraded"</span>
+  "version": "0.1.0",
+  "deps": {
+    "db":       { "status": "up",   "latency_ms": 3  },
+    "storage":  { "status": "up",   "latency_ms": 12 },
+    "embedder": { "status": "off",  "note": "fastembed feature not compiled" }
+  }
+}</code></pre>
+
+    <!-- ============ Skills ============ -->
+    <h3 id="skills" class="with-prompt">Skills · Agents · Commands</h3>
+
+    <p>One catalog table holds all three, discriminated by <code>?kind=skill|agent|command</code> (default <code>skill</code>). Schema, validation, dependency graph, embedding column, decay model — all shared.</p>
+
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/v1/skills</code></td><td>List · supports <code>query</code> · <code>tags</code> · <code>limit</code> · <code>kind</code> · <code>semantic</code> · <code>min_similarity</code></td></tr>
+        <tr><td>POST</td><td><code>/v1/skills</code></td><td>Publish · multipart · tar+gz body + JSON metadata · secret scan on server</td></tr>
+        <tr><td>GET</td><td><code>/v1/skills/{slug}</code></td><td>Metadata</td></tr>
+        <tr><td>GET</td><td><code>/v1/skills/{slug}/bundle.tar.gz</code></td><td>302 → signed S3 URL (or stream from fs/MinIO)</td></tr>
+        <tr><td>GET</td><td><code>/v1/skills/{slug}/skill-md</code></td><td>The raw <code>SKILL.md</code> text</td></tr>
+        <tr><td>GET</td><td><code>/v1/skills/{slug}/detail</code></td><td>Portal-shaped detail (version history, usage)</td></tr>
+        <tr><td>DELETE</td><td><code>/v1/skills/{slug}/versions/{version}</code></td><td>Archive (soft-delete; partial unique index allows republish)</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Semantic search (Phase 5+).</strong> <code>?semantic=axum middleware</code> ranks by cosine similarity of the description embedding. Returns 400 if no embedder is compiled in.</p>
+<pre><code>GET /v1/skills?semantic=axum+middleware&amp;min_similarity=0.7
+
+[
+  {
+    "slug": "axum-handler",
+    "version": "1.0.0",
+    "description": "Pattern for axum tenant-scoped extractors",
+    "tags": ["rust"],
+    "status": "published",
+    "created_at": "2026-05-18T12:00:00Z",
+    "similarity": 0.94
+  }
+]</code></pre>
+
+    <!-- ============ Plugins ============ -->
+    <h3 id="plugins" class="with-prompt">Plugins (Layer 3)</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/v1/plugins</code></td><td>List tenant's plugins</td></tr>
+        <tr><td>POST</td><td><code>/v1/plugins</code></td><td>Publish · resolves nested <code>{slug,version}</code> entries · 409 on duplicate version</td></tr>
+        <tr><td>GET</td><td><code>/v1/plugins/{slug}</code></td><td>Detail · sourcing mode · refresh state</td></tr>
+        <tr><td>POST</td><td><code>/v1/plugins/{slug}/refresh</code></td><td>Mirror-mode only · trigger immediate pull</td></tr>
+        <tr><td>DELETE</td><td><code>/v1/plugins/{slug}/versions/{version}</code></td><td>Archive</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ Projects ============ -->
+    <h3 id="projects" class="with-prompt">Projects · Plans (Layer 2)</h3>
+    <p>A <strong>project</strong> binds a repo (git remote URL) to a curated set of skills. A <strong>plan</strong> is a curator-authored, versioned bundle that a project can <em>follow</em>.</p>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/v1/projects</code></td><td>List · auto-discover by git remote</td></tr>
+        <tr><td>POST</td><td><code>/v1/projects</code></td><td>Create</td></tr>
+        <tr><td>GET</td><td><code>/v1/projects/{slug}/plan</code></td><td>Current plan resolved for the project</td></tr>
+        <tr><td>POST</td><td><code>/v1/plans</code></td><td>Publish a plan version</td></tr>
+        <tr><td>GET</td><td><code>/v1/plans/{slug}/history</code></td><td>Immutable version log</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ Drafts ============ -->
+    <h3 id="drafts" class="with-prompt">Drafts (retrospective capture)</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>POST</td><td><code>/v1/drafts</code></td><td>Capturer daemon posts a Sonnet-drafted <code>SKILL.md</code> + frontmatter</td></tr>
+        <tr><td>GET</td><td><code>/v1/drafts</code></td><td>Curator inbox (paginated)</td></tr>
+        <tr><td>POST</td><td><code>/v1/drafts/{id}/approve</code></td><td>Promote draft to a new skill version</td></tr>
+        <tr><td>POST</td><td><code>/v1/drafts/{id}/reject</code></td><td>Discard with reason</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ Decay ============ -->
+    <h3 id="decay" class="with-prompt">Decay (lifecycle)</h3>
+    <p><code><strong>GET /v1/tenant/skills/decay</strong></code> — admin-only. Lists candidates matching <code>last_used &gt; 6mo ∧ uses &lt; 3</code>. The web portal's "graveyard" view uses this.</p>
+
+    <!-- ============ Tenants ============ -->
+    <h3 id="tenants" class="with-prompt">Tenants · Tokens</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>POST</td><td><code>/v1/tenant/tokens</code></td><td>Mint a scoped token · <code>read</code> · <code>publish</code> · <code>admin</code></td></tr>
+        <tr><td>GET</td><td><code>/v1/tenant/members</code></td><td>List · paged · filterable by role</td></tr>
+        <tr><td>POST</td><td><code>/v1/tenant/sso</code></td><td>Configure OIDC / SAML 2.0 · per-tenant</td></tr>
+        <tr><td>GET</td><td><code>/v1/tenant/theme</code></td><td>Logo · palette · font · favicon · custom domain</td></tr>
+        <tr><td>POST</td><td><code>/scim/v2/Users</code> · <code>/Groups</code></td><td>SCIM v2 user provisioning</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ Audit ============ -->
+    <h3 id="audit" class="with-prompt">Audit</h3>
+    <p><code><strong>GET /v1/tenant/audit</strong></code> — paginated, filterable by <code>actor</code>, <code>action</code>, <code>resource</code>, time range.</p>
+    <p><code><strong>GET /v1/tenant/audit/export.jsonl</strong></code> — signed JSONL export for SIEM ingestion. Every mutation in the system is in here.</p>
+
+    <!-- ============ Public ============ -->
+    <h3 id="public" class="with-prompt">Public read surfaces (no auth)</h3>
+    <p>These are the only routes Claude Code's installer touches. Tenant routing is by Host header / subdomain / custom domain.</p>
+    <table>
+      <thead><tr><th>Path</th><th>Consumer</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>/.claude-plugin/marketplace.json</code></td><td><code>/plugin marketplace add &lt;url&gt;</code></td><td>Generated server-side from the tenant's plugin rows</td></tr>
+        <tr><td><code>/git/plugins/&lt;slug&gt;.git/*</code></td><td><code>/plugin install &lt;name&gt;</code></td><td>Smart-HTTP git endpoint backed by stored bytes</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ MCP ============ -->
+    <h3 id="mcp" class="with-prompt">MCP transport</h3>
+    <p>Claude can call <code>search_skills</code> and <code>install_skill</code> inline over JSON-RPC at <code>/mcp</code>. Authenticates with the same Bearer token. Useful when you want Claude to manage its own toolbox without shelling out to the CLI.</p>
+
+    <p style="margin-top:32px">
+      <a class="btn" href="https://github.com/olafkfreund/skill_pool/blob/main/docs/api.md">$ full docs/api.md →</a>
+      <a class="btn btn-ghost" href="https://github.com/olafkfreund/skill_pool/tree/main/server/src/routes">server/src/routes/</a>
+    </p>
+
+  </main>
+</div>
+
+<footer>
+  <div class="container">
+    <div>
+      <a href="https://github.com/olafkfreund/skill_pool">github</a>
+      <a href="architecture.html">architecture</a>
+      <a href="api.html">api</a>
+      <a href="plugins.html">plugins</a>
+      <a href="quickstart.html">quickstart</a>
+    </div>
+    <div>MIT · © <span id="year"></span></div>
+  </div>
+</footer>
+
+<div class="search-modal" id="search-modal" role="dialog" aria-modal="true">
+  <div class="search-box">
+    <div class="search-input-row">
+      <input id="search-input" class="search-input" type="text" placeholder="search docs · architecture · cli · plugins · api…" autocomplete="off" />
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lunr@2.3.9/lunr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="js/site.js"></script>
+</body>
+</html>

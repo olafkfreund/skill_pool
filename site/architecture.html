@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Architecture · skill_pool</title>
+<meta name="description" content="Components, data flow, invariants, and tenancy model of skill_pool." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" />
+<link rel="stylesheet" href="css/terminal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container topnav-inner">
+    <a class="brand" href="index.html">skill_pool<span class="cursor"></span></a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="architecture.html" class="active">Architecture</a></li>
+      <li><a href="use-cases.html">Use Cases</a></li>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="api.html">API</a></li>
+      <li><a href="demo.html">Demo</a></li>
+    </ul>
+    <button class="search-btn" aria-label="Search"><span>search</span><kbd>⌘K</kbd></button>
+  </div>
+</nav>
+
+<div class="container doc-layout">
+
+  <aside class="toc">
+    <div class="toc-label">on this page</div>
+    <ul>
+      <li><a href="#components">Components</a></li>
+      <li><a href="#process">Process boundaries</a></li>
+      <li><a href="#tenancy">Tenancy</a></li>
+      <li><a href="#flow-publish">Flow: publish</a></li>
+      <li><a href="#flow-install">Flow: install</a></li>
+      <li><a href="#flow-plugin">Flow: plugin install</a></li>
+      <li><a href="#flow-capture">Flow: capture</a></li>
+      <li><a href="#invariants">Invariants</a></li>
+      <li><a href="#stack">Stack</a></li>
+    </ul>
+  </aside>
+
+  <main>
+    <div class="terminal-prompt">cat docs/architecture.md</div>
+    <h2 style="margin-top:8px"><span class="accent">Architecture</span></h2>
+    <p class="lede">
+      Stateless Rust + Axum server, three served surfaces on one router, all shared state in Postgres and object storage.
+      Plugins are a composition layer above skills/agents/commands — the surfaces Claude Code consumes
+      (<code>marketplace.json</code> + smart-HTTP git) are public read; everything else is tenant-scoped Bearer.
+    </p>
+
+    <!-- ============ Components ============ -->
+    <h3 id="components" class="with-prompt">Components</h3>
+
+    <div class="mermaid">
+flowchart LR
+    subgraph dev[Developer machine]
+        CLI[skill-pool CLI]
+        CC["Claude Code<br/>/plugin marketplace add<br/>/plugin install"]
+        HOOKS["hooks<br/>Stop · SessionEnd · SessionStart"]
+    end
+
+    subgraph server[skill-pool server · Rust + Axum]
+        API["REST API<br/>/v1/skills · /v1/plugins"]
+        MARKET["/.claude-plugin/<br/>marketplace.json"]
+        GIT["/git/plugins/&lt;slug&gt;.git<br/>(smart HTTP)"]
+        L1["Layer 1<br/>skills · agents · commands"]
+        L2["Layer 2<br/>projects · plans"]
+        L3["Layer 3<br/>plugins (composition)"]
+        CAP["Capturer daemon<br/>Haiku → Sonnet"]
+        API --> L1
+        API --> L2
+        API --> L3
+        L3 -.composes.-> L1
+        MARKET -.reads.-> L3
+        GIT -.reads.-> L3
+    end
+
+    Web[skill-pool-web<br/>per-tenant brand]
+
+    subgraph data[Storage]
+        PG[(Postgres 17 + pgvector)]
+        OBJ[(opendal · fs / S3 / GCS)]
+        REDIS[(Redis · cache + queue, optional)]
+    end
+
+    CLI -->|HTTPS Bearer| API
+    Web -->|HTTPS session| API
+    CC -->|GET marketplace.json| MARKET
+    CC -->|git clone| GIT
+    HOOKS -->|score · queue| CAP
+    CAP -->|POST /v1/drafts| API
+    API --> PG
+    API --> OBJ
+    API -.-> REDIS
+    L3 --> OBJ
+    </div>
+
+    <p>
+      Three served surfaces sit on the same Axum router:
+    </p>
+    <ol>
+      <li><strong>REST <code>/v1/*</code></strong> — tenant-scoped, Bearer-authed. The CLI and the Svelte portal speak to this.</li>
+      <li><strong><code>/.claude-plugin/marketplace.json</code></strong> — public read. Claude Code's <code>/plugin marketplace add &lt;host&gt;</code> hits this directly.</li>
+      <li><strong><code>/git/plugins/&lt;slug&gt;.git</code></strong> — public read, smart-HTTP. Claude's <code>/plugin install</code> clones it.</li>
+    </ol>
+    <p>Plugins are <em>compositions</em>: a published plugin row pins existing catalogue entries by <code>(slug, kind, version)</code>. No duplication.</p>
+
+    <!-- ============ Process boundaries ============ -->
+    <h3 id="process" class="with-prompt">Process boundaries</h3>
+    <ul>
+      <li><strong>CLI</strong> runs on every developer machine; symlinks skills into <code>~/.claude/skills/</code> or <code>&lt;project&gt;/.claude/skills/</code>.</li>
+      <li><strong>Server</strong> is stateless. All shared state lives in Postgres, object storage, and (optionally) Redis.</li>
+      <li><strong>Capturer daemon</strong> runs per-user as a systemd unit; talks to the server like the CLI does.</li>
+      <li><strong>Web portal</strong> is a SvelteKit 2 SSR app; the same per-tenant brand pulled from the API.</li>
+    </ul>
+
+    <!-- ============ Tenancy ============ -->
+    <h3 id="tenancy" class="with-prompt">Tenancy</h3>
+    <table>
+      <thead><tr><th>Mode</th><th>When</th><th>Layout</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Shared</td>
+          <td>Default · most deployments</td>
+          <td>one server / DB / bucket; every row carries <code>tenant_id</code>; subdomain routing.</td>
+        </tr>
+        <tr>
+          <td>Dedicated</td>
+          <td>Regulated tenants (SOC 2, FedRAMP, GxP)</td>
+          <td>one server / DB / bucket per tenant; same image, different DSN.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============ Flow: publish ============ -->
+    <h3 id="flow-publish" class="with-prompt">Data flow — publish</h3>
+<pre><code><span class="cmd">CLI:</span> skill-pool publish ./my-skill/
+  → tar+gzip the directory                  <span class="comment">(client)</span>
+  → POST /v1/skills (multipart)             <span class="comment">(HTTPS)</span>
+    → tenant + auth extraction              <span class="comment">(server)</span>
+    → bundle.tar.gz lint + secret scan      <span class="comment">(server)</span>
+    → SHA-256 + upload to object storage    <span class="comment">(server → opendal)</span>
+    → INSERT INTO skills (...)              <span class="comment">(server → Postgres)</span>
+    → INSERT INTO audit_events (...)        <span class="comment">(server → Postgres)</span>
+  ← 201 Created with canonical metadata     <span class="comment">(server → CLI)</span></code></pre>
+
+    <!-- ============ Flow: install ============ -->
+    <h3 id="flow-install" class="with-prompt">Data flow — install</h3>
+<pre><code><span class="cmd">CLI:</span> skill-pool ensure
+  → load .skill-pool/manifest.toml
+  → for each skill not yet in ~/.skill-pool/library/&lt;tenant&gt;/&lt;slug&gt;@&lt;ver&gt;/:
+      GET /v1/skills/{slug}/bundle.tar.gz   <span class="comment">(HTTPS; signed S3 URL)</span>
+      extract to library
+  → symlink library entry into .claude/skills/</code></pre>
+
+    <!-- ============ Flow: plugin ============ -->
+    <h3 id="flow-plugin" class="with-prompt">Data flow — plugin install (Claude Code)</h3>
+<pre><code><span class="cmd">User:</span> /plugin marketplace add https://skills.acme.com
+  → Claude GET https://skills.acme.com/.claude-plugin/marketplace.json
+  ← list of plugins available to your tenant
+<span class="cmd">User:</span> /plugin install acme-platform-bundle
+  → Claude git clone https://skills.acme.com/git/plugins/acme-platform-bundle.git
+  ← plugin manifest + skills/agents/commands/hooks/mcp servers</code></pre>
+    <div class="callout">
+      <strong>Public-read by design.</strong> Claude Code does not authenticate to these endpoints
+      — tenant routing is by subdomain / custom domain + ACME, and content is what the curator chose to publish.
+      No private data crosses these surfaces.
+    </div>
+
+    <!-- ============ Flow: capture ============ -->
+    <h3 id="flow-capture" class="with-prompt">Data flow — retrospective capture</h3>
+<pre><code><span class="cmd">Claude Code Stop-hook</span> fires after every session.
+  → deterministic scorer: token count · time-on-task · edit-density · test-run-ratio
+  → if score &gt; threshold: SessionEnd-hook writes transcript to <span class="arg">~/.skill-pool/capture-queue/</span>
+<span class="cmd">capturer daemon</span> (systemd · per-user):
+  → claim oldest queue file
+  → Haiku extractor: 1-pass summary → topic + tags + intent
+  → Sonnet drafter: full transcript → SKILL.md draft + frontmatter
+  → POST /v1/drafts (server)
+<span class="cmd">Reviewer</span> opens /portal/drafts:
+  → diff against existing skills
+  → edit · approve · publish → becomes a new skill version</code></pre>
+
+    <!-- ============ Invariants ============ -->
+    <h3 id="invariants" class="with-prompt">Key invariants</h3>
+    <p>These are <em>load-bearing</em>. Code review + test suites enforce them.</p>
+    <ol>
+      <li><strong>Every business query filters by <code>tenant_id</code>.</strong>
+        A static extractor (<code>server/tests/tenant_filter_static.rs</code>) parses every <code>sqlx::query!</code>
+        in the codebase and fails CI on any without a <code>tenant_id =</code> predicate.</li>
+      <li><strong>Object storage keys are tenant-prefixed</strong> (<code>{tenant_id}/...</code>). Bundle URIs in DB are opaque to the client.</li>
+      <li><strong>Audit log writes are non-optional.</strong> Every mutating endpoint writes an <code>audit_events</code> row in the same tx.</li>
+      <li><strong>App is stateless.</strong> Safe to replicate horizontally; no sticky sessions.</li>
+    </ol>
+
+    <!-- ============ Stack ============ -->
+    <h3 id="stack" class="with-prompt">Stack at a glance</h3>
+    <table>
+      <thead><tr><th>Layer</th><th>Tech</th></tr></thead>
+      <tbody>
+        <tr><td>Server</td><td>Rust · Axum · sqlx · tokio · opendal · redis-rs</td></tr>
+        <tr><td>Database</td><td>Postgres 17 · pgvector 0.7</td></tr>
+        <tr><td>Web</td><td>SvelteKit 2 · Svelte 5 (runes) · Tailwind v4</td></tr>
+        <tr><td>CLI</td><td>Rust · clap · reqwest</td></tr>
+        <tr><td>Capture</td><td>deterministic scorer + Haiku extractor + Sonnet drafter</td></tr>
+        <tr><td>Auth</td><td>OIDC (<code>openidconnect</code>) · SAML 2.0 (<code>samael</code>) · SCIM v2</td></tr>
+        <tr><td>Observability</td><td><code>tracing-subscriber</code> · Prometheus <code>/metrics</code> · OTLP exporter</td></tr>
+        <tr><td>Infra</td><td>Nix flake · Helm chart · Terraform AWS · Caddy (ACME)</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <strong>Want the per-module mental model?</strong>
+      Start with <a href="https://github.com/olafkfreund/skill_pool/blob/main/docs/architecture.md">docs/architecture.md</a>,
+      then dive into <a href="https://github.com/olafkfreund/skill_pool/tree/main/server/src">server/src/</a> —
+      every route module has a doc comment summarizing its tenancy contract.
+    </div>
+
+  </main>
+</div>
+
+<footer>
+  <div class="container">
+    <div>
+      <a href="https://github.com/olafkfreund/skill_pool">github</a>
+      <a href="architecture.html">architecture</a>
+      <a href="api.html">api</a>
+      <a href="plugins.html">plugins</a>
+      <a href="quickstart.html">quickstart</a>
+    </div>
+    <div>MIT · © <span id="year"></span></div>
+  </div>
+</footer>
+
+<div class="search-modal" id="search-modal" role="dialog" aria-modal="true">
+  <div class="search-box">
+    <div class="search-input-row">
+      <input id="search-input" class="search-input" type="text" placeholder="search docs · architecture · cli · plugins · api…" autocomplete="off" />
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lunr@2.3.9/lunr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="js/site.js"></script>
+</body>
+</html>

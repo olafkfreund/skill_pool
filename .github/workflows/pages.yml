@@ -1,0 +1,66 @@
+name: Deploy showcase site to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'docs/demo/**'
+      - 'docs/demo.webm'
+      - 'docs/demo.gif'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# One in-flight deploy at a time; cancel older queued runs.
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage site artifact
+        run: |
+          mkdir -p _publish
+          # Site source (HTML, CSS, JS, search index, media partials)
+          cp -r site/. _publish/
+          # Ensure the demo media is present even if site/media was emptied.
+          # (site/media/ files take precedence if both exist.)
+          mkdir -p _publish/media
+          for f in docs/demo/onboarding-cli.webm \
+                   docs/demo/onboarding-portal.webm \
+                   docs/demo/onboarding-cli.gif \
+                   docs/demo/onboarding-portal.gif \
+                   docs/demo.webm \
+                   docs/demo.gif; do
+            base=$(basename "$f")
+            if [ ! -f "_publish/media/$base" ] && [ -f "$f" ]; then
+              cp "$f" "_publish/media/$base"
+            fi
+          done
+          # Disable Jekyll processing on GitHub Pages.
+          touch _publish/.nojekyll
+          # Quick smoke list — surfaces missing assets in the run log.
+          echo "::group::Published artifact"
+          find _publish -type f | sort
+          echo "::endgroup::"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _publish
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

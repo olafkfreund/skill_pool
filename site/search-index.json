@@ -1,0 +1,353 @@
+{
+  "docs": [
+    {
+      "id": "home",
+      "url": "index.html",
+      "title": "skill_pool — home",
+      "section": "Overview",
+      "body": "Self-hosted Claude Code skill registry for teams. Compose AI agents from skills. Publish, install, browse, and govern SKILL.md, subagents, slash commands, and plugins under tenant-scoped SSO with a full audit trail. Rust Axum SvelteKit Postgres pgvector MIT."
+    },
+    {
+      "id": "home-bootstrap",
+      "url": "index.html#bootstrap",
+      "title": "Auto-bootstrap with direnv",
+      "section": "Features",
+      "body": "direnv allow detects your stack — Cargo.toml flake.nix package.json pyproject.toml go.mod — and prompts to install matching skills with one keystroke."
+    },
+    {
+      "id": "home-projects",
+      "url": "index.html",
+      "title": "Projects — per-repo curated bundles",
+      "section": "Features",
+      "body": "Curators pin acme-billing → code-reviewer sqlx-migrations cs-backend-engineer. Developers clone the repo and get exactly that bundle. Auto-discovers via git remote URL."
+    },
+    {
+      "id": "home-capture",
+      "url": "index.html",
+      "title": "Retrospective capture",
+      "section": "Features",
+      "body": "Stop-hook scorer plus async Haiku to Sonnet drafter. Solved problems become draft skills that a reviewer publishes from the web inbox. The catalog grows from work that already happened."
+    },
+    {
+      "id": "home-tenancy",
+      "url": "index.html",
+      "title": "Multi-tenant + SSO",
+      "section": "Features",
+      "body": "Per-tenant OIDC SAML SCIM. Scoped API tokens. Audit log with SIEM-friendly export. Shared mode for most. Dedicated mode for regulated tenants."
+    },
+    {
+      "id": "home-semantic",
+      "url": "index.html",
+      "title": "Semantic search",
+      "section": "Features",
+      "body": "bge-small embeddings computed on publish. GET /v1/skills?semantic=axum middleware ranks by meaning not substring."
+    },
+    {
+      "id": "home-mcp",
+      "url": "index.html",
+      "title": "MCP transport",
+      "section": "Features",
+      "body": "Claude can call search_skills and install_skill inline via the registry's MCP JSON-RPC endpoint. No CLI shell-out."
+    },
+
+    {
+      "id": "arch-components",
+      "url": "architecture.html#components",
+      "title": "Components — server, web, CLI, capture",
+      "section": "Architecture",
+      "body": "Stateless Rust Axum server. Three served surfaces on one router: REST /v1/* tenant-scoped Bearer; /.claude-plugin/marketplace.json public read; /git/plugins/<slug>.git smart HTTP public read. Postgres 17 pgvector. opendal storage S3 fs MinIO. Optional Redis cache and queue."
+    },
+    {
+      "id": "arch-tenancy",
+      "url": "architecture.html#tenancy",
+      "title": "Tenancy — shared and dedicated modes",
+      "section": "Architecture",
+      "body": "Shared mode: one server DB bucket. Every row carries tenant_id. Subdomain routing. Dedicated mode: one server DB bucket per tenant. Same image different DSN. Trade efficiency for isolation."
+    },
+    {
+      "id": "arch-flow-publish",
+      "url": "architecture.html#flow-publish",
+      "title": "Data flow — publish a skill",
+      "section": "Architecture",
+      "body": "CLI tars and gzips directory. POST /v1/skills multipart. Server lints, secret-scans, sha256, uploads to opendal, inserts skills row, inserts audit_events row. Returns 201 with canonical metadata."
+    },
+    {
+      "id": "arch-flow-install",
+      "url": "architecture.html#flow-install",
+      "title": "Data flow — install a skill",
+      "section": "Architecture",
+      "body": "CLI loads .skill-pool/manifest.toml. For each skill not in library, GET /v1/skills/{slug}/bundle.tar.gz, extract to library, symlink into .claude/skills/."
+    },
+    {
+      "id": "arch-flow-plugin",
+      "url": "architecture.html#flow-plugin",
+      "title": "Data flow — plugin install in Claude Code",
+      "section": "Architecture",
+      "body": "User runs /plugin marketplace add https://acme.skills.example. Claude GETs marketplace.json. User runs /plugin install acme-toolkit. Claude git clones /git/plugins/<slug>.git. Bundle cached at ~/.claude/plugins/cache/."
+    },
+    {
+      "id": "arch-flow-capture",
+      "url": "architecture.html#flow-capture",
+      "title": "Data flow — retrospective capture pipeline",
+      "section": "Architecture",
+      "body": "Stop-hook scorer rates session deterministically: token count, time on task, edit density, test run ratio. SessionEnd hook queues transcript. Capturer daemon claims oldest, Haiku extracts topic and tags, Sonnet drafts SKILL.md. Curator approves from drafts inbox."
+    },
+    {
+      "id": "arch-invariants",
+      "url": "architecture.html#invariants",
+      "title": "Key invariants — tenant_id, audit log, stateless",
+      "section": "Architecture",
+      "body": "Every business query filters by tenant_id, enforced by static extractor on every sqlx::query!. Object storage keys tenant-prefixed. Audit log writes mandatory. App stateless, safe to replicate horizontally."
+    },
+    {
+      "id": "arch-stack",
+      "url": "architecture.html#stack",
+      "title": "Tech stack",
+      "section": "Architecture",
+      "body": "Rust Axum sqlx tokio opendal redis-rs. Postgres 17 pgvector 0.7. SvelteKit 2 Svelte 5 runes Tailwind v4. clap reqwest. openidconnect samael SCIM v2. tracing-subscriber Prometheus OTLP. Nix flake Helm chart Terraform AWS Caddy ACME."
+    },
+
+    {
+      "id": "usecase-startup",
+      "url": "use-cases.html#startup",
+      "title": "15-engineer startup outgrowing dotfiles",
+      "section": "Use Cases",
+      "body": "Series A SaaS three product squads. Every .claude folder different. Brilliant skills trapped on one laptop. Onboarding starts from zero. Curate per-repo bundles. direnv installs them on clone. Auto-bootstrap projects semantic search."
+    },
+    {
+      "id": "usecase-saas",
+      "url": "use-cases.html#saas",
+      "title": "Multi-tenant SaaS platform",
+      "section": "Use Cases",
+      "body": "One server multiple customer tenants. Shared mode cost efficient. Dedicated mode escape hatch for regulated tenants. Per-tenant theme: logo palette font favicon custom domain Caddy ACME. SSO OIDC SAML SCIM. Audit log."
+    },
+    {
+      "id": "usecase-enterprise",
+      "url": "use-cases.html#enterprise",
+      "title": "Regulated enterprise SOC 2 FedRAMP GxP",
+      "section": "Use Cases",
+      "body": "Internal platform team. AI tooling needs security review. Secret scan on publish. RBAC audit log SIEM export. Dedicated isolation per regulated tenant: separate DB bucket domain. Same image three deployments isolated blast radius."
+    },
+    {
+      "id": "usecase-consultancy",
+      "url": "use-cases.html#consultancy",
+      "title": "Consultancy or agency rotating consultants",
+      "section": "Use Cases",
+      "body": "40-person dev agency 12 client engagements different tech stacks. Consultants rotate. Wikis stale. One server one tenant per client. Projects per repo. Retrospective capture turns sessions into draft skills. Replacement gets the skills automatically."
+    },
+    {
+      "id": "usecase-oss",
+      "url": "use-cases.html#oss",
+      "title": "OSS maintainer publishing a plugin",
+      "section": "Use Cases",
+      "body": "Maintainer publishes plugin. skill-pool publish --kind plugin. marketplace.json generated server-side. /plugin install clones from smart HTTP git endpoint. Bundles skills agents commands hooks MCP servers."
+    },
+    {
+      "id": "usecase-capture",
+      "url": "use-cases.html#capture",
+      "title": "Capturing tribal knowledge automatically",
+      "section": "Use Cases",
+      "body": "Stop-hook scorer flags valuable sessions. Capturer daemon: Haiku extracts intent, Sonnet drafts SKILL.md. Curator reviews in drafts inbox. Diff against existing skills. Approve. Catalog grows from work that already happened."
+    },
+    {
+      "id": "usecase-notfor",
+      "url": "use-cases.html#not-for",
+      "title": "When NOT to use skill_pool",
+      "section": "Use Cases",
+      "body": "Solo developer commit dotfiles instead. Two person team share editor instead. Have not adopted Claude Code yet start there first. No platform team and don't want one self-hosting has a floor of operational complexity."
+    },
+
+    {
+      "id": "qs-nix",
+      "url": "quickstart.html#nix",
+      "title": "Quickstart — Nix flake",
+      "section": "Quickstart",
+      "body": "git clone repo. nix develop drops you in dev shell. docker compose -f server/compose.yaml up -d brings Postgres MinIO Caddy. cargo run skill-pool-server on :8080. cd web && npm install && npm run dev portal on :3000."
+    },
+    {
+      "id": "qs-docker",
+      "url": "quickstart.html#docker",
+      "title": "Quickstart — Docker Compose",
+      "section": "Quickstart",
+      "body": "docker compose -f server/compose.yaml up -d. API 8080. Portal 3000. Caddy 8081 subdomain routed tenants. MinIO console 9001."
+    },
+    {
+      "id": "qs-nixos",
+      "url": "quickstart.html#nixos",
+      "title": "Quickstart — NixOS module",
+      "section": "Quickstart",
+      "body": "services.skill-pool.enable=true. Tenants list. STORAGE_URL DATABASE_URL_FILE for agenix or sops-nix. Composes systemd hardening: NoNewPrivileges ProtectSystem DynamicUser."
+    },
+    {
+      "id": "qs-helm",
+      "url": "quickstart.html#helm",
+      "title": "Quickstart — Helm chart Kubernetes",
+      "section": "Quickstart",
+      "body": "helm install skills skill-pool/skill-pool. Postgres DSN storage URL ingress hosts. Migration job runner HPA PodDisruptionBudget NetworkPolicy optional Redis subchart."
+    },
+    {
+      "id": "qs-terraform",
+      "url": "quickstart.html#terraform",
+      "title": "Quickstart — Terraform AWS",
+      "section": "Quickstart",
+      "body": "Provisions EKS RDS Postgres ElastiCache Redis S3 ACM cert IRSA role GitHub OIDC trust. No long-lived AWS keys in CI."
+    },
+    {
+      "id": "qs-projects",
+      "url": "quickstart.html#projects",
+      "title": "Per-repo projects with .skill-pool manifest",
+      "section": "Quickstart",
+      "body": "skill-pool project init writes .skill-pool/manifest.toml. project pin code-reviewer sqlx-migrations cs-backend-engineer. Commit to repo. Anyone cloning runs skill-pool ensure to install the same bundle."
+    },
+    {
+      "id": "qs-bootstrap",
+      "url": "quickstart.html#bootstrap",
+      "title": "Auto-bootstrap with direnv use skill-pool",
+      "section": "Quickstart",
+      "body": "Put use skill-pool in .envrc. direnv allow on first cd detects rust axum postgres nixos and prompts to install matching skills."
+    },
+    {
+      "id": "qs-seed",
+      "url": "quickstart.html#seed",
+      "title": "Seed demo with 120+ skills",
+      "section": "Quickstart",
+      "body": "./scripts/seed-demo.sh populates 76 skills 43 agents 1 command tenant theme members drafts SSO config usage events. Content from borghei/Claude-Skills MIT + Commons Clause."
+    },
+
+    {
+      "id": "plug-intro",
+      "url": "plugins.html#intro",
+      "title": "What is a Claude Code plugin",
+      "section": "Plugins",
+      "body": "Plugin is Claude Code's packaging primitive bundling skills agents commands hooks MCP servers LSP servers monitors. Marketplace is the catalog Claude consumes via /plugin marketplace add."
+    },
+    {
+      "id": "plug-modes",
+      "url": "plugins.html#modes",
+      "title": "Plugin sourcing modes — internal external mirror",
+      "section": "Plugins",
+      "body": "Internal: authored in skill-pool, hosted from /git/plugins/<slug>.git. External: lives in third-party git repo, marketplace just lists it. Mirror: cloned locally on schedule, served from skill-pool. Air-gapped tenants use mirror."
+    },
+    {
+      "id": "plug-author",
+      "url": "plugins.html#author",
+      "title": "Author your first plugin",
+      "section": "Plugins",
+      "body": "mkdir .claude-plugin. Write plugin.json with name version skills agents commands hooks. skill-pool publish --kind plugin. Validates manifest, resolves entries, secret scans, packs, publishes to marketplace."
+    },
+    {
+      "id": "plug-manifest",
+      "url": "plugins.html#manifest",
+      "title": "Plugin manifest schema",
+      "section": "Plugins",
+      "body": "Fields: name (slug unique per tenant), version (semver immutable), skills[] agents[] commands[] arrays of {slug,version}, hooks SessionStart Stop SessionEnd, mcp_servers, monitors, themes, settings."
+    },
+    {
+      "id": "plug-mirror",
+      "url": "plugins.html#mirror",
+      "title": "Mirror refresh worker",
+      "section": "Plugins",
+      "body": "pull_interval_secs default 24h. Worker wakes every 60s, pulls candidates in parallel. Last-good copy serves on failure. With Redis: durable queue + DLQ. Without: in-process tokio task."
+    },
+
+    {
+      "id": "api-common",
+      "url": "api.html#common",
+      "title": "API common — auth, tenant resolution, errors",
+      "section": "API",
+      "body": "Authorization Bearer token. Tenant by subdomain or X-Skill-Pool-Tenant header. Error codes: not_found unauthorized forbidden bad_request tenant_resolution_failed not_implemented internal_error."
+    },
+    {
+      "id": "api-health",
+      "url": "api.html#health",
+      "title": "GET /v1/healthz",
+      "section": "API",
+      "body": "No auth. Returns deps.db deps.storage deps.embedder up down off latency_ms. Always 200 to avoid LB flap. Page on deps.db.status down."
+    },
+    {
+      "id": "api-skills",
+      "url": "api.html#skills",
+      "title": "Skills Agents Commands endpoints",
+      "section": "API",
+      "body": "GET /v1/skills list. POST publish multipart secret scan. GET {slug} metadata. GET {slug}/bundle.tar.gz 302 signed URL. GET {slug}/skill-md raw text. DELETE {slug}/versions/{version} archive. Kind discriminator skill agent command."
+    },
+    {
+      "id": "api-semantic",
+      "url": "api.html#skills",
+      "title": "Semantic search /v1/skills?semantic=",
+      "section": "API",
+      "body": "Cosine similarity of description_embedding. min_similarity filter. Returns 400 if no embedder configured. Build with --features fastembed to enable."
+    },
+    {
+      "id": "api-plugins",
+      "url": "api.html#plugins",
+      "title": "Plugins API Layer 3",
+      "section": "API",
+      "body": "GET /v1/plugins list. POST publish, resolves nested {slug,version}, 409 on duplicate version. GET {slug} detail sourcing mode refresh state. POST {slug}/refresh mirror only. DELETE {slug}/versions/{version} archive."
+    },
+    {
+      "id": "api-projects",
+      "url": "api.html#projects",
+      "title": "Projects and Plans Layer 2",
+      "section": "API",
+      "body": "Project binds repo git remote URL to curated skills. Plan is curator-authored versioned bundle. GET /v1/projects auto-discover. GET /v1/projects/{slug}/plan resolved. POST /v1/plans publish. GET /v1/plans/{slug}/history immutable version log."
+    },
+    {
+      "id": "api-drafts",
+      "url": "api.html#drafts",
+      "title": "Drafts inbox capture pipeline",
+      "section": "API",
+      "body": "POST /v1/drafts capturer daemon posts Sonnet draft SKILL.md and frontmatter. GET /v1/drafts curator inbox paginated. POST approve promote to skill version. POST reject discard with reason."
+    },
+    {
+      "id": "api-decay",
+      "url": "api.html#decay",
+      "title": "Decay candidates GET /v1/tenant/skills/decay",
+      "section": "API",
+      "body": "Admin only. last_used > 6 months AND uses < 3. Portal graveyard view uses this."
+    },
+    {
+      "id": "api-tenants",
+      "url": "api.html#tenants",
+      "title": "Tenants and tokens admin endpoints",
+      "section": "API",
+      "body": "POST /v1/tenant/tokens mint scoped: read publish admin. GET /v1/tenant/members. POST /v1/tenant/sso configure OIDC SAML 2.0. GET /v1/tenant/theme logo palette font favicon custom domain. SCIM v2 /scim/v2/Users Groups."
+    },
+    {
+      "id": "api-audit",
+      "url": "api.html#audit",
+      "title": "Audit log endpoints",
+      "section": "API",
+      "body": "GET /v1/tenant/audit paginated filterable by actor action resource time range. GET /v1/tenant/audit/export.jsonl signed JSONL for SIEM ingestion. Every mutation in the system."
+    },
+    {
+      "id": "api-public",
+      "url": "api.html#public",
+      "title": "Public read surfaces marketplace.json git plugins",
+      "section": "API",
+      "body": "GET /.claude-plugin/marketplace.json no auth Claude Code installer consumes. GET /git/plugins/<slug>.git/* smart HTTP no auth. Tenant routing by Host subdomain custom domain."
+    },
+    {
+      "id": "api-mcp",
+      "url": "api.html#mcp",
+      "title": "MCP transport JSON-RPC",
+      "section": "API",
+      "body": "/mcp endpoint. search_skills install_skill. Bearer auth. Claude manages its own toolbox without shelling out to CLI."
+    },
+
+    {
+      "id": "demo-main",
+      "url": "demo.html",
+      "title": "Demo — CLI and portal walkthrough",
+      "section": "Demo",
+      "body": "Two halves recorded by one script: CLI a developer runs locally and portal view a curator sees in parallel. init --project login bootstrap project list plan show plan import plan history doctor."
+    },
+    {
+      "id": "demo-90s",
+      "url": "demo.html",
+      "title": "90-second three-act walkthrough",
+      "section": "Demo",
+      "body": "Three acts: init login bootstrap project-aware install. project list show plan show browse curated bundle. plan import history doctor import updated plan verify state."
+    }
+  ]
+}

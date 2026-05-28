@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Use Cases · skill_pool</title>
+<meta name="description" content="Real-world scenarios where skill_pool fits — and where it doesn't. Why and when to reach for it." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" />
+<link rel="stylesheet" href="css/terminal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container topnav-inner">
+    <a class="brand" href="index.html">skill_pool<span class="cursor"></span></a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="architecture.html">Architecture</a></li>
+      <li><a href="use-cases.html" class="active">Use Cases</a></li>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="api.html">API</a></li>
+      <li><a href="demo.html">Demo</a></li>
+    </ul>
+    <button class="search-btn" aria-label="Search"><span>search</span><kbd>⌘K</kbd></button>
+  </div>
+</nav>
+
+<div class="container doc-layout">
+
+  <aside class="toc">
+    <div class="toc-label">scenarios</div>
+    <ul>
+      <li><a href="#startup">Growing startup</a></li>
+      <li><a href="#saas">Multi-tenant SaaS</a></li>
+      <li><a href="#enterprise">Regulated enterprise</a></li>
+      <li><a href="#consultancy">Consultancy / agency</a></li>
+      <li><a href="#oss">OSS maintainers</a></li>
+      <li><a href="#capture">Capturing tribal knowledge</a></li>
+      <li><a href="#not-for">When NOT to use this</a></li>
+    </ul>
+  </aside>
+
+  <main>
+    <div class="terminal-prompt">cat ./why-and-when.md</div>
+    <h2 style="margin-top:8px">When you reach for <span class="accent">skill_pool</span>.</h2>
+    <p class="lede">
+      Six concrete scenarios, drawn from how teams actually adopt this tool.
+      Each section explains the <strong>why</strong> (pressure they felt), the <strong>when</strong> (signals it's time),
+      and the <strong>how</strong> (which features matter most).
+    </p>
+
+    <!-- ============================ #1 STARTUP ============================ -->
+    <h3 id="startup" class="with-prompt">Scenario 1 — The 15-engineer startup</h3>
+
+    <div class="callout">
+      <strong>Who:</strong> Series A SaaS, three product squads, two infra engineers, six months of Claude Code adoption.
+    </div>
+
+    <p><strong>Why they hit a wall.</strong> Every engineer's <code>~/.claude/skills/</code> looks different.
+    The senior on the billing team wrote a brilliant <code>stripe-webhook-debug.md</code> — only Sarah uses it.
+    The infra lead's <code>terraform-drift-check.md</code> ships in his dotfiles repo, which nobody else clones.
+    Onboarding a hire means asking them to "grab the awesome-claude-list and pick what looks good," which is
+    code for <em>start from zero again</em>.</p>
+
+    <p><strong>When the signal arrives.</strong></p>
+    <ul>
+      <li>Someone in a retro says: <em>"we should have a place for these prompts."</em></li>
+      <li>A second team is duplicating a skill the first team already wrote.</li>
+      <li>Onboarding doc has a section that ends in <em>"...and ask in #eng-tooling."</em></li>
+    </ul>
+
+    <p><strong>How they roll it out (week 1).</strong></p>
+<pre><code><span class="comment"># Day 1 — infra deploys it</span>
+<span class="cmd">$</span> kubectl apply -f deploy/helm/skill-pool
+<span class="ok">OK</span> skill-pool reachable at skills.acme.internal
+
+<span class="comment"># Day 2 — curate per-repo bundles</span>
+<span class="cmd">$</span> cd acme-billing-service
+<span class="cmd">$</span> skill-pool project init --pin code-reviewer,stripe-webhook-debug,sqlx-migrations
+<span class="cmd">$</span> git commit .skill-pool/manifest.toml
+
+<span class="comment"># Day 3 — engineers see it on next clone</span>
+<span class="cmd">$</span> git clone git@github.com:acme/billing-service && cd billing-service
+<span class="cmd">$</span> direnv allow
+<span class="ok">OK</span> bootstrapped 6 skills · 2 agents from skill-pool</code></pre>
+
+    <p><strong>What's load-bearing here:</strong> <a href="quickstart.html#projects">Projects</a> (per-repo bundles), <a href="quickstart.html#bootstrap">auto-bootstrap</a>, semantic search to discover what exists.</p>
+
+    <!-- ============================ #2 SAAS ============================ -->
+    <h3 id="saas" class="with-prompt">Scenario 2 — Multi-tenant SaaS platform</h3>
+
+    <div class="callout">
+      <strong>Who:</strong> A vendor whose customers are themselves engineering teams. Each customer's engineers want their own Claude Code skill registry, branded as their own.
+    </div>
+
+    <p><strong>Why this is hard otherwise.</strong> Per-customer hand-rolled deploys are how SaaS dies.
+    You either run one giant pile that leaks customer A's skills into customer B's catalog, or you run N copies and
+    your on-call sees N times the alerts.</p>
+
+    <p><strong>When this fits.</strong></p>
+    <ul>
+      <li>You want a single shared cluster for cost &amp; ops simplicity.</li>
+      <li>You want regulated customers to opt into <em>dedicated</em> isolation without rewriting the app.</li>
+      <li>Customers expect their own logo, domain, SSO. <em>"skill-pool.acme.com"</em>, not <em>"acme.skill-pool.io"</em>.</li>
+    </ul>
+
+    <p><strong>How it's wired.</strong></p>
+    <ul>
+      <li><strong>Shared mode</strong> — every row carries <code>tenant_id</code>; routes resolve from subdomain or custom domain (Caddy + ACME automation). Every <code>sqlx::query!</code> is statically verified to filter by <code>tenant_id</code> — see <a href="architecture.html#invariants">Invariant #1</a>.</li>
+      <li><strong>Per-tenant theme</strong> — logo, palette, font, favicon, custom domain. Stored in <code>tenant_themes</code>; sanitized server-side.</li>
+      <li><strong>SSO</strong> — OIDC or SAML 2.0 per tenant, SCIM provisioning, scoped API tokens (read-only / publish / admin).</li>
+      <li><strong>Audit log</strong> — every mutation writes an immutable row; export to SIEM via signed JSONL.</li>
+    </ul>
+
+    <p><strong>The dedicated escape hatch.</strong> When a customer signs a contract with <em>"no shared infrastructure"</em> clauses, you don't fork the app — you run the same image with a different <code>DATABASE_URL</code> and <code>STORAGE_URL</code>. Same Helm chart, same deploy pipeline.</p>
+
+    <!-- ============================ #3 ENTERPRISE ============================ -->
+    <h3 id="enterprise" class="with-prompt">Scenario 3 — Regulated enterprise (SOC 2 / FedRAMP / GxP)</h3>
+
+    <div class="callout warn">
+      <strong>Who:</strong> Internal platform team at a regulated F500. AI tooling has to clear security before engineers can use it.
+    </div>
+
+    <p><strong>What security/compliance asks for.</strong></p>
+    <ul>
+      <li><em>"Where do skills come from? Can someone publish a prompt that exfiltrates an API key?"</em> → <strong>secret scan on every publish</strong>. Server-side regex sweep rejects bundles that look like they ship credentials.</li>
+      <li><em>"Who can publish? Who can install? Who reviewed it?"</em> → <strong>RBAC + audit log</strong>. Every <code>publish</code>, <code>delete</code>, <code>approve</code>, <code>login</code>, <code>token mint</code> writes an audit row.</li>
+      <li><em>"Can we export this to our SIEM?"</em> → signed JSONL export per tenant, with retention policy.</li>
+      <li><em>"What if Claude itself goes down? Do we lose the catalog?"</em> → no. skill-pool is self-hosted; skills live in your Postgres + object storage. Claude is just one consumer.</li>
+    </ul>
+
+    <p><strong>Dedicated-mode tenant layout.</strong></p>
+<pre><code><span class="cmd">acme-prod</span>      → DB: skills_prod      bucket: s3://acme-skills-prod      domain: skills.acme.com
+<span class="cmd">acme-gov</span>       → DB: skills_gov       bucket: s3://acme-skills-gov-fr    domain: skills-gov.acme.com  (FedRAMP)
+<span class="cmd">acme-research</span>  → DB: skills_research  bucket: s3://acme-skills-research  domain: skills-rd.acme.com</code></pre>
+
+    <p>Same binary, three deployments, isolated blast radius. Cost is N × baseline — which is the point: you trade efficiency for isolation.</p>
+
+    <!-- ============================ #4 CONSULTANCY ============================ -->
+    <h3 id="consultancy" class="with-prompt">Scenario 4 — Consultancy / agency</h3>
+
+    <div class="callout">
+      <strong>Who:</strong> A 40-person dev agency with 12 active client engagements. Each client's tech stack is different. Each client has their own quirks the team learns over months.
+    </div>
+
+    <p><strong>The pain.</strong> Consultants rotate. When Maria leaves the Globex engagement, the next consultant onboards from a wiki page that hasn't been updated since the kickoff three quarters ago. Maria's <code>.claude/</code> went with her laptop.</p>
+
+    <p><strong>How skill_pool changes it.</strong></p>
+    <ul>
+      <li><strong>One server, one tenant per client.</strong> Each client has their own logo &amp; SSO if the contract requires it.</li>
+      <li><strong>Projects</strong> are per-repo bundles — <code>globex-payments-service</code> pins exactly the skills that matter for it.</li>
+      <li><strong>Retrospective capture</strong> turns Maria's actual debugging sessions into draft skills. When she rotates off, her replacement gets the same skills, automatically.</li>
+      <li><strong>Decay flags</strong> stale skills (<code>last_used &gt; 6mo ∧ uses &lt; 3</code>) — the catalog stays trim as engagements end.</li>
+    </ul>
+
+    <!-- ============================ #5 OSS ============================ -->
+    <h3 id="oss" class="with-prompt">Scenario 5 — OSS maintainer publishing a plugin</h3>
+
+    <div class="callout">
+      <strong>Who:</strong> Maintainer of an OSS framework. Wants to ship a Claude Code plugin so users of the framework get expert help out of the box.
+    </div>
+
+    <p><strong>The flow.</strong></p>
+<pre><code><span class="comment"># Maintainer publishes a plugin (skills + agents + slash commands + hook)</span>
+<span class="cmd">$</span> skill-pool publish ./my-framework-claude-plugin --kind plugin --version 2.1.0
+  packing: 18 skills · 3 agents · 4 commands · 1 hook (245 KB)
+  <span class="ok">OK</span> plugin published · marketplace entry generated
+       https://skills.public.example/.claude-plugin/marketplace.json
+
+<span class="comment"># A user installs it in Claude Code</span>
+<span class="cmd">User:</span> /plugin marketplace add https://skills.public.example
+<span class="cmd">User:</span> /plugin install my-framework-toolkit
+  <span class="ok">OK</span> 18 skills · 3 agents installed in ~/.claude/plugins/my-framework-toolkit</code></pre>
+
+    <p>The maintainer doesn't run a marketplace by hand. <code>marketplace.json</code> is generated server-side from the plugin row; the smart-HTTP git endpoint is what <code>/plugin install</code> clones.</p>
+
+    <!-- ============================ #6 CAPTURE ============================ -->
+    <h3 id="capture" class="with-prompt">Scenario 6 — Capturing tribal knowledge automatically</h3>
+
+    <div class="callout">
+      <strong>Who:</strong> Any team where engineers solve real problems in Claude Code daily, but nobody has time to write them up afterward.
+    </div>
+
+    <p><strong>The pipeline.</strong></p>
+    <ol>
+      <li>A Stop-hook on the developer's machine scores the session deterministically — token count, time on task, edit density, test-run ratio. <em>"This looks like a real fix."</em></li>
+      <li>A SessionEnd-hook queues the transcript to <code>~/.skill-pool/capture-queue/</code>.</li>
+      <li>A capturer daemon runs Haiku → extracts topic, tags, intent. Then runs Sonnet → drafts the <code>SKILL.md</code>.</li>
+      <li>The draft lands in the curator's <strong>drafts inbox</strong> on the portal. Diff against existing skills, edit, approve, publish.</li>
+    </ol>
+
+    <p><strong>Why this works in practice.</strong> The expensive step (writing it up) gets done by the model, on a sample of sessions the scorer flagged as worth bothering with. Humans stay in the loop where their judgment actually matters: <em>is this a skill we want the whole team to have?</em></p>
+
+    <p>The catalog grows from <strong>work that already happened</strong>, not from someone's bookmark folder.</p>
+
+    <!-- ============================ NOT FOR ============================ -->
+    <h3 id="not-for" class="with-prompt">When NOT to use this</h3>
+    <p>Be honest with yourself. skill_pool is overkill for some shapes of team:</p>
+    <ul>
+      <li><strong>Solo developer.</strong> Just commit your <code>~/.claude/</code> to dotfiles. You don't need a registry.</li>
+      <li><strong>Two-person team where you share an editor.</strong> Pair-sharing is faster than infra.</li>
+      <li><strong>You haven't adopted Claude Code yet.</strong> Start there. Come back when "everyone's <code>.claude/</code> is different" feels real.</li>
+      <li><strong>You don't have a platform team and don't want one.</strong> Self-hosting Postgres + object storage + a Rust server has a floor of operational complexity. The hosted SKILL.md hubs (when they exist) will fit you better.</li>
+    </ul>
+
+    <div class="callout warn">
+      <strong>The rule of thumb.</strong> If the answer to <em>"where do you keep your team's prompts?"</em> is
+      <em>"in the awesome-list / in Notion / in someone's dotfiles"</em>, and the answer to <em>"who decides what's good?"</em>
+      is <em>"whoever Slacks loudest,"</em> that's the moment you need this. Before that, it's premature.
+    </div>
+
+    <p style="margin-top:32px">
+      <a class="btn" href="quickstart.html">$ try it locally →</a>
+      <a class="btn btn-ghost" href="demo.html">watch the onboarding demo</a>
+    </p>
+
+  </main>
+</div>
+
+<footer>
+  <div class="container">
+    <div>
+      <a href="https://github.com/olafkfreund/skill_pool">github</a>
+      <a href="architecture.html">architecture</a>
+      <a href="api.html">api</a>
+      <a href="plugins.html">plugins</a>
+      <a href="quickstart.html">quickstart</a>
+    </div>
+    <div>MIT · © <span id="year"></span></div>
+  </div>
+</footer>
+
+<div class="search-modal" id="search-modal" role="dialog" aria-modal="true">
+  <div class="search-box">
+    <div class="search-input-row">
+      <input id="search-input" class="search-input" type="text" placeholder="search docs · architecture · cli · plugins · api…" autocomplete="off" />
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lunr@2.3.9/lunr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="js/site.js"></script>
+</body>
+</html>

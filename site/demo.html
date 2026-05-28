@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Demo · skill_pool</title>
+<meta name="description" content="Watch skill_pool: CLI onboarding and curator-side portal view, side by side." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" />
+<link rel="stylesheet" href="css/terminal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container topnav-inner">
+    <a class="brand" href="index.html">skill_pool<span class="cursor"></span></a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="architecture.html">Architecture</a></li>
+      <li><a href="use-cases.html">Use Cases</a></li>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="api.html">API</a></li>
+      <li><a href="demo.html" class="active">Demo</a></li>
+    </ul>
+    <button class="search-btn" aria-label="Search"><span>search</span><kbd>⌘K</kbd></button>
+  </div>
+</nav>
+
+<section class="hero" style="padding: 60px 0 30px;">
+  <div class="container">
+    <div class="terminal-prompt">./scripts/record-onboarding-demo.sh --replay</div>
+    <h1>Watch the <span class="accent">onboarding</span>.</h1>
+    <p class="lede">
+      Two halves of the same flow, recorded deterministically by one script:
+      the <strong>CLI</strong> a developer runs locally, and the <strong>portal</strong> view a curator sees in parallel.
+      Switch tabs to compare.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="section-label">main onboarding flow</div>
+    <h2>CLI &amp; portal, side by side.</h2>
+    <p>
+      Same scripted scenario, two perspectives. The CLI half walks
+      <code>init --project</code> → <code>login</code> → <code>bootstrap</code> → <code>project list</code> →
+      <code>plan show</code> → <code>plan import</code> → <code>plan history</code> → <code>doctor</code>.
+      The portal half shows the curator viewing the same project, plan, and members in real time.
+    </p>
+
+    <div class="demo-frame" data-tabs>
+      <div class="titlebar">
+        <div class="dots"><span></span><span></span><span></span></div>
+        <span>onboarding-demo · CLI ⇆ Portal</span>
+      </div>
+      <div class="media-tabs">
+        <button class="media-tab active">▸ CLI (terminal)</button>
+        <button class="media-tab">▸ Portal (browser)</button>
+      </div>
+      <div class="media-pane active">
+        <video autoplay loop muted playsinline controls>
+          <source src="media/onboarding-cli.webm" type="video/webm" />
+        </video>
+      </div>
+      <div class="media-pane">
+        <video loop muted playsinline controls>
+          <source src="media/onboarding-portal.webm" type="video/webm" />
+        </video>
+      </div>
+    </div>
+
+    <p style="margin-top:24px; color: var(--fg-muted); font-size: 13px;">
+      Want to re-record locally?
+      <code>./scripts/record-onboarding-demo.sh</code> generates both halves from the same seeded dataset.
+    </p>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="container">
+    <div class="section-label">90-second walkthrough</div>
+    <h2>The original three-act demo.</h2>
+    <p>
+      The first demo we ever recorded, still useful as the shortest possible tour:
+      (1) <code>init --project</code> + <code>login</code> + <code>bootstrap</code> for project-aware install,
+      (2) <code>project list</code> + <code>project show</code> + <code>plan show</code> to browse the curated bundle,
+      (3) <code>plan import</code> + <code>plan history</code> + <code>doctor</code> to import an updated plan and verify state.
+    </p>
+
+    <div class="demo-frame">
+      <div class="titlebar">
+        <div class="dots"><span></span><span></span><span></span></div>
+        <span>~/code/acme-billing-service — skill-pool · 90 seconds</span>
+      </div>
+      <video loop muted playsinline controls poster="">
+        <source src="media/demo.webm" type="video/webm" />
+      </video>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="section-label">step-by-step</div>
+    <h2>Onboard a new repo in under 2 minutes.</h2>
+
+    <h3 class="with-prompt">1. Drop into the project</h3>
+    <p>The developer clones a repo and runs one command. If <code>direnv</code> is installed, it happens automatically:</p>
+<pre><code><span class="cmd">$</span> git clone git@github.com:acme/billing-service &amp;&amp; cd billing-service
+<span class="cmd">$</span> direnv allow
+<span class="comment"># detected: rust, axum, postgres</span>
+<span class="comment"># install 4 matching skills + 1 project-pinned bundle? [Y/n]</span>
+<span class="ok">OK</span> installed 4 skills · 2 agents · 1 command
+<span class="ok">OK</span> linked into .claude/skills/, .claude/agents/, .claude/commands/</code></pre>
+
+    <h3 class="with-prompt">2. Curator's view in the portal</h3>
+    <p>
+      The curator opens the portal at <code>https://acme.skills.example/projects/acme-billing-service</code>.
+      They see the same bundle the developer just installed, plus drafts captured from prior sessions waiting for review.
+    </p>
+
+    <h3 class="with-prompt">3. Verify the install</h3>
+<pre><code><span class="cmd">$</span> skill-pool doctor
+<span class="ok">OK</span> registry reachable      <span class="comment">(acme.skills.example, latency 23ms)</span>
+<span class="ok">OK</span> token valid             <span class="comment">(tenant: acme · scope: publish · expires in 87 days)</span>
+<span class="ok">OK</span> 7 skills linked         <span class="comment">(into .claude/skills/)</span>
+<span class="ok">OK</span> 2 agents linked         <span class="comment">(into .claude/agents/)</span>
+<span class="ok">OK</span> 1 command linked        <span class="comment">(into .claude/commands/)</span>
+<span class="ok">OK</span> no dangling symlinks</code></pre>
+
+    <h3 class="with-prompt">4. Use it in Claude Code</h3>
+    <p>The developer starts a Claude Code session. The freshly-linked skills, agents, and commands are immediately available — Claude picks them up the way it picks up any other entries in <code>~/.claude/</code>.</p>
+
+    <p style="margin-top:32px">
+      <a class="btn" href="quickstart.html">$ try it yourself →</a>
+      <a class="btn btn-ghost" href="use-cases.html">when this fits</a>
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div>
+      <a href="https://github.com/olafkfreund/skill_pool">github</a>
+      <a href="architecture.html">architecture</a>
+      <a href="api.html">api</a>
+      <a href="plugins.html">plugins</a>
+      <a href="quickstart.html">quickstart</a>
+    </div>
+    <div>MIT · © <span id="year"></span></div>
+  </div>
+</footer>
+
+<div class="search-modal" id="search-modal" role="dialog" aria-modal="true">
+  <div class="search-box">
+    <div class="search-input-row">
+      <input id="search-input" class="search-input" type="text" placeholder="search docs · architecture · cli · plugins · api…" autocomplete="off" />
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lunr@2.3.9/lunr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="js/site.js"></script>
+</body>
+</html>

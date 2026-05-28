@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>skill_pool — Self-hosted Claude Code skill registry for teams</title>
+<meta name="description" content="Self-hosted, multi-tenant Claude Code skill / agent / command / plugin registry. Auto-bootstrap stacks, capture skills retrospectively, ship with Nix, Docker, NixOS, Helm or Terraform." />
+<meta property="og:title" content="skill_pool — Claude Code skill registry for teams" />
+<meta property="og:description" content="Compose AI agents from skills. Self-hosted, multi-tenant, audit-logged." />
+<meta property="og:type" content="website" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" />
+<link rel="stylesheet" href="css/terminal.css" />
+</head>
+<body>
+
+<!-- ===== Nav ===== -->
+<nav class="topnav">
+  <div class="container topnav-inner">
+    <a class="brand" href="index.html">skill_pool<span class="cursor"></span></a>
+    <ul class="nav-links">
+      <li><a href="index.html" class="active">Home</a></li>
+      <li><a href="architecture.html">Architecture</a></li>
+      <li><a href="use-cases.html">Use Cases</a></li>
+      <li><a href="quickstart.html">Quickstart</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="api.html">API</a></li>
+      <li><a href="demo.html">Demo</a></li>
+    </ul>
+    <button class="search-btn" aria-label="Search">
+      <span>search</span><kbd>⌘K</kbd>
+    </button>
+  </div>
+</nav>
+
+<!-- ===== Hero ===== -->
+<header class="hero">
+  <div class="container">
+    <div class="boot-line"><div class="terminal-prompt">skill-pool --version 1.0</div></div>
+    <h1 class="boot-line">Compose <span class="accent">AI agents</span> from skills.</h1>
+    <p class="boot-line lede">
+      Self-hosted Claude Code registry for teams.
+      Publish, install, browse, and govern <code>SKILL.md</code> / subagents / slash commands / plugins —
+      under tenant-scoped SSO with a full audit trail.
+    </p>
+    <div class="boot-line hero-meta">
+      <span>Rust / Axum</span>
+      <span>SvelteKit 2</span>
+      <span>Postgres 17 + pgvector</span>
+      <span>MIT</span>
+    </div>
+    <div class="cta-row">
+      <a class="btn" href="quickstart.html">$ get started →</a>
+      <a class="btn btn-ghost" href="demo.html">watch demo</a>
+      <a class="btn btn-ghost" href="https://github.com/olafkfreund/skill_pool">view on GitHub</a>
+    </div>
+
+    <!-- demo embed -->
+    <div class="demo-frame">
+      <div class="titlebar">
+        <div class="dots"><span></span><span></span><span></span></div>
+        <span>~/code/acme-billing-service — skill-pool bootstrap</span>
+      </div>
+      <video autoplay loop muted playsinline poster="">
+        <source src="media/onboarding-portal.webm" type="video/webm" />
+      </video>
+    </div>
+  </div>
+</header>
+
+<!-- ===== Why ===== -->
+<section class="alt">
+  <div class="container">
+    <div class="section-label">why this exists</div>
+    <h2>The single-developer story is solved. The <span class="accent">team story</span> isn't.</h2>
+    <p>
+      Anthropic shipped <code>SKILL.md</code> as the open standard for Claude Code's
+      extensibility — skills, subagents, slash commands. Drop a file under
+      <code>~/.claude/skills/</code> and Claude picks it up.
+    </p>
+    <p>
+      But every engineer hand-rolls their own <code>.claude/</code>, copy-pastes from awesome-lists,
+      and the working knowledge of which prompt actually solves which problem stays trapped on one laptop.
+      <strong>skill_pool is the team layer.</strong>
+    </p>
+
+    <div class="feature-grid">
+      <div class="card">
+        <h3>Auto-bootstrap</h3>
+        <p><code>direnv allow</code> detects your stack (Cargo, flake.nix, package.json, pyproject, go.mod) and installs matching skills with one keystroke.</p>
+      </div>
+      <div class="card">
+        <h3>Projects</h3>
+        <p>Per-codebase curated bundles. Curators pin <code>acme-billing → [code-reviewer, sqlx-migrations, …]</code>; developers <code>git clone</code> and get exactly that.</p>
+      </div>
+      <div class="card">
+        <h3>Retrospective Capture</h3>
+        <p>Stop-hook scorer + Haiku→Sonnet drafter — solved problems become draft skills a reviewer can publish from the inbox.</p>
+      </div>
+      <div class="card">
+        <h3>Multi-tenant + SSO</h3>
+        <p>Per-tenant OIDC / SAML / SCIM, scoped API tokens, SIEM-friendly audit export. Shared mode for most, dedicated mode for the regulated few.</p>
+      </div>
+      <div class="card">
+        <h3>Semantic search</h3>
+        <p><code>bge-small</code> embeddings on publish. <code>/v1/skills?semantic=axum middleware</code> ranks by meaning, not substring.</p>
+      </div>
+      <div class="card">
+        <h3>Plugins (marketplace)</h3>
+        <p>Bundle skills + agents + commands + hooks + MCP servers. <code>/plugin marketplace add</code> once, <code>/plugin install</code> per bundle.</p>
+      </div>
+      <div class="card">
+        <h3>MCP transport</h3>
+        <p>Claude calls <code>search_skills</code> and <code>install_skill</code> inline via the registry's MCP JSON-RPC endpoint — no shell-out.</p>
+      </div>
+      <div class="card">
+        <h3>One-binary deploy</h3>
+        <p>Nix flake · Docker Compose · NixOS module · Helm chart · Terraform AWS. Pick what fits your platform team.</p>
+      </div>
+      <div class="card">
+        <h3>Lifecycle &amp; decay</h3>
+        <p>Every publish is an immutable version. <code>last_used &gt; 6mo ∧ uses &lt; 3</code> flags archive candidates for cleanup.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Quick CLI ===== -->
+<section>
+  <div class="container">
+    <div class="section-label">cli tour · 30 seconds</div>
+    <h2>From <span class="accent">zero</span> to bootstrapped, in one prompt.</h2>
+    <pre><code><span class="comment">$ skill-pool detect --json</span>
+{"stack": ["rust", "axum", "postgres", "nixos"]}
+
+<span class="comment">$ skill-pool bootstrap --yes</span>
+detected: rust, axum, postgres, nixos
+<span class="ok">OK</span> installed 4 skills matching your stack
+   ↪ rust-error-handling · axum-middleware · sqlx-migrations · nixos-module-style
+
+<span class="comment">$ skill-pool search "redis queue"</span>
+SLUG                     VERSION  USED   DESCRIPTION
+redis-job-queue          1.2.0    34×    Fail-open Redis queue with DLQ pattern
+async-worker-skeleton    0.4.1    11×    tokio worker scaffold with graceful shutdown
+
+<span class="comment">$ skill-pool publish ./my-skill --version 1.0.0 --kind skill</span>
+  packing: 4231 bytes (my-skill@1.0.0 [skill])
+  <span class="ok">OK</span> uploaded · sha256:9f4a…
+
+<span class="comment">$ skill-pool doctor</span>
+<span class="ok">OK</span> registry reachable
+<span class="ok">OK</span> token valid · tenant: acme
+<span class="ok">OK</span> 12 skills linked into .claude/skills/
+<span class="ok">OK</span> no dangling symlinks
+</code></pre>
+    <a class="btn btn-ghost" href="quickstart.html">→ full quickstart</a>
+  </div>
+</section>
+
+<!-- ===== Architecture preview ===== -->
+<section class="alt">
+  <div class="container">
+    <div class="section-label">how it fits together</div>
+    <h2>Stateless server, <span class="accent">three served surfaces</span>, one Postgres.</h2>
+    <p>
+      The Rust + Axum server exposes REST <code>/v1/*</code>, a public <code>marketplace.json</code>,
+      and per-plugin smart-HTTP git endpoints. Plugins are a composition layer above skills/agents/commands —
+      one published row pins existing catalogue entries by <code>(slug, kind, version)</code>.
+    </p>
+    <div class="mermaid">
+flowchart LR
+    subgraph dev[Developer machine]
+        CLI[skill-pool CLI]
+        CC["Claude Code<br/>/plugin install"]
+    end
+    subgraph server[skill-pool server]
+        API["REST API<br/>/v1/*"]
+        MARKET["marketplace.json<br/>(public)"]
+        GIT["git/plugins/&lt;slug&gt;.git"]
+    end
+    subgraph data[Storage]
+        PG[(Postgres 17<br/>+ pgvector)]
+        OBJ[(opendal<br/>S3 / fs)]
+        REDIS[(Redis<br/>optional)]
+    end
+    Web[Svelte portal]
+    CLI -->|Bearer| API
+    Web -->|session| API
+    CC -->|GET| MARKET
+    CC -->|clone| GIT
+    API --> PG
+    API --> OBJ
+    API -.-> REDIS
+    MARKET --> PG
+    GIT --> OBJ
+    </div>
+    <a class="btn btn-ghost" href="architecture.html">→ architecture deep-dive</a>
+  </div>
+</section>
+
+<!-- ===== Use cases preview ===== -->
+<section>
+  <div class="container">
+    <div class="section-label">real-world fit</div>
+    <h2>When you reach for this.</h2>
+    <div class="feature-grid">
+      <div class="card">
+        <h3>15-engineer startup</h3>
+        <p>Three product teams, divergent <code>.claude/</code> folders, no shared review of what's actually working. Curate per-repo bundles; <code>direnv</code> installs them on clone.</p>
+      </div>
+      <div class="card">
+        <h3>Multi-tenant SaaS</h3>
+        <p>Customer support, success, and platform each need different skills. One server, three tenants, SSO + scoped tokens, branded portal per tenant.</p>
+      </div>
+      <div class="card">
+        <h3>Regulated enterprise</h3>
+        <p>Auditable SIEM exports, secret-scan on every publish, dedicated DB/bucket for tenants under SOC 2 / FedRAMP scope.</p>
+      </div>
+      <div class="card">
+        <h3>Knowledge capture</h3>
+        <p>Stop-hook scorer surfaces "this session looked like a real fix" — a Sonnet drafter writes <code>SKILL.md</code>, a reviewer publishes from inbox.</p>
+      </div>
+    </div>
+    <a class="btn btn-ghost" href="use-cases.html">→ full scenarios</a>
+  </div>
+</section>
+
+<!-- ===== Footer ===== -->
+<footer>
+  <div class="container">
+    <div>
+      <a href="https://github.com/olafkfreund/skill_pool">github</a>
+      <a href="architecture.html">architecture</a>
+      <a href="api.html">api</a>
+      <a href="plugins.html">plugins</a>
+      <a href="quickstart.html">quickstart</a>
+    </div>
+    <div>MIT licensed · © <span id="year"></span> · built for teams whose .claude/ has outgrown one laptop</div>
+  </div>
+</footer>
+
+<!-- ===== Search modal ===== -->
+<div class="search-modal" id="search-modal" role="dialog" aria-modal="true">
+  <div class="search-box">
+    <div class="search-input-row">
+      <input id="search-input" class="search-input" type="text" placeholder="search docs · architecture · cli · plugins · api…" autocomplete="off" />
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lunr@2.3.9/lunr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="js/site.js"></script>
+</body>
+</html>

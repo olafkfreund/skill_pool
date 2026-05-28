@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Quickstart · skill_pool</title>
+<meta name="description" content="Five deploy paths: Nix flake, Docker Compose, NixOS module, Helm chart, Terraform AWS module. Pick the one that fits your platform team." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" />
+<link rel="stylesheet" href="css/terminal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container topnav-inner">
+    <a class="brand" href="index.html">skill_pool<span class="cursor"></span></a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="architecture.html">Architecture</a></li>
+      <li><a href="use-cases.html">Use Cases</a></li>
+      <li><a href="quickstart.html" class="active">Quickstart</a></li>
+      <li><a href="plugins.html">Plugins</a></li>
+      <li><a href="api.html">API</a></li>
+      <li><a href="demo.html">Demo</a></li>
+    </ul>
+    <button class="search-btn" aria-label="Search"><span>search</span><kbd>⌘K</kbd></button>
+  </div>
+</nav>
+
+<div class="container doc-layout">
+
+  <aside class="toc">
+    <div class="toc-label">on this page</div>
+    <ul>
+      <li><a href="#nix">Nix flake</a></li>
+      <li><a href="#docker">Docker Compose</a></li>
+      <li><a href="#nixos">NixOS module</a></li>
+      <li><a href="#helm">Helm chart</a></li>
+      <li><a href="#terraform">Terraform AWS</a></li>
+      <li><a href="#cli">First CLI session</a></li>
+      <li><a href="#projects">Per-repo projects</a></li>
+      <li><a href="#bootstrap">Auto-bootstrap</a></li>
+      <li><a href="#seed">Seed demo content</a></li>
+    </ul>
+  </aside>
+
+  <main>
+    <div class="terminal-prompt">cat ./quickstart.md</div>
+    <h2 style="margin-top:8px"><span class="accent">Quickstart</span></h2>
+    <p class="lede">
+      Five deploy paths. Pick the surface that fits your platform team — same image, same migrations, same CLI.
+    </p>
+
+    <!-- ============ Nix ============ -->
+    <h3 id="nix" class="with-prompt">Nix flake — recommended for hacking</h3>
+<pre><code><span class="cmd">$</span> git clone https://github.com/olafkfreund/skill_pool &amp;&amp; cd skill_pool
+<span class="cmd">$</span> nix develop                                   <span class="comment"># drops you in the dev shell</span>
+<span class="cmd">$</span> docker compose -f server/compose.yaml up -d   <span class="comment"># Postgres + MinIO + Caddy</span>
+<span class="cmd">$</span> cargo run --bin skill-pool-server             <span class="comment"># API on :8080</span>
+<span class="cmd">$</span> cd web &amp;&amp; npm install &amp;&amp; npm run dev          <span class="comment"># portal on :3000</span>
+</code></pre>
+    <p>Open <a href="http://localhost:3000">http://localhost:3000</a>. Want it pre-populated with 120+ skills?</p>
+<pre><code><span class="cmd">$</span> ./scripts/seed-demo.sh</code></pre>
+
+    <!-- ============ Docker ============ -->
+    <h3 id="docker" class="with-prompt">Docker Compose — no Nix required</h3>
+<pre><code><span class="cmd">$</span> docker compose -f server/compose.yaml up -d
+<span class="comment"># API:    http://localhost:8080</span>
+<span class="comment"># Portal: http://localhost:3000</span>
+<span class="comment"># Caddy:  http://localhost:8081  (subdomain-routed tenants)</span>
+<span class="comment"># MinIO:  http://localhost:9001  (console)</span></code></pre>
+
+    <!-- ============ NixOS ============ -->
+    <h3 id="nixos" class="with-prompt">NixOS module — for declarative homelab + prod</h3>
+<pre><code><span class="comment"># flake.nix</span>
+{
+  inputs.skill-pool.url = "github:olafkfreund/skill_pool";
+
+  outputs = { self, nixpkgs, skill-pool, ... }: {
+    nixosConfigurations.skills-host = nixpkgs.lib.nixosSystem {
+      modules = [
+        skill-pool.nixosModules.default
+        ({ ... }: {
+          services.skill-pool = {
+            enable = true;
+            tenants = [ "acme" "internal" ];
+            settings.STORAGE_URL = "s3://skills-bucket?endpoint=...";
+            settings.DATABASE_URL_FILE = "/run/agenix/skill-pool-db.url";
+          };
+        })
+      ];
+    };
+  };
+}</code></pre>
+    <p>Full module docs: <a href="https://github.com/olafkfreund/skill_pool/blob/main/docs/deploy/nixos.md">docs/deploy/nixos.md</a>. The module composes systemd hardening (NoNewPrivileges, ProtectSystem, DynamicUser) and reads secrets from <code>*_FILE</code> paths so it plays cleanly with agenix or sops-nix.</p>
+
+    <!-- ============ Helm ============ -->
+    <h3 id="helm" class="with-prompt">Helm chart — Kubernetes</h3>
+<pre><code><span class="cmd">$</span> helm repo add skill-pool https://olafkfreund.github.io/skill_pool/charts
+<span class="cmd">$</span> helm install skills skill-pool/skill-pool \
+    --set postgres.dsn=postgres://… \
+    --set storage.url=s3://skills?endpoint=… \
+    --set ingress.hosts[0].host=skills.acme.com \
+    --namespace skills --create-namespace</code></pre>
+    <p>The chart at <code>deploy/helm/skill-pool/</code> includes a job runner for migrations, HPA, PodDisruptionBudget, NetworkPolicy, and an optional Redis subchart.</p>
+
+    <!-- ============ Terraform ============ -->
+    <h3 id="terraform" class="with-prompt">Terraform AWS — opinionated production stack</h3>
+<pre><code><span class="comment"># deploy/terraform/aws/example/main.tf</span>
+module "skill_pool" {
+  source = "github.com/olafkfreund/skill_pool//deploy/terraform/aws"
+
+  cluster_name       = "skills-prod"
+  region             = "eu-west-1"
+  domain             = "skills.acme.com"
+  certificate_arn    = aws_acm_certificate.skills.arn
+  github_oidc_org    = "acme"
+  github_oidc_repo   = "infrastructure"
+
+  rds_instance_class = "db.t4g.large"
+  redis_node_type    = "cache.t4g.micro"
+}</code></pre>
+    <p>Provisions EKS · RDS Postgres · ElastiCache Redis · S3 bucket · ACM cert · IRSA role for the pod · GitHub OIDC trust so CI can deploy without long-lived AWS keys.</p>
+
+    <!-- ============ CLI ============ -->
+    <h3 id="cli" class="with-prompt">First CLI session</h3>
+<pre><code><span class="cmd">$</span> cargo install --path cli            <span class="comment"># or: nix profile install .#cli</span>
+<span class="cmd">$</span> skill-pool login                    <span class="comment"># interactive OIDC or token paste</span>
+<span class="cmd">$</span> skill-pool detect --json
+{"stack": ["rust", "axum", "postgres", "nixos"]}
+
+<span class="cmd">$</span> skill-pool search "axum middleware"
+SLUG                  VERSION  USED   DESCRIPTION
+axum-middleware       1.4.0    87×    layer pattern, error mapping, tracing
+axum-tower-trace      0.2.1    14×    request-scoped span + structured logging
+
+<span class="cmd">$</span> skill-pool add axum-middleware
+<span class="ok">OK</span> linked ~/.skill-pool/library/acme/axum-middleware@1.4.0 → ~/.claude/skills/
+
+<span class="cmd">$</span> skill-pool doctor
+<span class="ok">OK</span> registry reachable
+<span class="ok">OK</span> token valid · tenant: acme
+<span class="ok">OK</span> 1 skill linked into .claude/skills/
+<span class="ok">OK</span> no dangling symlinks</code></pre>
+
+    <!-- ============ Projects ============ -->
+    <h3 id="projects" class="with-prompt">Per-repo projects</h3>
+    <p>A <strong>project</strong> is a curator-pinned bundle of skills/agents/commands, addressed by the repo's git remote URL. Commit it to the repo.</p>
+<pre><code><span class="cmd">$</span> cd acme-billing-service
+<span class="cmd">$</span> skill-pool project init
+<span class="comment"># writes .skill-pool/manifest.toml</span>
+
+<span class="cmd">$</span> skill-pool project pin code-reviewer@1.2.0 sqlx-migrations@2.0.1 cs-backend-engineer@0.9.0
+<span class="cmd">$</span> git add .skill-pool/ &amp;&amp; git commit -m "chore: pin claude skills"
+
+<span class="comment"># Anyone who clones this repo gets the same bundle:</span>
+<span class="cmd">$</span> git clone git@github.com:acme/billing-service &amp;&amp; cd billing-service
+<span class="cmd">$</span> skill-pool ensure
+<span class="ok">OK</span> installed 3 skills from .skill-pool/manifest.toml</code></pre>
+
+    <!-- ============ Bootstrap ============ -->
+    <h3 id="bootstrap" class="with-prompt">Auto-bootstrap with direnv</h3>
+    <p>Drop one <code>.envrc</code> line. <code>direnv allow</code> on first <code>cd</code> detects your stack and prompts to install matching skills.</p>
+<pre><code><span class="comment"># .envrc (one-time install: skill-pool direnv-install)</span>
+use skill-pool
+
+<span class="cmd">$</span> direnv allow
+detected: rust, axum, postgres, nixos
+install 4 matching skills? [Y/n] _
+<span class="ok">OK</span> installed 4 skills · linked into .claude/skills/</code></pre>
+
+    <!-- ============ Seed ============ -->
+    <h3 id="seed" class="with-prompt">Seed with 120+ real skills</h3>
+<pre><code><span class="cmd">$</span> ./scripts/seed-demo.sh
+seeding 76 skills · 43 agents · 1 command · tenant theme · members · drafts · SSO config · usage events
+<span class="ok">OK</span> portal populated · login as admin@acme.test</code></pre>
+    <p>Demo content from <a href="https://github.com/borghei/Claude-Skills">borghei/Claude-Skills</a> (MIT + Commons Clause, attribution preserved). Useful for screenshotting, demos, and stress-testing the lifecycle pipeline.</p>
+
+    <p style="margin-top:32px">
+      <a class="btn" href="plugins.html">$ author a plugin →</a>
+      <a class="btn btn-ghost" href="api.html">api reference</a>
+    </p>
+
+  </main>
+</div>
+
+<footer>
+  <div class="container">
+    <div>
+      <a href="https://github.com/olafkfreund/skill_pool">github</a>
+      <a href="architecture.html">architecture</a>
+      <a href="api.html">api</a>
+      <a href="plugins.html">plugins</a>
+      <a href="quickstart.html">quickstart</a>
+    </div>
+    <div>MIT · © <span id="year"></span></div>
+  </div>
+</footer>
+
+<div class="search-modal" id="search-modal" role="dialog" aria-modal="true">
+  <div class="search-box">
+    <div class="search-input-row">
+      <input id="search-input" class="search-input" type="text" placeholder="search docs · architecture · cli · plugins · api…" autocomplete="off" />
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lunr@2.3.9/lunr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="js/site.js"></script>
+</body>
+</html>
