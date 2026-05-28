@@ -57,6 +57,10 @@ jobs:
           echo "::endgroup::"
 
       - uses: actions/configure-pages@v5
+        with:
+          # Bootstrap the Pages site on first run so we don't need a manual
+          # repo-settings click. Idempotent — no-op once the site exists.
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
