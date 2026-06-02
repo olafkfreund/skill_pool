@@ -234,7 +234,7 @@ jobs:
           # Comma-separated, single line — multi-line YAML strings get
           # passed verbatim to `cargo audit --ignore X\nY\n...`, which
           # cargo-audit then rejects as a malformed advisory ID.
-          ignore: RUSTSEC-2026-0119,RUSTSEC-2023-0071,RUSTSEC-2025-0119,RUSTSEC-2024-0436,RUSTSEC-2025-0134,RUSTSEC-2026-0008
+          ignore: RUSTSEC-2026-0119,RUSTSEC-2023-0071,RUSTSEC-2025-0119,RUSTSEC-2024-0436,RUSTSEC-2025-0134
 
   # ---------------------------------------------------------------------------
   # Security: cargo deny — license, bans, and source policy checks.
