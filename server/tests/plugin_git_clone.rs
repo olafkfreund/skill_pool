@@ -50,17 +50,21 @@ fn build_skill_bundle() -> Bytes {
     Bytes::from(gz.finish().unwrap())
 }
 
-// End-to-end clone-over-HTTP test hangs after the in-process server starts
-// accepting connections. Reproduces on git2 0.19 and 0.20.4 — earlier
-// suspicion that the 0.19→0.20 bump introduced the hang was wrong, the
-// behaviour is the same on both. Likely a libgit2 HTTP-transport
-// interaction with our axum smart-HTTP routes (the wire protocol negotiation
-// finishes but the response stream doesn't terminate). The lower-level
-// plugin_git.rs unit tests (18 of them — shallow, sideband, pack
-// completeness) cover the same surface without going through libgit2
-// client-side, so the regression-prevention loss is small. Tracked
-// separately — needs a wireshark-level bisect of the smart-HTTP exchange.
-#[ignore = "libgit2 HTTP-transport hang against in-process server (both 0.19 and 0.20.4); see plugin_git.rs for unit-level coverage"]
+// Issue #73: this previously hung forever and was suspected to be a git2
+// 0.20 / libgit2 HTTP-transport wire-protocol bug. It wasn't — the smart-HTTP
+// framing in plugin_git.rs is correct and version-independent. The real cause
+// was a runtime deadlock: `#[tokio::test]` spins up a single-threaded
+// (current_thread) runtime, the axum server is `tokio::spawn`ed onto it, and
+// the test then called the *synchronous, blocking* `git2` clone directly on
+// that one runtime thread. The blocking FFI clone waits on HTTP responses from
+// the server, but the server task can only make progress on the same thread —
+// which is parked inside libgit2. Mutual deadlock. The async reqwest calls
+// above don't trip it because they `.await` and yield the thread back.
+//
+// Fix: run the blocking clone on the blocking pool via `spawn_blocking`, which
+// frees the runtime thread to drive the server task. (This is robust
+// regardless of worker-thread count, unlike switching to a multi_thread
+// flavor.)
 #[tokio::test]
 async fn git_clone_yields_plugin_tree() -> Result<()> {
     let pg = Postgres::default()
@@ -190,16 +194,24 @@ async fn git_clone_yields_plugin_tree() -> Result<()> {
     // before the clone runs; the easiest way to inject one for a clone
     // is via a temporary repo.
     let repo_path = clone_dir.path().join("rust-toolkit");
-    let mut builder = git2::build::RepoBuilder::new();
-    let mut fo = git2::FetchOptions::new();
-    let mut cb = git2::RemoteCallbacks::new();
-    cb.certificate_check(|_, _| Ok(git2::CertificateCheckStatus::CertificateOk));
-    fo.remote_callbacks(cb);
-    fo.custom_headers(&["x-skill-pool-tenant: acme"]);
-    builder.fetch_options(fo);
-    builder
-        .clone(&clone_url, &repo_path)
-        .map_err(|e| anyhow::anyhow!("git clone failed: {e}"))?;
+    // The libgit2 clone is synchronous, blocking FFI. Run it on the blocking
+    // pool so the current_thread runtime stays free to drive the spawned axum
+    // server task — see the note on this test fn for the deadlock this avoids.
+    let clone_target = repo_path.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut builder = git2::build::RepoBuilder::new();
+        let mut fo = git2::FetchOptions::new();
+        let mut cb = git2::RemoteCallbacks::new();
+        cb.certificate_check(|_, _| Ok(git2::CertificateCheckStatus::CertificateOk));
+        fo.remote_callbacks(cb);
+        fo.custom_headers(&["x-skill-pool-tenant: acme"]);
+        builder.fetch_options(fo);
+        builder
+            .clone(&clone_url, &clone_target)
+            .map_err(|e| anyhow::anyhow!("git clone failed: {e}"))?;
+        Ok(())
+    })
+    .await??;
 
     // 4. Assert tree contents.
     let manifest_path = repo_path.join(".claude-plugin").join("plugin.json");
