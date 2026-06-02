@@ -43,16 +43,6 @@ ignore = [
   # (EC flow — no RSA ops executed). Risk is theoretical.
   { id = "RUSTSEC-2023-0071", reason = "No upstream fix available; rsa is transitive-only via sqlx-mysql (disabled) and openidconnect EC flow (no RSA key ops)" },
 
-  # git2 — UB dereferencing freshly-constructed Buf (RUSTSEC-2026-0008)
-  # Vulnerable code path: `let b = Buf::default(); &*b;` (passes null ptr
-  # to slice::from_raw_parts). Our tree never constructs git2::Buf —
-  # `grep -rn 'git2::Buf\|Buf::new\|Buf::default' server/ cli/` returns
-  # zero hits. Bumping to git2 0.20.4 (the upstream fix) triggers a hang
-  # in Repository::clone() over HTTP that we couldn't bisect cleanly; we
-  # stay on 0.19 since the advisory doesn't apply to us. Reconsider when
-  # we either need a 0.20+ feature or build a Buf-using path.
-  { id = "RUSTSEC-2026-0008", reason = "Advisory is about dereferencing empty git2::Buf; skill-pool never constructs Buf::new()/Buf::default() (greppable). 0.20.x upgrade triggers an unrelated HTTP-clone hang." },
-
   # --- Unmaintained advisory notices (not security vulnerabilities) ---
   # cargo-deny 0.19 defaults unmaintained advisories to "deny" (error).
   # The three below are noted here so they appear as notices in CI output
