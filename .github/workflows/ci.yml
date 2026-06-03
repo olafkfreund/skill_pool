@@ -81,7 +81,7 @@ jobs:
       # expects. Side benefit: every other build dep (libxml2, openssl,
       # pkg-config, rust toolchain) now matches local dev exactly.
       - name: Install Nix
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
