@@ -88,7 +88,7 @@ jobs:
             accept-flake-config = true
 
       - name: Cache nix-community substituter
-        uses: cachix/cachix-action@v15
+        uses: cachix/cachix-action@v17
         with:
           name: nix-community
 
