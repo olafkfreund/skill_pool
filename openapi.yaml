@@ -1,0 +1,504 @@
+openapi: 3.0.3
+info:
+  title: skill-pool API
+  version: "0.1.0"
+  description: |
+    REST surface of the skill-pool server (Rust + Axum) — a self-hosted,
+    multi-tenant registry for Claude Code skills, agents, commands, and plugins.
+
+    Tenancy is resolved per request, either by subdomain
+    (`acme.skill-pool.example.com`) or the `X-Skill-Pool-Tenant: acme` header.
+    All `/v1/*` endpoints except `GET /v1/healthz` require a tenant-scoped
+    bearer token. The plugin marketplace + git endpoints are intentionally
+    public (Claude Code's installer is unauthenticated by design) and
+    rate-limited.
+
+    This document is the catalog-facing summary of the surface described in
+    `docs/api.md`; that doc remains the source of truth for payload detail.
+  license:
+    name: MIT
+  contact:
+    name: skill-pool
+    url: https://github.com/olafkfreund/skill_pool
+servers:
+  - url: https://{tenant}.skill-pool.example.com
+    description: Subdomain-routed tenant
+    variables:
+      tenant:
+        default: acme
+tags:
+  - name: health
+    description: Liveness and dependency status
+  - name: catalog
+    description: Skills, agents, and commands
+  - name: usage
+    description: Usage analytics and lifecycle (admin)
+  - name: plugins
+    description: Claude Code plugin bundles + marketplace
+  - name: mcp
+    description: Model Context Protocol JSON-RPC transport
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    tenantHeader:
+      type: apiKey
+      in: header
+      name: X-Skill-Pool-Tenant
+  parameters:
+    Kind:
+      name: kind
+      in: query
+      schema:
+        type: string
+        enum: [skill, agent, command]
+        default: skill
+      description: Catalog discriminator. The same table holds all three kinds.
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          enum:
+            - not_found
+            - unauthorized
+            - forbidden
+            - bad_request
+            - tenant_resolution_failed
+            - not_implemented
+            - internal_error
+        message:
+          type: string
+    DepStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [up, down, off]
+        latency_ms:
+          type: integer
+        error:
+          type: string
+        note:
+          type: string
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+        deps:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DepStatus'
+    Skill:
+      type: object
+      properties:
+        slug:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [published, archive_candidate, archived]
+        created_at:
+          type: string
+          format: date-time
+        similarity:
+          type: number
+          format: float
+          description: Present only when ?semantic= is set.
+    SkillVersion:
+      type: object
+      properties:
+        version:
+          type: string
+        published_at:
+          type: string
+          format: date-time
+        change_summary:
+          type: string
+        status:
+          type: string
+    DepEdge:
+      type: object
+      properties:
+        slug:
+          type: string
+        version_range:
+          type: string
+        depth:
+          type: integer
+    Plugin:
+      type: object
+      properties:
+        slug:
+          type: string
+        version:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [draft, published, archived]
+        sourcing_mode:
+          type: string
+          enum: [internal, external, mirror]
+        manifest:
+          type: object
+          additionalProperties: true
+        contents:
+          type: array
+          items:
+            type: object
+            properties:
+              kind:
+                type: string
+                enum: [skill, agent, command]
+              slug:
+                type: string
+              version:
+                type: string
+              position:
+                type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+security:
+  - bearerAuth: []
+    tenantHeader: []
+paths:
+  /v1/healthz:
+    get:
+      tags: [health]
+      summary: Liveness + dependency status
+      description: No auth, no tenant. Always returns 200; read deps.db.status to page.
+      security: []
+      responses:
+        '200':
+          description: Health snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /v1/skills:
+    get:
+      tags: [catalog]
+      summary: List skills (keyword or semantic)
+      parameters:
+        - { name: query, in: query, schema: { type: string }, description: ILIKE substring on slug + description }
+        - { name: tags, in: query, schema: { type: string }, description: CSV; all tags must be present }
+        - { name: limit, in: query, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
+        - { name: semantic, in: query, schema: { type: string }, description: Rank by cosine similarity (Phase 5; requires fastembed) }
+        - { name: min_similarity, in: query, schema: { type: number, format: float } }
+        - $ref: '#/components/parameters/Kind'
+      responses:
+        '200':
+          description: Matching catalog rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Skill'
+        '400':
+          description: semantic requested but no embedder configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [catalog]
+      summary: Publish a skill/agent/command bundle
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                bundle:
+                  type: string
+                  format: binary
+                  description: gzipped tar with SKILL.md at the root
+                metadata:
+                  type: string
+                  description: 'JSON: { slug, version, description, tags[], kind? }'
+      responses:
+        '201':
+          description: Created skill row
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+  /v1/skills/validate:
+    post:
+      tags: [catalog]
+      summary: Lint a bundle without persisting
+      responses:
+        '200':
+          description: Validation result
+  /v1/skills/{slug}:
+    get:
+      tags: [catalog]
+      summary: Get one skill
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/Kind'
+      responses:
+        '200':
+          description: Skill detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '404':
+          description: Not found
+  /v1/skills/{slug}/bundle.tar.gz:
+    get:
+      tags: [catalog]
+      summary: Download the published bundle
+      description: 307 redirect to a 5-minute presigned URL (object stores) or 200 gzip bytes (fs). Emits a download event.
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/Kind'
+        - { name: bytes, in: query, schema: { type: boolean }, description: Force the streaming-bytes path }
+      responses:
+        '200':
+          description: gzip bundle
+          content:
+            application/gzip: {}
+        '307':
+          description: Redirect to presigned URL
+  /v1/skills/{slug}/skill-md:
+    get:
+      tags: [catalog]
+      summary: Rendered SKILL.md (emits a view event)
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: SKILL.md text
+          content:
+            text/markdown: {}
+  /v1/skills/{slug}/versions:
+    get:
+      tags: [catalog]
+      summary: Version history (newest-first, capped at 50)
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/Kind'
+      responses:
+        '200':
+          description: Versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillVersion'
+        '404':
+          description: No row for slug
+  /v1/skills/{slug}/deps:
+    get:
+      tags: [catalog]
+      summary: Transitive dependency closure
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Dependency edges
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DepEdge'
+        '404':
+          description: Parent slug has no published version
+  /v1/skills/{slug}/archive:
+    post:
+      tags: [usage]
+      summary: Archive a skill (admin)
+      description: Requires tenant:admin scope. Flips latest published version to archived.
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: '{ slug, version }'
+        '404':
+          description: No published version
+  /v1/tenant/skills/decay:
+    get:
+      tags: [usage]
+      summary: Decay candidates (admin)
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 180, maximum: 1825 } }
+        - { name: max_uses, in: query, schema: { type: integer, default: 3 } }
+        - { name: limit, in: query, schema: { type: integer, default: 200, maximum: 1000 } }
+      responses:
+        '200':
+          description: Stale rows, stalest first
+  /v1/tenant/usage/timeline:
+    get:
+      tags: [usage]
+      summary: Daily activity buckets (admin)
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
+      responses:
+        '200':
+          description: Per-day buckets, zero-filled
+  /v1/tenant/usage/top:
+    get:
+      tags: [usage]
+      summary: Top skills in window (admin)
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10, minimum: 1, maximum: 100 } }
+      responses:
+        '200':
+          description: Skills sorted by total events desc
+  /v1/mcp:
+    post:
+      tags: [mcp]
+      summary: MCP JSON-RPC 2.0 transport
+      description: 'Methods: initialize, tools/list, tools/call (search_skills, get_skill), ping.'
+      responses:
+        '200':
+          description: JSON-RPC response
+        '401':
+          description: Missing/invalid bearer token
+  /v1/plugins:
+    get:
+      tags: [plugins]
+      summary: List latest published plugin per slug
+      parameters:
+        - { name: tags, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [draft, published, archived], default: published } }
+        - { name: sourcing_mode, in: query, schema: { type: string, enum: [internal, external, mirror] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Paginated plugins with keyset cursor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Plugin'
+                  next_cursor:
+                    type: string
+    post:
+      tags: [plugins]
+      summary: Publish a plugin version
+      description: Requires skills:publish scope (curator/admin).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Plugin'
+      responses:
+        '201':
+          description: Full plugin row
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plugin'
+        '409':
+          description: (tenant, slug, version) already exists
+        '422':
+          description: Validation failure (field-keyed)
+  /v1/plugins/{slug}:
+    get:
+      tags: [plugins]
+      summary: Latest published version
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Plugin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plugin'
+        '404':
+          description: No published version
+  /v1/plugins/{slug}/versions:
+    get:
+      tags: [plugins]
+      summary: Version history (all statuses, capped at 50)
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Versions
+  /v1/plugins/{slug}/versions/{version}:
+    delete:
+      tags: [plugins]
+      summary: Soft-archive a single plugin version
+      description: Requires skills:publish scope. Idempotent — 204 first call, 404 thereafter.
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+        - { name: version, in: path, required: true, schema: { type: string } }
+      responses:
+        '204':
+          description: Archived
+        '404':
+          description: Already archived / not found
+  /.claude-plugin/marketplace.json:
+    get:
+      tags: [plugins]
+      summary: Claude Code marketplace (public, rate-limited)
+      security: []
+      responses:
+        '200':
+          description: Marketplace document (ETag + 60s cache)
+        '304':
+          description: Not modified (If-None-Match)
+  /git/plugins/{slug}.git/info/refs:
+    get:
+      tags: [plugins]
+      summary: Smart-HTTP git ref advertisement (public, read-only)
+      security: []
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+        - { name: service, in: query, required: true, schema: { type: string, enum: [git-upload-pack] } }
+      responses:
+        '200':
+          description: x-git-upload-pack-advertisement
+        '400':
+          description: Unsupported service
+        '404':
+          description: Unknown slug or external-mode plugin
+  /git/plugins/{slug}.git/git-upload-pack:
+    post:
+      tags: [plugins]
+      summary: Smart-HTTP git upload-pack (public, read-only)
+      security: []
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: x-git-upload-pack-result
+        '404':
+          description: Unknown slug or external-mode plugin

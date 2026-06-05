@@ -1,0 +1,126 @@
+name: TechDocs
+
+# Keeps the Backstage TechDocs corpus in sync with the GitHub docs.
+#
+# How the sync works end to end:
+#   1. catalog-info.yaml registers skill-pool in Backstage; the System carries
+#      `backstage.io/techdocs-ref: dir:.`, so Backstage builds TechDocs from
+#      ./mkdocs.yml on its own refresh schedule (builder: local) — no push
+#      needed from here.
+#   2. docs/index.md is generated from README.md by scripts/sync-techdocs.py so
+#      the GitHub landing page and the TechDocs home never drift.
+#   3. This workflow guarantees `main` always holds a buildable, in-sync docs
+#      tree (PR gate below), and can optionally pre-publish a built site to a
+#      TechDocs external storage bucket when one is configured.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'README.md'
+      - 'openapi.yaml'
+      - 'catalog-info.yaml'
+      - 'scripts/sync-techdocs.py'
+      - '.github/workflows/techdocs.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'README.md'
+      - 'openapi.yaml'
+      - 'catalog-info.yaml'
+      - 'scripts/sync-techdocs.py'
+      - '.github/workflows/techdocs.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Validate: README↔index sync + a real mkdocs build. Runs on PRs and main.
+  # No cloud credentials required.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build TechDocs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install TechDocs MkDocs toolchain
+        run: pip install --disable-pip-version-check mkdocs-techdocs-core
+
+      - name: Verify docs/index.md is in sync with README.md
+        run: python3 scripts/sync-techdocs.py --check
+
+      - name: Build TechDocs site
+        run: mkdocs build --site-dir techdocs-site
+
+      - name: Upload built site
+        uses: actions/upload-artifact@v4
+        with:
+          name: techdocs-site
+          path: techdocs-site
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Publish: only on main, and only when an external TechDocs publisher is
+  # configured (set repo variable TECHDOCS_PUBLISH=true and the AWS bits below).
+  # A no-op otherwise — Backstage's local builder already serves from the repo.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish to TechDocs storage
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.TECHDOCS_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write   # for AWS OIDC, mirrors the deploy workflow
+    env:
+      ENTITY_NAMESPACE: default
+      ENTITY_KIND: system
+      ENTITY_NAME: skill-pool
+      TECHDOCS_S3_BUCKET_NAME: ${{ vars.TECHDOCS_S3_BUCKET_NAME }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install toolchains
+        run: |
+          pip install --disable-pip-version-check mkdocs-techdocs-core
+          npm install -g @techdocs/cli
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TECHDOCS_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate + publish TechDocs
+        run: |
+          techdocs-cli generate --no-docker --verbose
+          techdocs-cli publish \
+            --publisher-type awsS3 \
+            --storage-name "$TECHDOCS_S3_BUCKET_NAME" \
+            --entity "$ENTITY_NAMESPACE/$ENTITY_KIND/$ENTITY_NAME"

@@ -1,5 +1,4 @@
-<!-- This page is seeded from README.md. Edit either file;
-     they diverge by design after the initial onboarding. -->
+<!-- DO NOT EDIT. Generated from README.md by scripts/sync-techdocs.py. Edit README.md and re-run the script (CI does this on every push). -->
 
 # skill-pool
 
@@ -12,7 +11,7 @@
 [![Postgres 17 + pgvector](https://img.shields.io/badge/db-Postgres%2017%20%2B%20pgvector-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Claude Code compatible](https://img.shields.io/badge/Claude%20Code-compatible-7c5cff)](https://docs.claude.com/en/docs/claude-code)
 
-![skill-pool hero](docs/images/hero.webp)
+![skill-pool hero](images/hero.webp)
 
 ## What is this?
 
@@ -24,25 +23,25 @@ The trick: **retrospective capture**. When Claude finishes a non-trivial fix in 
 
 ## Demo
 
-<video src="docs/demo.webm" controls width="800" loop muted playsinline>
+<video src="demo.webm" controls width="800" loop muted playsinline>
   Your browser does not render WebM inline. See the GIF fallback below.
 </video>
 
-![demo (gif fallback)](docs/demo.gif)
+![demo (gif fallback)](demo.gif)
 
 A 90-second walkthrough in three acts: (1) `init --project` + `login` + `bootstrap` (project-aware install), (2) `project list` + `project show` + `plan show` (browse the curated bundle + its plan), (3) `plan import` + `plan history` + `doctor` (import an updated plan and verify state).
 
-> **Onboarding showcase** — for a two-half walkthrough that pairs CLI onboarding with the curator-side portal view of the same project, see [`docs/demo/`](docs/demo/). One command (`./scripts/record-onboarding-demo.sh`) re-records both halves deterministically.
+> **Onboarding showcase** — for a two-half walkthrough that pairs CLI onboarding with the curator-side portal view of the same project, see [`docs/demo/`](demo/README.md). One command (`./scripts/record-onboarding-demo.sh`) re-records both halves deterministically.
 
 ## Screenshots
 
 | Skill detail | Editor | Drafts inbox |
 | :---: | :---: | :---: |
-| ![skill detail](docs/images/skill-detail.webp) | ![Monaco editor](docs/images/editor.webp) | ![drafts](docs/images/drafts.webp) |
+| ![skill detail](images/skill-detail.webp) | ![Monaco editor](images/editor.webp) | ![drafts](images/drafts.webp) |
 | Per-tenant theme | OIDC SSO | Members & roles |
-| ![theme](docs/images/theme.webp) | ![SSO](docs/images/sso.webp) | ![members](docs/images/members.webp) |
+| ![theme](images/theme.webp) | ![SSO](images/sso.webp) | ![members](images/members.webp) |
 
-The full 76-skill catalog grid is also available: [`docs/images/catalog.webp`](docs/images/catalog.webp). Custom-domain ACME flow: [`docs/images/domain.webp`](docs/images/domain.webp). Decay candidates: [`docs/images/graveyard.webp`](docs/images/graveyard.webp).
+The full 76-skill catalog grid is also available: [`docs/images/catalog.webp`](images/catalog.webp). Custom-domain ACME flow: [`docs/images/domain.webp`](images/domain.webp). Decay candidates: [`docs/images/graveyard.webp`](images/graveyard.webp).
 
 ## Features
 
@@ -132,11 +131,11 @@ docker compose -f server/compose.yaml up -d
 
 | Surface | Where it lives |
 | --- | --- |
-| Single-node (systemd + Caddy) | [`docs/deploy/single-node.md`](docs/deploy/single-node.md) |
-| NixOS module | [`docs/deploy/nixos.md`](docs/deploy/nixos.md) |
-| Kubernetes (Helm chart) | [`deploy/helm/skill-pool/`](deploy/helm/skill-pool/) · [`docs/deploy/kubernetes.md`](docs/deploy/kubernetes.md) |
-| AWS (EKS + RDS + ElastiCache + S3 + ACM, IAM-IRSA, GH OIDC) | [`deploy/terraform/aws/`](deploy/terraform/aws/) · [`docs/deploy/aws.md`](docs/deploy/aws.md) |
-| GitHub Actions (CI, build to ECR via OIDC, deploy via Helm) | [`.github/workflows/`](.github/workflows/) · [`docs/deploy/github-actions.md`](docs/deploy/github-actions.md) |
+| Single-node (systemd + Caddy) | [`docs/deploy/single-node.md`](deploy/single-node.md) |
+| NixOS module | [`docs/deploy/nixos.md`](deploy/nixos.md) |
+| Kubernetes (Helm chart) | [`deploy/helm/skill-pool/`](https://github.com/olafkfreund/skill_pool/blob/main/deploy/helm/skill-pool/) · [`docs/deploy/kubernetes.md`](deploy/kubernetes.md) |
+| AWS (EKS + RDS + ElastiCache + S3 + ACM, IAM-IRSA, GH OIDC) | [`deploy/terraform/aws/`](https://github.com/olafkfreund/skill_pool/blob/main/deploy/terraform/aws/) · [`docs/deploy/aws.md`](deploy/aws.md) |
+| GitHub Actions (CI, build to ECR via OIDC, deploy via Helm) | [`.github/workflows/`](https://github.com/olafkfreund/skill_pool/blob/main/.github/workflows/) · [`docs/deploy/github-actions.md`](deploy/github-actions.md) |
 
 ## CLI tour
 
@@ -181,17 +180,30 @@ Full subcommand list: `init`, `login`, `ensure`, `add` / `add-agent` / `add-comm
 
 ## Documentation
 
-- **[Wiki](./docs/wiki/)** — operator and user guides (Architecture, CLI reference, API reference, SSO setup, theming, capture pipeline, lifecycle, MCP integration, decisions log, FAQ, bundled skills)
-- **[`docs/architecture.md`](docs/architecture.md)** — components, data flow, invariants
-- **[`docs/api.md`](docs/api.md)** — REST surface
-- **[`docs/web-ui.md`](docs/web-ui.md)** — portal architecture
-- **[`docs/capture.md`](docs/capture.md)** — Phase 4 retrospective-capture pipeline
-- **[`docs/lifecycle.md`](docs/lifecycle.md)** — embeddings, dependency resolution, decay
-- **[`docs/tenancy.md`](docs/tenancy.md)** · **[`docs/sso.md`](docs/sso.md)** · **[`docs/scim.md`](docs/scim.md)** · **[`docs/theming.md`](docs/theming.md)** · **[`docs/enterprise.md`](docs/enterprise.md)**
+- **[Wiki](wiki/README.md)** — operator and user guides (Architecture, CLI reference, API reference, SSO setup, theming, capture pipeline, lifecycle, MCP integration, decisions log, FAQ, bundled skills)
+- **[`docs/architecture.md`](architecture.md)** — components, data flow, invariants
+- **[`docs/api.md`](api.md)** — REST surface
+- **[`docs/web-ui.md`](web-ui.md)** — portal architecture
+- **[`docs/capture.md`](capture.md)** — Phase 4 retrospective-capture pipeline
+- **[`docs/lifecycle.md`](lifecycle.md)** — embeddings, dependency resolution, decay
+- **[`docs/tenancy.md`](tenancy.md)** · **[`docs/sso.md`](sso.md)** · **[`docs/scim.md`](scim.md)** · **[`docs/theming.md`](theming.md)** · **[`docs/enterprise.md`](enterprise.md)**
+
+### Backstage
+
+This repo is annotated for [Backstage](https://backstage.io/): the Software
+Catalog descriptor lives in [`catalog-info.yaml`](catalog-info.yaml) (a
+`skill-pool` System with the server/web/cli Components, the REST `API`, and the
+db/object-store/cache Resources), and the full `docs/` tree is published as
+[TechDocs](https://backstage.io/docs/features/techdocs/) via
+[`mkdocs.yml`](mkdocs.yml). The TechDocs home is generated from this README by
+[`scripts/sync-techdocs.py`](https://github.com/olafkfreund/skill_pool/blob/main/scripts/sync-techdocs.py), and the
+[`TechDocs` workflow](https://github.com/olafkfreund/skill_pool/blob/main/.github/workflows/techdocs.yml) keeps the two in sync on
+every push. See [`docs/backstage.md`](backstage.md) for the catalog model
+and sync details.
 
 ## Bundled demo content
 
-This portal ships ready to seed with 120+ curated skills, agents, and commands from [borghei/Claude-Skills](https://github.com/borghei/Claude-Skills) (License: MIT + Commons Clause — attribution preserved in each item's frontmatter). The set spans `code-reviewer`, `design-auditor`, `api-design-reviewer`, `rag-architect`, `ci-cd-pipeline-builder`, `terraform-patterns`, and dozens more. See the [Bundled Skills page](./docs/wiki/Bundled-Skills.md) for the full list.
+This portal ships ready to seed with 120+ curated skills, agents, and commands from [borghei/Claude-Skills](https://github.com/borghei/Claude-Skills) (License: MIT + Commons Clause — attribution preserved in each item's frontmatter). The set spans `code-reviewer`, `design-auditor`, `api-design-reviewer`, `rag-architect`, `ci-cd-pipeline-builder`, `terraform-patterns`, and dozens more. See the [Bundled Skills page](wiki/Bundled-Skills.md) for the full list.
 
 ```bash
 ./scripts/seed-demo.sh
@@ -224,7 +236,7 @@ See [all open issues](https://github.com/olafkfreund/skill_pool/issues) for curr
 
 ## Contributing
 
-- Start with [`docs/architecture.md`](docs/architecture.md) for the mental model.
+- Start with [`docs/architecture.md`](architecture.md) for the mental model.
 - Rust changes:
 
   ```bash
