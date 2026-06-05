@@ -7,6 +7,7 @@ metadata:
   name: skill_pool
   description: "Self-hosted Claude Code skill/agent/command registry for teams — CLI, web UI, auto-bootstrap, retrospective capture."
   annotations:
+    backstage.io/techdocs-ref: dir:.
     github.com/project-slug: olafkfreund/skill_pool
   tags: []
 spec:
