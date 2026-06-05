@@ -186,6 +186,19 @@ Full subcommand list: `init`, `login`, `ensure`, `add` / `add-agent` / `add-comm
 - **[`docs/lifecycle.md`](docs/lifecycle.md)** — embeddings, dependency resolution, decay
 - **[`docs/tenancy.md`](docs/tenancy.md)** · **[`docs/sso.md`](docs/sso.md)** · **[`docs/scim.md`](docs/scim.md)** · **[`docs/theming.md`](docs/theming.md)** · **[`docs/enterprise.md`](docs/enterprise.md)**
 
+### Backstage
+
+This repo is annotated for [Backstage](https://backstage.io/): the Software
+Catalog descriptor lives in [`catalog-info.yaml`](catalog-info.yaml) (a
+`skill-pool` System with the server/web/cli Components, the REST `API`, and the
+db/object-store/cache Resources), and the full `docs/` tree is published as
+[TechDocs](https://backstage.io/docs/features/techdocs/) via
+[`mkdocs.yml`](mkdocs.yml). The TechDocs home is generated from this README by
+[`scripts/sync-techdocs.py`](scripts/sync-techdocs.py), and the
+[`TechDocs` workflow](.github/workflows/techdocs.yml) keeps the two in sync on
+every push. See [`docs/backstage.md`](docs/backstage.md) for the catalog model
+and sync details.
+
 ## Bundled demo content
 
 This portal ships ready to seed with 120+ curated skills, agents, and commands from [borghei/Claude-Skills](https://github.com/borghei/Claude-Skills) (License: MIT + Commons Clause — attribution preserved in each item's frontmatter). The set spans `code-reviewer`, `design-auditor`, `api-design-reviewer`, `rag-architect`, `ci-cd-pipeline-builder`, `terraform-patterns`, and dozens more. See the [Bundled Skills page](./docs/wiki/Bundled-Skills.md) for the full list.

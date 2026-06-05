@@ -1,11 +1,96 @@
-# MkDocs config for Backstage TechDocs.
-# Edit at will — Backstage rebuilds on next view.
-# https://backstage.io/docs/features/techdocs/getting-started
-
-site_name: skill_pool
-site_description: Self-hosted Claude Code skill/agent/command registry for teams — CLI, web UI, auto-bootstrap, retrospective capture.
-
+site_name: skill-pool
+site_description: Self-hosted, multi-tenant Claude Code skill/agent/command/plugin registry for teams.
+repo_url: https://github.com/olafkfreund/skill_pool
+edit_uri: blob/main/docs/
 docs_dir: docs
+
+# docs/index.md is generated from README.md by scripts/sync-techdocs.py
+# (run in CI on every push). Edit README.md, not docs/index.md.
+nav:
+  - Home: index.md
+  - Overview:
+      - Backstage integration: backstage.md
+      - Architecture: architecture.md
+      - Web UI: web-ui.md
+      - Tenancy: tenancy.md
+      - Projects: projects.md
+      - Plugins: plugins.md
+      - NixOS / Home Manager: nixos-integration.md
+  - Reference:
+      - HTTP API: api.md
+      - Project manifest: manifest-schema.md
+      - Plugin manifest: plugin-manifest-schema.md
+      - OTLP tracing: otlp.md
+      - Accessibility testing: a11y-testing.md
+  - Pipelines:
+      - Retrospective capture: capture.md
+      - Skill lifecycle: lifecycle.md
+  - Identity:
+      - SSO integration: sso.md
+      - SCIM provisioning: scim.md
+  - Theming: theming.md
+  - Enterprise:
+      - Overview: enterprise.md
+      - Dedicated mode: enterprise/dedicated-mode.md
+      - Shared → dedicated migration: enterprise/migration-shared-to-dedicated.md
+      - Data residency: enterprise/data-residency.md
+      - Custom domains: enterprise/custom-domains.md
+      - Custom CSS: enterprise/custom-css.md
+      - Managed settings: enterprise/managed-settings.md
+      - MDM deployment: enterprise/mdm-deployment.md
+      - Session policy: enterprise/session-policy.md
+      - Rate limits: enterprise/rate-limits.md
+      - Asset CDN: enterprise/asset-cdn.md
+      - Branded CLI banner: enterprise/branded-cli-banner.md
+      - Branded emails: enterprise/branded-emails.md
+      - OG images: enterprise/og-images.md
+  - Deploy:
+      - Single-node: deploy/single-node.md
+      - NixOS: deploy/nixos.md
+      - Kubernetes: deploy/kubernetes.md
+      - AWS: deploy/aws.md
+      - GitHub Actions: deploy/github-actions.md
+      - Bootstrap: bootstrap.md
+  - Operations:
+      - Incident runbook: ops/runbook.md
+      - Capacity planning: ops/capacity.md
+      - Rollback playbook: ops/rollback.md
+  - Examples:
+      - Publish your first skill: examples/publish-your-first-skill.md
+      - Capture an insight: examples/capture-an-insight.md
+      - Wire Claude via MCP: examples/wire-claude-mcp.md
+  - Wiki:
+      - Home: wiki/Home.md
+      - Architecture: wiki/Architecture.md
+      - CLI reference: wiki/CLI-Reference.md
+      - API reference: wiki/API-Reference.md
+      - Multi-tenancy: wiki/Multi-Tenancy.md
+      - Tenant onboarding: wiki/Tenant-Onboarding.md
+      - SSO setup: wiki/SSO-Setup.md
+      - Theming: wiki/Theming.md
+      - Custom domain + ACME: wiki/Custom-Domain-ACME.md
+      - MCP integration: wiki/MCP-Integration.md
+      - Plugin authoring: wiki/Plugin-Authoring.md
+      - Projects: wiki/Projects.md
+      - Bundled skills: wiki/Bundled-Skills.md
+      - Phase 4 — Capture: wiki/Phase-4-Capture.md
+      - Phase 5 — Lifecycle: wiki/Phase-5-Lifecycle.md
+      - Operator guide: wiki/Operator-Guide.md
+      - Decisions log: wiki/Decisions-Log.md
+      - FAQ: wiki/FAQ.md
 
 plugins:
   - techdocs-core
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
