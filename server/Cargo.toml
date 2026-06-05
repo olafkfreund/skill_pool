@@ -142,7 +142,7 @@ fastembed = { version = "4", optional = true }
 # opentelemetry major version (0.32).
 # tracing-opentelemetry 0.32.1 requires opentelemetry 0.31.x — all four crates
 # must share the same opentelemetry major version.
-opentelemetry = { version = "0.31", optional = true }
+opentelemetry = { version = "0.32", optional = true }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["rt-tokio", "trace"], optional = true }
 # http-proto + reqwest-rustls: protobuf-over-HTTP transport with rustls — no OpenSSL required.
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-rustls", "trace"], optional = true }
